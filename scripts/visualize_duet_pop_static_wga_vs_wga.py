@@ -57,7 +57,8 @@ def parse_task_name(task_name: str) -> Dict[str, Optional[object]]:
         parts = task_name.split("_")
         try:
             i_method = next(
-                i for i, p in enumerate(parts)
+                i
+                for i, p in enumerate(parts)
                 if p in ("WGA", "pop_static_wga", "pop_dynam_b_wga", "ada_WGD")
             )
             if i_method > 2:
@@ -115,8 +116,7 @@ def find_summaries(root: Path) -> List[Path]:
 
 
 def load_runs(
-    method_dirs: Dict[str, Path] | None = None,
-    base_unlearn: Optional[Path] = None
+    method_dirs: Dict[str, Path] | None = None, base_unlearn: Optional[Path] = None
 ) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     paths: List[Tuple[str, Path]] = []
@@ -157,7 +157,7 @@ def load_runs(
                 method = "wga"
             elif token == "ada_wgd" or "_ada_wgd_" in tname:
                 method = "ada_WGD"
-            #ada_WGD
+            # ada_WGD
             else:
                 continue
 
@@ -174,8 +174,15 @@ def load_runs(
     if not rows:
         return pd.DataFrame(
             columns=[
-                "method", "task_name", "forget_split", "popularity",
-                "lr", "beta", "alpha", "forget_qa_rouge", "holdout_qa_rouge",
+                "method",
+                "task_name",
+                "forget_split",
+                "popularity",
+                "lr",
+                "beta",
+                "alpha",
+                "forget_qa_rouge",
+                "holdout_qa_rouge",
             ]
         )
 
@@ -192,6 +199,7 @@ def _make_beta_label(series: pd.Series) -> pd.Series:
             return f"{float(v):g}" if pd.notna(v) else "dynamic"
         except Exception:
             return "dynamic"
+
     return series.apply(_fn)
 
 
@@ -214,7 +222,9 @@ def build_color_map(df: pd.DataFrame) -> Dict[Tuple[str, float], object]:
         .drop_duplicates()
         .sort_values(["beta_label", "alpha_f"])
     )
-    keys = [(str(r.beta_label), float(r.alpha_f)) for r in combos.itertuples(index=False)]
+    keys = [
+        (str(r.beta_label), float(r.alpha_f)) for r in combos.itertuples(index=False)
+    ]
 
     # Build a big palette by concatenating tab20 + tab20b + tab20c if available.
     palette = []
@@ -227,7 +237,9 @@ def build_color_map(df: pd.DataFrame) -> Dict[Tuple[str, float], object]:
 
     # Fallback if something weird happens
     if not palette:
-        palette = list(plt.get_cmap("hsv")(i / max(len(keys), 1)) for i in range(len(keys)))
+        palette = list(
+            plt.get_cmap("hsv")(i / max(len(keys), 1)) for i in range(len(keys))
+        )
 
     color_map: Dict[Tuple[str, float], object] = {}
     for i, k in enumerate(keys):
@@ -248,7 +260,7 @@ def make_subplot(
     data: pd.DataFrame,
     metric_key: str,
     title: str,
-    color_map: Dict[Tuple[str, float], object]
+    color_map: Dict[Tuple[str, float], object],
 ) -> None:
     ax.set_title(title)
     ax.set_xlabel("lr")
@@ -270,16 +282,42 @@ def make_subplot(
     data["lr_pos"] = data["lr"].map(lr_to_pos)
 
     style_map = {
-        "wga": {"linestyle": ":", "marker": "o", "linewidth": 1.0, "alpha": 1.0, "markersize": 3},
-        "pop_static_wga": {"linestyle": "-", "marker": "o", "linewidth": 1.2, "alpha": 1.0, "markersize": 3},
-        "pop_dynam_b_wga": {"linestyle": "-", "marker": "*", "linewidth": 2.0, "alpha": 0.6, "markersize": 6},
+        "wga": {
+            "linestyle": ":",
+            "marker": "o",
+            "linewidth": 1.0,
+            "alpha": 1.0,
+            "markersize": 3,
+        },
+        "pop_static_wga": {
+            "linestyle": "-",
+            "marker": "o",
+            "linewidth": 1.2,
+            "alpha": 1.0,
+            "markersize": 3,
+        },
+        "pop_dynam_b_wga": {
+            "linestyle": "-",
+            "marker": "*",
+            "linewidth": 2.0,
+            "alpha": 0.6,
+            "markersize": 6,
+        },
         # ada_WGD: star marker, thicker line, half-transparent
-        "ada_wgd": {"linestyle": "-", "marker": "*", "linewidth": 2.8, "alpha": 0.6, "markersize": 7},
+        "ada_wgd": {
+            "linestyle": "-",
+            "marker": "*",
+            "linewidth": 2.8,
+            "alpha": 0.6,
+            "markersize": 7,
+        },
     }
 
     labels_used = set()
 
-    for (method, beta_label, alpha_f), g in data.groupby(["method", "beta_label", "alpha_f"]):
+    for (method, beta_label, alpha_f), g in data.groupby(
+        ["method", "beta_label", "alpha_f"]
+    ):
         g = g.sort_values("lr_pos")
 
         beta_text = str(beta_label)
@@ -288,7 +326,16 @@ def make_subplot(
         show_label = label not in labels_used
 
         m = str(method).lower()
-        st = style_map.get(m, {"linestyle": "-", "marker": "o", "linewidth": 1.0, "alpha": 1.0, "markersize": 3})
+        st = style_map.get(
+            m,
+            {
+                "linestyle": "-",
+                "marker": "o",
+                "linewidth": 1.0,
+                "alpha": 1.0,
+                "markersize": 3,
+            },
+        )
 
         ckey = (str(beta_label), float(alpha_f))
         color = color_map.get(ckey, None)
@@ -311,6 +358,7 @@ def make_subplot(
     ax.set_xticklabels([_format_lr_label(v) for v in unique_lrs])
 
     import matplotlib.ticker as mticker
+
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.3f"))
 
     ax.grid(True, linestyle="--", alpha=0.2)
@@ -338,9 +386,19 @@ def plot_grid(df: pd.DataFrame, save_path: Optional[Path] = None):
     color_map = build_color_map(df)
 
     make_subplot(axes[0][0], rare_df, "forget_qa_rouge", "Forget Rare ROUGE", color_map)
-    make_subplot(axes[0][1], rare_df, "holdout_qa_rouge", "Retain Rare Holdout ROUGE", color_map)
-    make_subplot(axes[1][0], popular_df, "forget_qa_rouge", "Forget Popular ROUGE", color_map)
-    make_subplot(axes[1][1], popular_df, "holdout_qa_rouge", "Retain Popular Holdout ROUGE", color_map)
+    make_subplot(
+        axes[0][1], rare_df, "holdout_qa_rouge", "Retain Rare Holdout ROUGE", color_map
+    )
+    make_subplot(
+        axes[1][0], popular_df, "forget_qa_rouge", "Forget Popular ROUGE", color_map
+    )
+    make_subplot(
+        axes[1][1],
+        popular_df,
+        "holdout_qa_rouge",
+        "Retain Popular Holdout ROUGE",
+        color_map,
+    )
 
     # Remove y-label text on right column
     axes[0][1].set_ylabel("")
@@ -360,7 +418,7 @@ def plot_grid(df: pd.DataFrame, save_path: Optional[Path] = None):
             bbox_to_anchor=(0.78, 0.98),
             frameon=False,
             fontsize=9,
-            title="Rare"
+            title="Rare",
         )
 
     if pop_handles_map:
@@ -373,7 +431,7 @@ def plot_grid(df: pd.DataFrame, save_path: Optional[Path] = None):
             bbox_to_anchor=(0.78, 0.02),
             frameon=False,
             fontsize=9,
-            title="Popular"
+            title="Popular",
         )
 
     if save_path is not None:
@@ -398,8 +456,15 @@ def main(base_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Visualize DUET ROUGE with equal-spaced lr categories")
-    parser.add_argument("--base-dir", type=Path, default=Path("."), help="Repository root (default: current dir)")
+    parser = argparse.ArgumentParser(
+        description="Visualize DUET ROUGE with equal-spaced lr categories"
+    )
+    parser.add_argument(
+        "--base-dir",
+        type=Path,
+        default=Path("."),
+        help="Repository root (default: current dir)",
+    )
 
     if "ipykernel" in sys.modules:
         args, _ = parser.parse_known_args()

@@ -46,9 +46,9 @@ class AdaWGD(GradDiff):
         consecutive_patience: int = 2,
         # Popularity-coupled retain scaling (optional)
         retain_pop_mode: str = "none",  # one of: "none", "inv_beta"
-        retain_pop_gain: float = 1.0,   # strength for scaling with mean beta
-        retain_pop_min: float = 0.3,    # lower clamp for scaling factor
-        retain_pop_max: float = 1.0,    # upper clamp for scaling factor
+        retain_pop_gain: float = 1.0,  # strength for scaling with mean beta
+        retain_pop_min: float = 0.3,  # lower clamp for scaling factor
+        retain_pop_max: float = 1.0,  # upper clamp for scaling factor
         *args,
         **kwargs,
     ):
@@ -134,7 +134,11 @@ class AdaWGD(GradDiff):
 
         # Forget inputs
         finputs_full = inputs["forget"]
-        forget_inputs = {k: finputs_full[k] for k in ("input_ids", "attention_mask", "labels", "pop_sum") if k in finputs_full}
+        forget_inputs = {
+            k: finputs_full[k]
+            for k in ("input_ids", "attention_mask", "labels", "pop_sum")
+            if k in finputs_full
+        }
         # Training-time repetition penalty disabled for AdaWGD; handle repetition at inference
         forget_loss, forget_outputs = compute_wga_loss_dynamic_beta(
             model=model, inputs=forget_inputs, beta_from_pop_sum=True, rep_coeff=0.0
@@ -155,23 +159,34 @@ class AdaWGD(GradDiff):
         if self.retain_pop_mode != "none":
             finputs_for_pop = inputs["forget"]
             if "pop_sum" in finputs_for_pop:
-                pop_sum = finputs_for_pop["pop_sum"].to(self.accelerator.device).float().view(-1)
+                pop_sum = (
+                    finputs_for_pop["pop_sum"]
+                    .to(self.accelerator.device)
+                    .float()
+                    .view(-1)
+                )
                 beta_vec = beta_from_pop_sum_tensor(pop_sum)
                 pop_beta_mean = float(beta_vec.mean().detach().item())
                 if self.retain_pop_mode == "inv_beta":
                     # scale alpha inversely with mean beta: more popular => lower retain penalty
                     scale = 1.0 / (1.0 + self.retain_pop_gain * max(0.0, pop_beta_mean))
-                    scale = float(max(self.retain_pop_min, min(self.retain_pop_max, scale)))
+                    scale = float(
+                        max(self.retain_pop_min, min(self.retain_pop_max, scale))
+                    )
                     alpha_eff = self.alpha_k * scale
 
         loss = self.gamma_k * forget_loss + alpha_eff * retain_loss
 
         # Light logging of effective alpha and batch popularity when enabled
         if self.retain_pop_mode != "none":
-            self.log({
-                "ada_alpha_eff": float(alpha_eff),
-                "ada_beta_mean_forget": float(pop_beta_mean) if pop_beta_mean is not None else 0.0,
-            })
+            self.log(
+                {
+                    "ada_alpha_eff": float(alpha_eff),
+                    "ada_beta_mean_forget": (
+                        float(pop_beta_mean) if pop_beta_mean is not None else 0.0
+                    ),
+                }
+            )
         return (loss, forget_outputs) if return_outputs else loss
 
     # ------------------------ Epoch-end Adaptation ------------------------
@@ -198,7 +213,9 @@ class AdaWGD(GradDiff):
     def _batch_retain_loss(self, model, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         # Filter out non-model kwargs like 'pop_sum', 'index'
         safe_batch = {
-            k: v for k, v in batch.items() if k in ("input_ids", "attention_mask", "labels")
+            k: v
+            for k, v in batch.items()
+            if k in ("input_ids", "attention_mask", "labels")
         }
         if self.retain_loss_type == "NLL":
             outputs = model(**safe_batch)
@@ -213,7 +230,9 @@ class AdaWGD(GradDiff):
     def _compute_retain_loss(self, model) -> float:
         if not self._retain_subset:
             return 0.0
-        dl = DataLoader(self._retain_subset, batch_size=8, collate_fn=self.data_collator)
+        dl = DataLoader(
+            self._retain_subset, batch_size=8, collate_fn=self.data_collator
+        )
         total = 0.0
         count = 0
         device = self.accelerator.device
@@ -228,13 +247,17 @@ class AdaWGD(GradDiff):
     def _compute_forget_loss(self) -> Optional[float]:
         if not self._forget_subset:
             return None
-        dl = DataLoader(self._forget_subset, batch_size=8, collate_fn=self.data_collator)
+        dl = DataLoader(
+            self._forget_subset, batch_size=8, collate_fn=self.data_collator
+        )
         total = 0.0
         count = 0
         device = self.accelerator.device
         for batch in dl:
             batch = {k: v.to(device) for k, v in batch.items()}
-            loss, _ = compute_wga_loss_dynamic_beta(self.model, batch, beta_from_pop_sum=True, rep_coeff=self.rep_coeff)
+            loss, _ = compute_wga_loss_dynamic_beta(
+                self.model, batch, beta_from_pop_sum=True, rep_coeff=self.rep_coeff
+            )
             total += float(loss.detach().item())
             count += 1
         return total / max(1, count)
@@ -244,7 +267,9 @@ class AdaWGD(GradDiff):
         # Compute retain degradation
         L_ret_cur = self._compute_retain_loss(self.model)
         if self.retain_loss_type == "NLL":
-            delta_rel = max(0.0, (L_ret_cur - self.L_ret_ref) / max(self.L_ret_ref, 1e-8))
+            delta_rel = max(
+                0.0, (L_ret_cur - self.L_ret_ref) / max(self.L_ret_ref, 1e-8)
+            )
         else:  # KL: treat directly as a positive deviation to be constrained
             delta_rel = max(0.0, L_ret_cur)
 
@@ -258,7 +283,9 @@ class AdaWGD(GradDiff):
             self._pi_err_int *= 0.9
         else:
             # Update integral with anti-windup
-            self._pi_err_int = max(-self.lambda_max, min(self.lambda_max, self._pi_err_int + e))
+            self._pi_err_int = max(
+                -self.lambda_max, min(self.lambda_max, self._pi_err_int + e)
+            )
             # Proportional + integral update; project to feasible region
             update = self.kp * e + self.ki * self._pi_err_int
             self.lambda_k = max(0.0, min(self.lambda_max, self.lambda_k + update))
@@ -267,7 +294,9 @@ class AdaWGD(GradDiff):
         curr_forget = self._compute_forget_loss()
         bad = False
         if curr_forget is not None and self.prev_forget_loss is not None:
-            improve = self.prev_forget_loss - curr_forget  # forget loss should decrease (more negative)
+            improve = (
+                self.prev_forget_loss - curr_forget
+            )  # forget loss should decrease (more negative)
             # Treat absolute change: if improvement small and retain degradation high
             if (improve < self.forget_improve_eps) and (delta_rel > upper):
                 bad = True
@@ -299,6 +328,7 @@ class AdaWGD(GradDiff):
     def _maybe_post_epoch(self):
         # Called by callback at epoch end
         self.post_epoch_update()
+
 
 class AdaWGDCallback(TrainerCallback):
     def __init__(self, trainer: AdaWGD):

@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
 
+
 def parse_task_name(name: str):
     if "duet_" in name:
-        base = name[name.index("duet_"):]
+        base = name[name.index("duet_") :]
     else:
         return None
     if "_lora_" not in base:
@@ -53,7 +54,8 @@ def parse_task_name(name: str):
 
     # normalize tags (convert p to decimal)
     def norm(val: str):
-        return val.replace('p', '.')
+        return val.replace("p", ".")
+
     method_alpha = key_vals.get("alpha")
     params = {
         "model": model,
@@ -64,7 +66,7 @@ def parse_task_name(name: str):
         "lora_dropout": float(norm(key_vals.get("lora_drop", "0"))),
         "learning_rate": float(norm(key_vals["lr"])),
         "beta": float(norm(key_vals["beta"])),
-        "alpha": float(norm(method_alpha)) if method_alpha is not None else None
+        "alpha": float(norm(method_alpha)) if method_alpha is not None else None,
     }
     return params
 
@@ -104,15 +106,19 @@ def main():
                         train_runtime = entry["train_runtime"]
                         break
 
-        rows.append({
-            **params,
-            "forget_qa_rouge": forget_score,
-            "holdout_qa_rouge": holdout_score,
-            "train_runtime_sec": train_runtime,
-            "summary_path": str(summary_path)
-        })
+        rows.append(
+            {
+                **params,
+                "forget_qa_rouge": forget_score,
+                "holdout_qa_rouge": holdout_score,
+                "train_runtime_sec": train_runtime,
+                "summary_path": str(summary_path),
+            }
+        )
 
-    rows.sort(key=lambda r: (r["forget_split"], r["learning_rate"], r["beta"], r["alpha"]))
+    rows.sort(
+        key=lambda r: (r["forget_split"], r["learning_rate"], r["beta"], r["alpha"])
+    )
 
     headers = [
         "forget_split",
@@ -125,12 +131,13 @@ def main():
         "forget_qa_rouge",
         "holdout_qa_rouge",
         "train_runtime_sec",
-        "summary_path"
+        "summary_path",
     ]
 
     print("\t".join(headers))
     for row in rows:
         print("\t".join(str(row.get(h, "")) for h in headers))
+
 
 if __name__ == "__main__":
     main()

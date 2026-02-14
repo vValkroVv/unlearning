@@ -27,9 +27,12 @@ def compute_kl_divergence(model, target_model, inputs):
     current_probs = current_probs.view(-1, outputs.logits.shape[-1])
 
     # minimum KL divergence
-    return nn.functional.kl_div(
-        current_probs, ref_probs, reduction="batchmean", log_target=True
-    ), outputs
+    return (
+        nn.functional.kl_div(
+            current_probs, ref_probs, reduction="batchmean", log_target=True
+        ),
+        outputs,
+    )
 
 
 def compute_batch_nll(model, inputs):
@@ -152,16 +155,19 @@ def _repetition_penalty_from_logits(shift_logits, shift_labels):
     """
     # shift_logits: [B, T, V], shift_labels: [B, T]
     import torch.nn.functional as F
+
     B, T, V = shift_logits.shape
     if T <= 1:
         return torch.zeros((), device=shift_logits.device, dtype=shift_logits.dtype)
     # current positions t=1..T-1
     cur_logits = shift_logits[:, 1:, :]  # [B, T-1, V]
-    prev_labels = shift_labels[:, :-1]   # [B, T-1]
+    prev_labels = shift_labels[:, :-1]  # [B, T-1]
     valid = (prev_labels != -100) & (shift_labels[:, 1:] != -100)
     cur_log_probs = F.log_softmax(cur_logits, dim=-1)
     # gather log prob of previous label
-    rep_logp = cur_log_probs.gather(-1, prev_labels.unsqueeze(-1)).squeeze(-1)  # [B, T-1]
+    rep_logp = cur_log_probs.gather(-1, prev_labels.unsqueeze(-1)).squeeze(
+        -1
+    )  # [B, T-1]
     rep_prob = rep_logp.exp()
     if valid.any():
         rep_prob = rep_prob[valid]
@@ -215,7 +221,9 @@ def compute_wga_loss_dynamic_beta(
     T = shift_logits.size(1)
 
     ce_loss = nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
-    lm_loss = ce_loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    lm_loss = ce_loss(
+        shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+    )
     lm_loss = lm_loss.view(B, T)
 
     # Build beta per sample

@@ -76,11 +76,17 @@ class PDU(GradDiff):
         # Significant change threshold for lambda
         lambda_now = float(self.preferences[1]) if self.primal_dual else None
         lambda_delta = (
-            abs(lambda_now - self._last_pref_value) if (self._last_pref_value is not None and lambda_now is not None) else None
+            abs(lambda_now - self._last_pref_value)
+            if (self._last_pref_value is not None and lambda_now is not None)
+            else None
         )
         significant_change = lambda_delta is not None and lambda_delta >= 0.05
 
-        if (step == 0) or (step - self._last_log_step >= interval) or significant_change:
+        if (
+            (step == 0)
+            or (step - self._last_log_step >= interval)
+            or significant_change
+        ):
             log_dictionary = {}
             if self.primal_dual:
                 log_dictionary["retain_preference"] = lambda_now

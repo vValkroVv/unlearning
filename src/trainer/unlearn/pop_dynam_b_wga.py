@@ -21,7 +21,10 @@ class PopDynamBWGA(GradDiff):
             if k in forget_inputs
         }
         forget_loss, forget_outputs = compute_wga_loss_dynamic_beta(
-            model=model, inputs=forget_inputs, beta_from_pop_sum=True, rep_coeff=self.rep_coeff
+            model=model,
+            inputs=forget_inputs,
+            beta_from_pop_sum=True,
+            rep_coeff=self.rep_coeff,
         )
 
         retain_inputs = inputs["retain"]
