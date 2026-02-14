@@ -15,7 +15,7 @@ from trainer.unlearn.ceu import CEU
 from trainer.unlearn.satimp import SatImp
 from trainer.unlearn.wga import WGA
 from trainer.unlearn.pdu import PDU
-from trainer.unlearn.ada_wgd import AdaWGD, AdaWGDCallback
+from trainer.unlearn.ada_wgd import AdaWGD, AdaWGDCallback as AdaWGDCallback
 from trainer.unlearn.pop_dynam_b_wga import PopDynamBWGA
 
 

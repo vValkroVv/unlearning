@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 def parse_task_name(name: str):
@@ -81,7 +80,6 @@ def main():
             continue
         eval_dir = task_dir / "evals"
         summary_path = eval_dir / "DUET_SUMMARY.json"
-        eval_path = eval_dir / "DUET_EVAL.json"
         if not summary_path.exists():
             continue
         with summary_path.open() as f:

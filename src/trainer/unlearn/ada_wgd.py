@@ -1,8 +1,8 @@
-import math
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 import torch
 from torch.utils.data import DataLoader
+from transformers import TrainerCallback
 
 from trainer.unlearn.grad_diff import GradDiff
 from trainer.utils import (
@@ -250,7 +250,6 @@ class AdaWGD(GradDiff):
 
         # Dead-zone band in relative units
         upper = self.eps + self.tau
-        lower = max(0.0, self.eps - self.tau)
 
         # PI control on the error e = delta_rel - eps
         e = delta_rel - self.eps
@@ -300,10 +299,6 @@ class AdaWGD(GradDiff):
     def _maybe_post_epoch(self):
         # Called by callback at epoch end
         self.post_epoch_update()
-
-
-from transformers import TrainerCallback
-
 
 class AdaWGDCallback(TrainerCallback):
     def __init__(self, trainer: AdaWGD):
