@@ -1,0 +1,57 @@
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct
+  - override /trainer: GradAscent
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+model:
+  model_args:
+    pretrained_model_name_or_path: open-unlearning/duet_Llama-3.2-1B-Instruct_full
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: city_fast_retain_500 #NO HOLDOUT, BUT NEED FOR EVAL
+retain_logs_path: null
+question_key: "question"
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    overwrite: true
+    question_key: ${question_key}
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget: 
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${forget_split}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+trainer:
+  args:
+    warmup_epochs: 1.0 # custom parameter
+    learning_rate: 1e-5
+    weight_decay: 0.01
+    num_train_epochs: 5 #3
+    do_eval: false
+    eval_on_start: false
+    # save_strategy: steps
+    # save_steps: 0.5
+
+task_name: ???

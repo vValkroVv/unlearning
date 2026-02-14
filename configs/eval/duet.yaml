@@ -1,0 +1,17 @@
+# @package eval.duet
+
+defaults:
+  - duet_metrics:
+    - forget_qa_rouge
+    - holdout_qa_rouge
+
+handler: DUETEvaluator
+output_dir: ${paths.output_dir}
+metrics: {}
+overwrite: false
+
+forget_split: null
+holdout_split: null
+retain_logs_path: null
+question_key: question
+batch_size: 8

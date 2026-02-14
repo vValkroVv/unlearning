@@ -1,0 +1,28 @@
+defaults:
+  - GradDiff
+
+handler: AdaWGD
+
+args:
+  learning_rate: 2e-5
+  num_train_epochs: 5
+
+method_args:
+  # Forget
+  gamma: 1.0
+  warmup_epochs: 0.0
+
+  # Retain constraint
+  alpha0: 0.5
+  eps: 0.1           # relative tolerance (10%)
+  controller_gain: 0.1  # PI proportional gain (ki = gain/2)
+  lambda_max: 1000.0
+  retain_loss_type: NLL
+
+  # Quick eval subsets
+  retain_eval_samples: 128
+  forget_eval_samples: 128
+
+  # Early stop
+  forget_improve_eps: 0.005
+  consecutive_patience: 2

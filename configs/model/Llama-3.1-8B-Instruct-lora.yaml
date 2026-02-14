@@ -1,0 +1,26 @@
+use_lora: true
+model_args:
+  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B-Instruct"
+  attn_implementation: "eager"
+  torch_dtype: bfloat16
+  base_model_name_or_path: null
+  low_cpu_mem_usage: true
+  device_map: null
+tokenizer_args:
+  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B-Instruct"
+lora_config:
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "down_proj", "up_proj", "lm_head"]
+  lora_alpha: 128
+  lora_dropout: 0.05
+  r: 64
+  bias: "none"
+  task_type: "CAUSAL_LM"
+template_args:
+  apply_chat_template: true
+  system_prompt: You are terse and fact-only QA assistant. Reply to the question clearly with few-words correct answer.
+  system_prompt_with_special_tokens: "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are terse and fact-only QA assistant. Reply to the question clearly with few-words correct answer.<|eot_id|>"
+  user_start_tag: "<|start_header_id|>user<|end_header_id|>\n\n"
+  user_end_tag: "<|eot_id|>"
+  asst_start_tag: "<|start_header_id|>assistant<|end_header_id|>\n\n"
+  asst_end_tag: "<|eot_id|>"
+  date_string: 10 Apr 2025
