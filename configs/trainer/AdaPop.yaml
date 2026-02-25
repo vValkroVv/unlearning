@@ -1,0 +1,19 @@
+defaults:
+  - GradDiff
+
+handler: AdaPop
+method_args:
+  gamma: 1.0
+  warmup_epochs: 0.0
+  alpha0: 0.5
+  alpha_const: null
+  beta_const: null
+  eps: 0.1
+  dual_lr: 0.1
+  lambda_max: 5.0
+  retain_ema_decay: 0.9
+  step_log_interval: 50
+  retain_pop_mode: "none"
+  retain_pop_gain: 1.0
+  retain_pop_min: 0.3
+  retain_pop_max: 1.0

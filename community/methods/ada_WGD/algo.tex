@@ -1,0 +1,217 @@
+\section{Ada-WGD: Adaptive Weighted Gradient Ascent (with Popularity-Aware Weighting)}
+
+  \paragraph{Setting.}
+  Let $\mathcal{F}=\{(x_i,y_i,s_i)\}_{i=1}^{N_F}$ be the \emph{forget} set, where $s_i>0$
+  is a popularity score (in our case it's \texttt{pop\_sum}).
+  Let $\mathcal{R}=\{(x_j,y_j)\}_{j=1}^{N_R}$ be the \emph{retain} set.
+  We train an autoregressive model $q_\theta$ with conditional token probabilities
+  $q_\theta(y_t\mid x,y_{<t})$.
+  For a token position $t$ in sequence $i$,
+  \[
+  \ell_{i,t}(\theta) = -\log q_\theta(y_{i,t}\mid x_i,y_{i,<t}),
+  \qquad
+  p_{i,t}(\theta) = \exp(-\ell_{i,t}(\theta)) = q_\theta(y_{i,t}\mid x_i,y_{i,<t}).
+  \]
+  We denote by $\Omega_{\mathcal{F}}$ and $\Omega_{\mathcal{R}}$ the sets of valid
+  token indices (i.e., labels not masked by \texttt{-100}), and let $|\Omega|$ be their sizes.
+
+  \paragraph{Goal.}
+  Ada-WGD aims to \emph{increase} loss on $\mathcal{F}$ (unlearning) while preventing
+  excessive degradation on $\mathcal{R}$.
+  This is implemented as a weighted ascent objective on $\mathcal{F}$ plus a retain loss on $\mathcal{R}$,
+  where the retain coefficient $\alpha$ is adapted online to keep retain drift under control.
+
+  \subsection{Forget Objective: Weighted Gradient Ascent (WGA)}
+
+  \paragraph{Popularity-dependent exponent.}
+  Each forget sample $i$ is assigned an exponent
+  \[
+  \beta_i \;=\; \mathrm{clip}\!\Big(58.7\,s_i^{-0.796},\,\beta_{\min},\,\beta_{\max}\Big),
+  \qquad \beta_{\min}=0.05,\;\beta_{\max}=2.0.
+  \]
+  Optionally, a constant exponent can be used:
+  \[
+  \beta_i \equiv \beta_{\mathrm{const}} \quad \text{(if the user sets }\beta_{\mathrm{const}}\text{).}
+  \]
+
+  \paragraph{Detached token weight.}
+  Define a detached confidence weight
+  \[
+  w_{i,t} \;=\; \Big(\mathrm{stopgrad}\big(p_{i,t}(\theta)\big)\Big)^{\beta_i}.
+  \]
+  The \texttt{stopgrad} operation means gradients do \emph{not} flow through $w_{i,t}$.
+  This avoids second-order interactions where the model could change $w_{i,t}$ to reduce the objective.
+
+  \paragraph{Forget loss (ascent).}
+  Ada-WGD uses the loss
+  \[
+  L_f(\theta)
+  \;=\;
+  -\frac{1}{|\Omega_{\mathcal{F}}|}
+  \sum_{(i,t)\in\Omega_{\mathcal{F}}}
+  w_{i,t}\,\ell_{i,t}(\theta).
+  \]
+  Since $L_f$ is \emph{negative}, minimizing $L_f$ performs a weighted gradient ascent on the (weighted)
+  forget token negative log-likelihood: confident forget tokens ($p_{i,t}$ large) receive larger $w_{i,t}$
+  and are pushed away more strongly.
+
+  \subsection{Retain Loss and Drift Measurement}
+
+  \paragraph{Retain loss.}
+  By default Ada-WGD uses masked negative log-likelihood on retain:
+  \[
+  L_r(\theta)
+  \;=\;
+  \frac{1}{|\Omega_{\mathcal{R}}|}
+  \sum_{(j,t)\in\Omega_{\mathcal{R}}}
+  \ell_{j,t}(\theta).
+  \]
+  (Optionally, one may use a KL constraint to a frozen reference model; we focus on NLL here.)
+
+  \paragraph{Epoch-level retain statistic (EMA).}
+  Let $r^{(\mathrm{step})}$ be the per-step retain loss value.
+  Define an exponential moving average (EMA) retain statistic:
+  \[
+  R_k \;=\; \mathrm{EMA}\big(r^{(\mathrm{step})}\big)\quad \text{over epoch }k.
+  \]
+  Let $R_{\mathrm{ref}}$ be a baseline retain statistic; in the current implementation,
+  $R_{\mathrm{ref}}$ is set lazily to the first epoch's retain EMA: $R_{\mathrm{ref}}\leftarrow R_1$.
+
+  \paragraph{One-sided relative drift.}
+  Ada-WGD measures retain degradation via
+  \[
+  \delta_k
+  \;=\;
+  \max\!\left(
+  0,\;
+  \frac{R_k - R_{\mathrm{ref}}}{\max(R_{\mathrm{ref}},\epsilon_0)}
+  \right),
+  \]
+  where $\epsilon_0$ is a small constant (e.g., $10^{-8}$) for numerical stability.
+  This is \emph{one-sided}: if retain improves ($R_k<R_{\mathrm{ref}}$), $\delta_k=0$ and no penalty is triggered.
+
+  \subsection{Primal Update (Model Parameters)}
+
+  At epoch $k$, Ada-WGD minimizes the combined loss
+  \[
+  L_k(\theta)
+  \;=\;
+  \gamma_k\,L_f(\theta)\;+\;\alpha_{\mathrm{eff},k}\,L_r(\theta).
+  \]
+  The forget coefficient $\gamma_k$ can be warm-started:
+  \[
+  \gamma_k
+  \;=\;
+  \gamma_{\mathrm{final}}
+  \min\!\left(1,\frac{k}{K_w}\right),
+  \]
+  with $K_w=0$ meaning no warmup (i.e., $\gamma_k=\gamma_{\mathrm{final}}$).
+
+  \paragraph{Gradient step.}
+  For each paired batch $(B_{\mathcal{F}},B_{\mathcal{R}})$, the update is
+  \[
+  \theta \;\leftarrow\; \theta - \eta \nabla_\theta \Big(\gamma_k L_f(\theta) + \alpha_{\mathrm{eff},k} L_r(\theta)\Big).
+  \]
+
+  \subsection{Adaptive Retain Control (Updating $\alpha$)}
+
+  \paragraph{Interpretation.}
+  Ada-WGD treats $\alpha_k$ as a projected dual/control variable that increases when retain drift is too large
+  and decreases when forgetting stagnates while retain is already acceptable.
+
+  \paragraph{Auxiliary forgetting progress signal.}
+  Let $F_k$ be the EMA of forget \emph{strength} over epoch $k$:
+  \[
+  F_k \;=\; \mathrm{EMA}\big(-L_f^{(\mathrm{step})}\big),
+  \qquad
+  dF_k \;=\; \frac{F_k - F_{k-1}}{\max(|F_{k-1}|,\epsilon_0)}.
+  \]
+  (Using $-L_f$ makes $F_k$ larger when forgetting pressure increases.)
+
+  \paragraph{Band constraint and projection.}
+  Given target tolerance $\varepsilon$ and dead-zone half-width $\tau$, define the band
+  $[\varepsilon-\tau,\varepsilon+\tau]$.
+  Ada-WGD updates
+  \[
+  \alpha_{k+1}
+  \;=\;
+  \Pi_{[0,\gamma_k]}\Big(\alpha_k + \Delta\alpha_k\Big),
+  \]
+  where $\Pi$ projects to $[0,\gamma_k]$.
+
+  \paragraph{Piecewise update rule.}
+  Let $\eta_{\mathrm{big}},\eta_{\mathrm{small}}>0$ and thresholds $dF_{\mathrm{tol}}>0$.
+  Define a distance term (capped):
+  \[
+  m_k
+  \;=\;
+  \min\!\left(
+  m_{\max},\;
+  \max\!\left(0,\frac{\delta_k-(\varepsilon+\tau)}{\max(\varepsilon,\epsilon_0)}\right)
+  \right).
+  \]
+  Then
+  \[
+  \Delta\alpha_k=
+  \begin{cases}
+  +\eta_{\mathrm{big}}\big(1+k_{\mathrm{dist}}\,m_k\big),
+  & \delta_k>\varepsilon+\tau,\\[4pt]
+  -\eta_{\mathrm{big}}\big(1+k_{\mathrm{flat}}\big),
+  & |\delta_k-\varepsilon|\le\tau \;\land\; |dF_k|\le dF_{\mathrm{tol}},\\[4pt]
+  +\eta_{\mathrm{small}},
+  & \delta_k>\varepsilon \ \text{(but not far above band)},\\[4pt]
+  -\eta_{\mathrm{small}},
+  & \delta_k<\varepsilon \;\land\; dF_k>dF_{\mathrm{tol}},\\[4pt]
+  0,
+  & \text{otherwise}.
+  \end{cases}
+  \]
+  This creates a robust ``dead-zone'' controller:
+  \emph{increase} $\alpha$ quickly when retain drift violates the upper band,
+  \emph{decrease} $\alpha$ when forgetting progress is flat and retain is already acceptable,
+  and otherwise make small corrective nudges.
+
+  \paragraph{Constant-mode overrides.}
+  Ada-WGD supports fixed coefficients for ablations:
+  \[
+  \alpha_k \equiv \alpha_{\mathrm{const}} \quad \text{if set (controller disabled),}
+  \qquad
+  \beta_i \equiv \beta_{\mathrm{const}} \quad \text{if set.}
+  \]
+
+  \subsection{Algorithm}
+
+  \begin{algorithm}[H]
+  \caption{Ada-WGD}
+  \begin{algorithmic}[1]
+  \STATE Initialize parameters $\theta$.
+  \STATE Set $\alpha_1\leftarrow \alpha_0$; set $R_{\mathrm{ref}}\leftarrow \varnothing$.
+  \FOR{$k=1$ to $K$}
+    \STATE Set $\gamma_k \leftarrow \gamma_{\mathrm{final}}\min(1,k/K_w)$.
+    \FOR{each paired batch $(B_{\mathcal{F}},B_{\mathcal{R}})$}
+      \STATE For each $i\in B_{\mathcal{F}}$, set $\beta_i \leftarrow \mathrm{clip}(58.7 s_i^{-0.796},0.05,2)$ (or $\beta_{\mathrm{const}}$).
+      \STATE Compute $L_f(\theta)$ using $w_{i,t}=\mathrm{stopgrad}(p_{i,t})^{\beta_i}$ and masked tokens.
+      \STATE Compute $L_r(\theta)$ as masked NLL on $B_{\mathcal{R}}$.
+      \STATE Set $\alpha_{\mathrm{eff},k}\leftarrow \alpha_k$ (or optional per-step modulation using $\bar{\beta}$).
+      \STATE Update $\theta\leftarrow\theta-\eta\nabla_\theta(\gamma_k L_f(\theta)+\alpha_{\mathrm{eff},k}L_r(\theta))$.
+      \STATE Update step-level EMAs for retain $R_k$ and forget-strength $F_k$.
+    \ENDFOR
+    \IF{$R_{\mathrm{ref}}=\varnothing$}
+      \STATE Set $R_{\mathrm{ref}}\leftarrow R_k$.
+    \ENDIF
+    \STATE Compute drift $\delta_k=\max(0,(R_k-R_{\mathrm{ref}})/\max(R_{\mathrm{ref}},\epsilon_0))$.
+    \IF{$\alpha_{\mathrm{const}}$ is not set}
+      \STATE Update $\alpha_{k+1}=\Pi_{[0,\gamma_k]}(\alpha_k+\Delta\alpha_k)$ using the piecewise rule.
+    \ELSE
+      \STATE Set $\alpha_{k+1}\leftarrow \Pi_{[0,\gamma_k]}(\alpha_{\mathrm{const}})$.
+    \ENDIF
+  \ENDFOR
+  \STATE \textbf{return} $\theta^\star$
+  \end{algorithmic}
+  \end{algorithm}
+
+  
+
+  % \paragraph{Inference.}
+  % At inference, the unlearned model $q_{\theta^\star}$ is used with standard decoding.
+  % No unlearning-specific losses or controllers are applied at inference time (only optional generic decoding controls such as repetition penalties).

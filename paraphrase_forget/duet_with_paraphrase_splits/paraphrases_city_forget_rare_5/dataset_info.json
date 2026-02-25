@@ -1,0 +1,72 @@
+{
+  "citation": "",
+  "description": "",
+  "features": {
+    "source_csv": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "subjectLabel": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "relation": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "objectLabel": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "subject_qid": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "property_pid": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "object_qid": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "question": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "pop_subject": {
+      "dtype": "float64",
+      "_type": "Value"
+    },
+    "pop_object": {
+      "dtype": "float64",
+      "_type": "Value"
+    },
+    "pop_sum": {
+      "dtype": "float64",
+      "_type": "Value"
+    },
+    "triple_pop": {
+      "dtype": "int64",
+      "_type": "Value"
+    },
+    "best_gen_Llama_8b_Instract": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "gen_recall_Llama_8b_Instract": {
+      "dtype": "float64",
+      "_type": "Value"
+    },
+    "bert_sim_Llama_8b_Instract": {
+      "dtype": "float64",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": ""
+}

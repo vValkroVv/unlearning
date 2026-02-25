@@ -138,3 +138,33 @@ class QAwithAlternateDataset(QADataset):
                 return_item["alternate"] = alt_item
                 # return_item.append([sample_item, idk_item])
         return return_item if self.return_original else return_item["alternate"]
+
+
+class QAAnswerIndexDataset(QADataset):
+    def __init__(self, answer_index=0, *args, **kwargs):
+        self.answer_index = int(answer_index)
+        super().__init__(*args, **kwargs)
+
+    def __getitem__(self, idx):
+        row = self.data[idx]
+        question = row[self.question_key]
+        answer = row[self.answer_key]
+        index = row["index"]
+        pop_sum = row.get("pop_sum", None)
+
+        if isinstance(answer, list):
+            if not answer:
+                raise ValueError(f"Empty answer list at index {idx}")
+            if self.answer_index >= len(answer) or self.answer_index < -len(answer):
+                raise IndexError(
+                    f"answer_index {self.answer_index} out of range for index {idx}"
+                )
+            answer = answer[self.answer_index]
+
+        if not isinstance(answer, str):
+            raise NotImplementedError("answer format not found")
+
+        item = self._process_sample(question=question, answer=answer, index=index)
+        if pop_sum is not None:
+            item["pop_sum"] = pop_sum
+        return item

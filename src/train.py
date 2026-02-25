@@ -60,6 +60,12 @@ def main(cfg: DictConfig):
         trainer.train()
         trainer.save_state()
         trainer.save_model(trainer_args.output_dir)
+        if trainer.is_world_process_zero() and hasattr(model, "peft_config"):
+            import os
+
+            adapter_cfg = os.path.join(trainer_args.output_dir, "adapter_config.json")
+            if not os.path.exists(adapter_cfg):
+                model.save_pretrained(trainer_args.output_dir)
 
     if trainer_args.do_eval:
         trainer.evaluate(metric_key_prefix="eval")

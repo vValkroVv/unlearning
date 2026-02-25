@@ -186,17 +186,3 @@ cython_debug/
 AGENTS.md
 experiments_visualization.ipynb
 scripts/recalc_duet_rouge_recall.py
-
-# macOS metadata
-.DS_Store
-
-# archives
-*.gz
-
-# keep dirs in git, ignore their contents
-wheelhouse_hydra/*
-!wheelhouse_hydra/.gitkeep
-hydra-dl/*
-!hydra-dl/.gitkeep
-offline_zips/*
-!offline_zips/.gitkeep

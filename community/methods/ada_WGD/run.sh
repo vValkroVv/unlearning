@@ -8,6 +8,12 @@ repo_root=$(realpath "${script_dir}/../../..")
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
+# Speed up and make HF downloads more robust
+export HF_HUB_ENABLE_HF_TRANSFER=${HF_HUB_ENABLE_HF_TRANSFER:-1}
+export HF_TIMEOUT=${HF_TIMEOUT:-60}
+export HF_MAX_RETRIES=${HF_MAX_RETRIES:-5}
+export HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-"${repo_root}/hf_cache"}
+
 # ===================== User-configurable parameters =====================
 # Override via env, e.g.:
 #   DEVICES=0 NUM_EPOCHS=10 LRS="2e-5 4e-5" GAMMAS="1.0 3.0" RETAIN_EPS=1.2 INIT_LAMBDA=0.3 \
@@ -28,13 +34,14 @@ LORA_DROPOUT=${LORA_DROPOUT:-0.0}
 PER_DEVICE_TRAIN_BS=${PER_DEVICE_TRAIN_BS:-1}
 GRAD_ACCUM=${GRAD_ACCUM:-32}
 NUM_EPOCHS=${NUM_EPOCHS:-10}
-LRS_STR=${LRS:-"1e-5 4e-5 8e-5 5e-4"} # 1e-5 2e-5 4e-5 6e-5 8e-5 1e-4 2e-4 3e-4 5e-4
+LRS_STR=${LRS:-"2e-5 5e-5 8e-5"} # 2e-3 5e-3 8e-3;; 2e-4 5e-4 8e-4 ;;  3e-4 2e-4 8e-5 4e-5 1e-5 ;; 1e-5 2e-5 4e-5 6e-5 8e-5 1e-4 2e-4 3e-4 5e-4
 GAMMAS_STR=${GAMMAS:-"1.0"}
 
-RETAIN_EPS=${RETAIN_EPS:-0.1}   # relative tolerance (e.g., 0.1 = 10%)
-INIT_LAMBDA=${INIT_LAMBDA:-0.5} # base retain weight
-CONTROLLER_GAIN=${CONTROLLER_GAIN:-0.1} # PI proportional gain (ki=gain/2)
 WARMUP_EPOCHS=${WARMUP_EPOCHS:-0.0}
+ # set to a float (e.g., 0.5) for constant alpha; 'none' keeps dynamic
+ALPHA_CONST=${ALPHA_CONST:-0.5 none}
+BETA_CONST=${BETA_CONST:-0.1 none}
+# BETA_CONST=${BETA_CONST:-none}
 
 # Inference-time repetition controls for generation
 REPETITION_PENALTY=${REPETITION_PENALTY:-1.1}
@@ -61,14 +68,17 @@ trainer="AdaWGD"
 experiment="unlearn/duet/wga_lora.yaml"
 
 forget_retain_splits=(
-    # "city_forget_rare_5 city_fast_retain_500"
-    "city_forget_popular_5 city_fast_retain_500"
+    "city_forget_rare_5 city_fast_retain_500"
+    #"city_forget_popular_5 city_fast_retain_500"
 )
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS}
 gradient_accumulation_steps=${GRAD_ACCUM}
 read -r -a lrs <<< "${LRS_STR}"
 read -r -a gammas <<< "${GAMMAS_STR}"
+# Parse grids for alpha/beta constants (allow space-separated lists)
+read -r -a alpha_consts <<< "${ALPHA_CONST}"
+read -r -a beta_consts <<< "${BETA_CONST}"
 
 lora_rs=(${LORA_R})
 lora_alphas=(${LORA_ALPHA})
@@ -87,10 +97,17 @@ for split in "${forget_retain_splits[@]}"; do
             for lora_r in "${lora_rs[@]}"; do
                 for lora_alpha in "${lora_alphas[@]}"; do
                     for lora_dropout in "${lora_dropouts[@]}"; do
+                        for alpha_const in "${alpha_consts[@]}"; do
+                            for beta_const in "${beta_consts[@]}"; do
                         dropout_tag=${lora_dropout//./p}
                         gamma_tag=${gamma//./p}
 
-                        task_name=duet_${base_model}_${forget_split}_ada_WGD_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_gamma${gamma_tag}
+                        # Build tags for alpha/beta settings: a{val} / b{val} or adyn/bdyn when 'none'
+                        shopt -s nocasematch || true
+                        if [[ "${alpha_const}" == "none" ]]; then atag="adyn"; else atag="a${alpha_const//./p}"; fi
+                        if [[ "${beta_const}" == "none" ]]; then btag="bdyn"; else btag="b${beta_const//./p}"; fi
+                        shopt -u nocasematch || true
+                        task_name=duet_${base_model}_${forget_split}_ada_WGD_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_${atag}_${btag}_gamma${gamma_tag}
                         run_dir=${repo_root}/saves/unlearn/ada_WGD/${task_name}
                         eval_dir=${run_dir}/evals
                         summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -102,8 +119,24 @@ for split in "${forget_retain_splits[@]}"; do
 
                         echo "${task_name}: LoRA AdaWGD unlearning ${base_model_path} on ${forget_split} (epochs=${num_train_epochs})"
 
+                        # Minimal override set – controller/scaling use trainer defaults in code.
+
+                        # Optional constant alpha/beta provided by user (set to a float to enable; 'none' keeps dynamic)
+                        extra_method_args=()
+                        shopt -s nocasematch || true
+                        if [[ "${alpha_const:-none}" != "none" && -n "${alpha_const}" ]]; then
+                            extra_method_args+=(trainer.method_args.alpha_const=${alpha_const})
+                        fi
+                        if [[ "${beta_const:-none}" != "none" && -n "${beta_const}" ]]; then
+                            extra_method_args+=(trainer.method_args.beta_const=${beta_const})
+                        fi
+                        shopt -u nocasematch || true
+
                         adapter_path=${run_dir}/adapter_model.safetensors
+                        log_file=${run_dir}/AdaWGD.log
                         if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                            mkdir -p "${run_dir}"
+                            echo "[TRAIN] $(date) task=${task_name}" | tee -a "${log_file}"
                             python src/train.py --config-name=unlearn.yaml \
                                 experiment=${experiment} \
                                 trainer=${trainer} \
@@ -123,12 +156,11 @@ for split in "${forget_retain_splits[@]}"; do
                                 trainer.args.learning_rate=${lr} \
                                 trainer.method_args.gamma=${gamma} \
                                 trainer.method_args.warmup_epochs=${WARMUP_EPOCHS} \
-                                trainer.method_args.alpha0=${INIT_LAMBDA} \
-                                trainer.method_args.eps=${RETAIN_EPS} \
-                                trainer.method_args.controller_gain=${CONTROLLER_GAIN} \
+                                ${extra_method_args[@]} \
                                 trainer.method_args.retain_loss_type=NLL \
                                 retain_logs_path=null \
-                                paths.output_dir=${run_dir}
+                                paths.output_dir=${run_dir} \
+                                |& tee -a "${log_file}"
                         else
                             echo "[ada_WGD] Adapter already exists at ${adapter_path}; skipping training."
                         fi
@@ -159,7 +191,10 @@ for split in "${forget_retain_splits[@]}"; do
                             paths.output_dir=${eval_dir} \
                             retain_logs_path=null \
                         )
-                        python src/eval.py "${eval_cmd[@]}"
+                        echo "[EVAL] $(date) task=${task_name}" | tee -a "${log_file}"
+                        python src/eval.py "${eval_cmd[@]}" |& tee -a "${log_file}"
+                            done
+                        done
                     done
                 done
             done

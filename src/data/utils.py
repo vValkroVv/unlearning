@@ -1,3 +1,4 @@
+import os
 import torch
 import datasets
 import numpy as np
@@ -10,8 +11,33 @@ logger = logging.getLogger("data")
 
 
 def load_hf_dataset(path, **kwargs):
-    dataset = datasets.load_dataset(path, **kwargs)
-    return dataset
+    """Wrapper around datasets.load_dataset with sane download defaults.
+
+    - Increases HTTP timeout and retries to mitigate transient hub timeouts.
+    - Resumes partial downloads when possible.
+    - Respects standard cache envs; allows overriding cache via HF_DATASETS_CACHE.
+    """
+    timeout_sec = int(os.environ.get("HF_TIMEOUT", "60"))
+    max_retries = int(os.environ.get("HF_MAX_RETRIES", "5"))
+    # Build DownloadConfig only if caller didn't pass one
+    if "download_config" not in kwargs:
+        try:
+            dl_cfg = datasets.DownloadConfig(
+                max_retries=max_retries,
+                retry_interval=1.0,
+                resume_download=True,
+                use_etag=True,
+                timeout=timeout_sec,
+            )
+            kwargs["download_config"] = dl_cfg
+        except Exception:
+            pass
+    # Default cache_dir from env if not provided
+    if "cache_dir" not in kwargs:
+        cache_dir = os.environ.get("HF_DATASETS_CACHE") or os.environ.get("HF_CACHE")
+        if cache_dir:
+            kwargs["cache_dir"] = cache_dir
+    return datasets.load_dataset(path, **kwargs)
 
 
 def preprocess_chat_instance(
@@ -51,8 +77,16 @@ def preprocess_chat_instance(
     if template_config["apply_chat_template"]:
         chat = []
         system_prompt = template_config.get("system_prompt", None)
+        system_role = template_config.get("system_prompt_role", "system")
         if system_prompt:
-            chat += [{"role": "system", "content": system_prompt}]
+            if system_role == "user" and prompt_msgs:
+                # For templates that require strict user/assistant alternation, fold
+                # the system prompt into the first user message instead of adding a
+                # separate system/user role.
+                prompt_msgs = list(prompt_msgs)
+                prompt_msgs[0] = f"{system_prompt}\n\n{prompt_msgs[0]}"
+            else:
+                chat += [{"role": system_role, "content": system_prompt}]
         for prompt, response in zip(prompt_msgs, response_msgs):
             chat += [{"role": "user", "content": prompt}]
             chat += [{"role": "assistant", "content": response}]

@@ -10,6 +10,51 @@ hf_home = os.getenv("HF_HOME", default=None)
 
 logger = logging.getLogger(__name__)
 
+def _normalize_lora_config(lora_config: Optional[DictConfig]) -> DictConfig:
+    if lora_config:
+        lora_params = dict(lora_config)
+    else:
+        lora_params = {
+            "target_modules": [
+                "q_proj",
+                "v_proj",
+                "k_proj",
+                "o_proj",
+                "gate_proj",
+                "down_proj",
+                "up_proj",
+                "lm_head",
+            ],
+            "lora_alpha": 128,
+            "lora_dropout": 0.05,
+            "r": 128,
+            "bias": "none",
+            "task_type": "CAUSAL_LM",
+        }
+
+    def convert_omegaconf_to_python(obj):
+        if isinstance(obj, ListConfig):
+            return [convert_omegaconf_to_python(item) for item in obj]
+        if isinstance(obj, DictConfig):
+            return {k: convert_omegaconf_to_python(v) for k, v in obj.items()}
+        if hasattr(obj, "_content"):
+            if isinstance(obj._content, list):
+                return [convert_omegaconf_to_python(item) for item in obj._content]
+            if isinstance(obj._content, dict):
+                return {k: convert_omegaconf_to_python(v) for k, v in obj._content.items()}
+            return obj._content
+        return obj
+
+    lora_params = convert_omegaconf_to_python(lora_params)
+    return {
+        "target_modules": list(lora_params["target_modules"]),
+        "lora_alpha": int(lora_params["lora_alpha"]),
+        "lora_dropout": float(lora_params["lora_dropout"]),
+        "r": int(lora_params["r"]),
+        "bias": str(lora_params["bias"]),
+        "task_type": str(lora_params["task_type"]),
+    }
+
 
 class LoRAModelForCausalLM:
     """
@@ -156,11 +201,18 @@ def get_lora_model(model_cfg: DictConfig):
         model_path = model_args.pop("pretrained_model_name_or_path", None)
         device_map = model_args.pop("device_map", None)
 
-    is_adapter = (
-        model_path
-        and os.path.isdir(model_path)
-        and os.path.exists(os.path.join(model_path, "adapter_config.json"))
+    adapter_config_path = (
+        os.path.join(model_path, "adapter_config.json")
+        if model_path and os.path.isdir(model_path)
+        else None
     )
+    adapter_weights_path = (
+        os.path.join(model_path, "adapter_model.safetensors")
+        if model_path and os.path.isdir(model_path)
+        else None
+    )
+    is_adapter = bool(adapter_config_path and os.path.exists(adapter_config_path))
+    has_adapter_weights = bool(adapter_weights_path and os.path.exists(adapter_weights_path))
 
     try:
         kwargs = dict(model_args)
@@ -185,6 +237,38 @@ def get_lora_model(model_cfg: DictConfig):
                 **kwargs,
             )
             model = PeftModel.from_pretrained(base_model, adapter_path)
+        elif has_adapter_weights and base_model_path is not None:
+            logger.info(
+                "Loading base model %s with adapter weights from %s (no adapter_config.json found).",
+                base_model_path,
+                adapter_weights_path,
+            )
+            lora_params = _normalize_lora_config(lora_config)
+            base_model = AutoModelForCausalLM.from_pretrained(
+                pretrained_model_name_or_path=base_model_path,
+                torch_dtype=torch_dtype,
+                **kwargs,
+            )
+            peft_config = LoraConfig(
+                target_modules=lora_params["target_modules"],
+                lora_alpha=lora_params["lora_alpha"],
+                lora_dropout=lora_params["lora_dropout"],
+                r=lora_params["r"],
+                bias=lora_params["bias"],
+                task_type=TaskType.CAUSAL_LM,
+            )
+            model = get_peft_model(base_model, peft_config)
+            try:
+                from safetensors.torch import load_file as safe_load_file
+
+                state_dict = safe_load_file(adapter_weights_path)
+            except Exception:
+                state_dict = torch.load(adapter_weights_path, map_location="cpu")
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            if missing:
+                logger.warning("Missing keys when loading adapter: %s", missing[:10])
+            if unexpected:
+                logger.warning("Unexpected keys when loading adapter: %s", unexpected[:10])
         else:
             model = LoRAModelForCausalLM.from_pretrained(
                 pretrained_model_name_or_path=model_path,

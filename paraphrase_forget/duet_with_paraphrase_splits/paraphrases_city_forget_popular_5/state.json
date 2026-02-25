@@ -1,0 +1,30 @@
+{
+  "_data_files": [
+    {
+      "filename": "data-00000-of-00001.arrow"
+    }
+  ],
+  "_fingerprint": "c48bff0074fef3bd",
+  "_format_columns": [
+    "source_csv",
+    "subjectLabel",
+    "relation",
+    "objectLabel",
+    "subject_qid",
+    "property_pid",
+    "object_qid",
+    "question",
+    "answer",
+    "pop_subject",
+    "pop_object",
+    "pop_sum",
+    "triple_pop",
+    "best_gen_Llama_8b_Instract",
+    "gen_recall_Llama_8b_Instract",
+    "bert_sim_Llama_8b_Instract"
+  ],
+  "_format_kwargs": {},
+  "_format_type": null,
+  "_output_all_columns": false,
+  "_split": null
+}

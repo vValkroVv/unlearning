@@ -1,0 +1,15 @@
+model_args:
+  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B"
+  attn_implementation: "eager"
+  torch_dtype: bfloat16
+  low_cpu_mem_usage: true
+  device_map: null
+tokenizer_args:
+  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B"
+template_args:
+  apply_chat_template: false
+  system_prompt_with_special_tokens: ""
+  user_start_tag: ""
+  user_end_tag: "\n"
+  asst_start_tag: ""
+  asst_end_tag: ""

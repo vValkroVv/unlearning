@@ -1,0 +1,10 @@
+POPQA_QA_retain:
+  handler: QAAnswerIndexDataset
+  args:
+    hf_args:
+      path: "SwetieePawsss/exp_UNLamb"
+      split: ${retain_split}
+    question_key: ${question_key}
+    answer_key: "possible_answers"
+    answer_index: 0
+    max_length: 512

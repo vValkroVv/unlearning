@@ -1,0 +1,24 @@
+use_lora: true
+model_args:
+  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B"
+  attn_implementation: "eager"
+  torch_dtype: bfloat16
+  base_model_name_or_path: null
+  low_cpu_mem_usage: true
+  device_map: null
+tokenizer_args:
+  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B"
+lora_config:
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "down_proj", "up_proj", "lm_head"]
+  lora_alpha: 128
+  lora_dropout: 0.05
+  r: 64
+  bias: "none"
+  task_type: "CAUSAL_LM"
+template_args:
+  apply_chat_template: false
+  system_prompt_with_special_tokens: ""
+  user_start_tag: ""
+  user_end_tag: "\n"
+  asst_start_tag: ""
+  asst_end_tag: ""

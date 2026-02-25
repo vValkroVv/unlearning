@@ -1,0 +1,21 @@
+use_lora: true
+model_args:
+  pretrained_model_name_or_path: "google/gemma-7b-it"
+  base_model_name_or_path: null
+  attn_implementation: "flash_attention_2"
+  torch_dtype: bfloat16
+  device_map: "auto"
+  low_cpu_mem_usage: true
+tokenizer_args:
+  pretrained_model_name_or_path: "google/gemma-7b-it"
+lora_config:
+  target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "down_proj", "up_proj", "lm_head"]
+  lora_alpha: 128
+  lora_dropout: 0.05
+  r: 64
+  bias: "none"
+  task_type: "CAUSAL_LM"
+template_args:
+  apply_chat_template: true
+  system_prompt: You are terse and fact-only QA assistant. Reply to the question clearly with few-words correct answer.
+  system_prompt_role: user

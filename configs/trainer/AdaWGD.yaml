@@ -12,17 +12,32 @@ method_args:
   gamma: 1.0
   warmup_epochs: 0.0
 
-  # Retain constraint
-  alpha0: 0.5
-  eps: 0.1           # relative tolerance (10%)
-  controller_gain: 0.1  # PI proportional gain (ki = gain/2)
-  lambda_max: 1000.0
+  # Retain constraint (epoch-wise controller, no small-batch evals)
+  alpha0: 0.5           # starting alpha (will adapt in [0, gamma])
+  alpha_const: null     # if set (e.g., 0.5), use constant alpha; null => dynamic
+  beta_const: null      # if set (e.g., 0.1), use constant beta; null => dynamic from pop_sum
+  eps: 0.1              # target relative tolerance
+  tau: 0.05             # dead-zone half-width
+  retain_ema_decay: 0.9
+  forget_ema_decay: 0.9
+  eta_big: 0.1          # per-epoch big step when far from tolerance
+  eta_small: 0.05       # per-epoch small step in mid-zone
+  dF_tol: 0.02          # flat threshold for forget relative change
+  k_dist: 1.0           # distance gain
+  k_flat: 1.0           # flat-zone extra decrease gain
+  mcap: 3.0             # distance multiplier cap
+  step_log_interval: 50 # log richer step metrics every N steps
+
+  # Popularity modulation of Δα (epoch-wise)
+  pop_delta_alpha_enable: true
+  pop_inc_amp: 0.5
+  pop_dec_amp: 0.5
+
+  # Retain loss mode
   retain_loss_type: NLL
 
-  # Quick eval subsets
-  retain_eval_samples: 128
-  forget_eval_samples: 128
-
-  # Early stop
-  forget_improve_eps: 0.005
-  consecutive_patience: 2
+  # Per-step retain scaling based on popularity (disabled by default)
+  retain_pop_mode: none         # one of: none, inv_beta
+  retain_pop_gain: 1.0          # scale for inverse-beta scaling
+  retain_pop_min: 0.3           # lower clamp for per-step scaling factor
+  retain_pop_max: 1.0           # upper clamp for per-step scaling factor
