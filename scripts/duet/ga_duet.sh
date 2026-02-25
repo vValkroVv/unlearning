@@ -12,6 +12,7 @@ echo "Master Port: $MASTER_PORT"
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${hf_base_model_path}}"
 local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb}"
 
 use_sft_base=${USE_SFT_BASE:-1}
@@ -81,6 +82,7 @@ for split in "${forget_retain_splits[@]}"; do
                             forget_split=${forget_split} \
                             retain_split=${retain_split} \
                             model.model_args.pretrained_model_name_or_path=${base_model_path} \
+                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                             model.model_args.device_map="auto" \
                             model.model_args.low_cpu_mem_usage=true \
                             model.lora_config.r=${lora_r} \
@@ -107,6 +109,7 @@ for split in "${forget_retain_splits[@]}"; do
                         task_name=${task_name} \
                         model.model_args.pretrained_model_name_or_path=${run_dir} \
                         model.model_args.base_model_name_or_path=${base_model_path} \
+                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                         model.model_args.device_map="auto" \
                         model.model_args.low_cpu_mem_usage=true \
                         model.lora_config.r=${lora_r} \

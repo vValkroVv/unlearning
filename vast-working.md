@@ -1,0 +1,451 @@
+# VAST Working Log: GPU venv setup for `unlearning`
+
+Date: 2026-02-25
+Repo: `/workspace/unlearning`
+
+## 1) Read setup instructions and inspect dependency files
+
+Commands run:
+
+```bash
+sed -n '1,260p' README.md
+sed -n '1,260p' requirements.txt
+sed -n '1,260p' setup.py
+```
+
+Findings:
+- README suggests:
+  - `pip install .[lm_eval]`
+  - `pip install --no-build-isolation flash-attn==2.6.3`
+- `setup.py` loads deps directly from `requirements.txt`.
+- `requirements.txt` includes non-PyPI ROS packages (example: `actionlib==1.14.0`) that fail on this server.
+
+## 2) Create virtual environment
+
+Commands run:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+```
+
+## 3) Try direct README install and record failure
+
+Command run:
+
+```bash
+pip install '.[lm-eval]'
+```
+
+Result:
+- Failed because of non-portable deps from `requirements.txt`:
+  - `ERROR: No matching distribution found for actionlib==1.14.0`
+
+## 4) Install working dependency set
+
+### 4.1 Install core runtime deps used by codebase
+
+```bash
+pip install \
+  numpy==2.2.3 hydra-core==1.3.0 hydra-colorlog==1.2.0 omegaconf==2.3.0 \
+  transformers==4.45.1 accelerate==0.34.2 datasets==3.0.1 peft==0.15.2 \
+  deepspeed==0.15.4 scipy==1.14.1 tqdm==4.67.1 rouge-score==0.1.2 \
+  scikit-learn==1.5.2 huggingface-hub==0.29.1 sentencepiece==0.2.1 \
+  evaluate==0.4.3 lm-eval==0.4.8 jsonlines==4.0.0 pytorch-revgrad==0.2.0 \
+  einops==0.8.1 pandas==2.3.0
+```
+
+### 4.2 Install CUDA PyTorch (GPU build)
+
+First, GPU availability was validated:
+
+```bash
+nvidia-smi
+```
+
+Then replaced CPU torch with CUDA torch:
+
+```bash
+pip install --force-reinstall torch==2.4.1 --index-url https://download.pytorch.org/whl/cu124
+```
+
+Resolved a dependency conflict caused by torch reinstall:
+
+```bash
+pip install fsspec==2024.6.1
+```
+
+### 4.3 Install flash-attention
+
+```bash
+MAX_JOBS=8 pip install --no-build-isolation flash-attn==2.6.3
+```
+
+Build result:
+- `flash-attn-2.6.3` built successfully from source and installed.
+
+## 5) Configure local writable cache directories
+
+To avoid permission/cache issues on this server session:
+
+```bash
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+mkdir -p "$HF_HOME/hub" "$TRITON_CACHE_DIR"
+```
+
+## 6) Sanity checks
+
+### 6.1 Dependency consistency
+
+```bash
+pip check
+```
+
+Result:
+- `No broken requirements found.`
+
+### 6.2 Full module import sweep (`src/`)
+
+Command run:
+
+```bash
+python - <<'PY'
+import os, sys, importlib
+src='/workspace/unlearning/src'
+sys.path.insert(0, src)
+mods=[]
+for root, _, files in os.walk(src):
+    for f in files:
+        if f.endswith('.py'):
+            rel=os.path.relpath(os.path.join(root,f), src)
+            m=rel[:-3].replace('/', '.')
+            if m.endswith('.__init__'): m=m[:-9]
+            if m: mods.append(m)
+mods=sorted(set(mods))
+fails=[]
+for m in mods:
+    try:
+        importlib.import_module(m)
+    except Exception as e:
+        fails.append((m, type(e).__name__, str(e)))
+print('TOTAL_MODULES', len(mods))
+print('FAILED', len(fails))
+for m,et,msg in fails:
+    print(f"{m}::{et}::{msg}")
+PY
+```
+
+Result:
+- `TOTAL_MODULES 50`
+- `FAILED 0`
+
+### 6.3 Entry point checks
+
+```bash
+python src/train.py --help
+python src/eval.py --help
+python setup_data.py --help
+```
+
+Result:
+- All three commands executed successfully.
+
+### 6.4 GPU + flash-attn runtime smoke test
+
+```bash
+python - <<'PY'
+import torch
+import flash_attn
+from flash_attn.flash_attn_interface import flash_attn_func
+print('flash_attn_version', getattr(flash_attn,'__version__','unknown'))
+print('torch', torch.__version__, 'cuda_build', torch.version.cuda)
+print('cuda_available', torch.cuda.is_available())
+q = torch.randn(1, 16, 8, 64, device='cuda', dtype=torch.float16)
+k = torch.randn(1, 16, 8, 64, device='cuda', dtype=torch.float16)
+v = torch.randn(1, 16, 8, 64, device='cuda', dtype=torch.float16)
+out = flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False)
+print('flash_attn_out_shape', tuple(out.shape))
+print('flash_attn_out_dtype', out.dtype)
+print('gpu_name', torch.cuda.get_device_name(0))
+PY
+```
+
+Result:
+- `flash_attn_version 2.6.3`
+- `torch 2.4.1+cu124`, CUDA build `12.4`
+- `cuda_available True`
+- Output tensor computed on GPU (`NVIDIA RTX A6000`)
+
+## 7) Ready-to-use activation commands
+
+Run in each new shell:
+
+```bash
+cd /workspace/unlearning
+source .venv/bin/activate
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+mkdir -p "$HF_HOME/hub" "$TRITON_CACHE_DIR"
+```
+
+## Notes
+- `setup.py` currently uses `find_packages()` but repo code lives under `src/` without package discovery metadata, so direct entry scripts (`python src/train.py ...`, `python src/eval.py ...`) are the reliable path.
+- In restricted sandbox contexts, CUDA visibility checks can report false negatives. GPU checks above were validated in full GPU-visible execution context.
+
+## 8) Extra packages required specifically for `scripts/duet/npo_duet.sh`
+
+Reason:
+- `configs/trainer/finetune.yaml` sets:
+  - `optim: paged_adamw_32bit` (requires `bitsandbytes`)
+  - `report_to: tensorboard` (requires `tensorboard`)
+
+Install command used:
+
+```bash
+pip install bitsandbytes==0.44.1 tensorboard==2.20.0 wandb==0.21.0
+```
+
+Post-install checks:
+
+```bash
+pip check
+python -m bitsandbytes
+```
+
+Result:
+- `pip check` passed with no broken requirements.
+- `python -m bitsandbytes` ended with `SUCCESS! Installation was successful!` in GPU-visible context.
+
+Targeted optimizer/reporting smoke test:
+
+```bash
+python - <<'PY'
+import torch
+from transformers import Trainer, TrainingArguments
+
+class Tiny(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.l = torch.nn.Linear(8, 8)
+    def forward(self, input_ids=None, labels=None):
+        y = self.l(torch.randn(2,8, device=self.l.weight.device))
+        return {'loss': y.mean(), 'logits': y}
+
+args = TrainingArguments(
+    output_dir='/tmp/bnb_smoke2',
+    per_device_train_batch_size=1,
+    report_to=['tensorboard'],
+    optim='paged_adamw_32bit',
+    max_steps=1,
+)
+model = Tiny().cuda() if torch.cuda.is_available() else Tiny()
+trainer = Trainer(model=model, args=args)
+trainer.create_optimizer()
+print('optimizer_class', trainer.optimizer.__class__.__name__)
+print('optimizer_module', trainer.optimizer.__class__.__module__)
+print('device', next(model.parameters()).device)
+PY
+```
+
+Result:
+- `optimizer_module bitsandbytes.optim.adamw`
+- Confirms `paged_adamw_32bit` path is active.
+
+## 9) Runtime note for `npo_duet.sh`
+
+Default local checkpoint in script:
+
+```bash
+/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb
+```
+
+Current server status:
+- This path is missing.
+
+To run script, use one of:
+
+```bash
+# Option A: use HF base model directly (requires HF access to meta-llama model)
+USE_SFT_BASE=0 bash scripts/duet/npo_duet.sh
+
+# Option B: point to a local checkpoint you have
+LOCAL_SFT_BASE=/path/to/your/local/base/checkpoint bash scripts/duet/npo_duet.sh
+```
+
+## 10) `ga_duet.sh` readiness for `unsloth/Llama-3.1-8B-Instruct`
+
+Objective:
+- Prepare everything so `scripts/duet/ga_duet.sh` can run with unsloth Llama-3.1-8B-Instruct.
+- Do not run `ga_duet.sh` directly; instead, validate all internal code paths with lightweight smoke commands.
+
+### 10.1 Small script fix needed (tokenizer path override)
+
+Issue found:
+- `ga_duet.sh` already overrides model weights path (`model.model_args.pretrained_model_name_or_path`) but not tokenizer path.
+- With unsloth weights, this left tokenizer loading on default `meta-llama/...` from model config, causing:
+  - `401 Client Error: Unauthorized` for gated `meta-llama/Llama-3.1-8B-Instruct`.
+
+Patch applied in `scripts/duet/ga_duet.sh`:
+- Added:
+  - `tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${hf_base_model_path}}"`
+- Passed tokenizer override to both train and eval calls:
+  - `model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}`
+
+This keeps previous behavior by default, and enables clean unsloth usage via env override.
+
+### 10.2 Preflight checks run
+
+Command:
+
+```bash
+source .venv/bin/activate
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+export HF_DATASETS_CACHE=/workspace/unlearning/.hf_home/datasets
+mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$HF_DATASETS_CACHE"
+nvidia-smi
+```
+
+Result:
+- GPU visible: `NVIDIA RTX A6000` (CUDA-enabled context).
+
+Command (dataset + tokenizer accessibility):
+
+```bash
+python - <<'PY'
+from datasets import load_dataset
+from transformers import AutoTokenizer
+print('forget_len', len(load_dataset('SwetieePawsss/DUET', split='city_forget_rare_5')))
+print('retain_len', len(load_dataset('SwetieePawsss/DUET', split='city_fast_retain_500')))
+tok = AutoTokenizer.from_pretrained('unsloth/Llama-3.1-8B-Instruct')
+print('tokenizer_ok', tok.__class__.__name__)
+PY
+```
+
+Result:
+- DUET splits loaded successfully:
+  - `city_forget_rare_5`: `482`
+  - `city_fast_retain_500`: `500`
+- Tokenizer load successful from `unsloth/Llama-3.1-8B-Instruct`.
+
+### 10.3 Lightweight train smoke (same code path as `ga_duet.sh`)
+
+Command (1 step, tiny split slices, LoRA small rank for speed):
+
+```bash
+python src/train.py --config-name=unlearn.yaml \
+  experiment=unlearn/duet/grad_ascent_lora.yaml \
+  trainer=GradAscent \
+  task_name=duet_smoke_unsloth_ga_lora \
+  model=Llama-3.1-8B-Instruct-lora \
+  "forget_split='city_forget_rare_5[:2]'" \
+  "retain_split='city_fast_retain_500[:2]'" \
+  model.model_args.pretrained_model_name_or_path=unsloth/Llama-3.1-8B-Instruct \
+  model.tokenizer_args.pretrained_model_name_or_path=unsloth/Llama-3.1-8B-Instruct \
+  model.model_args.device_map=auto \
+  model.model_args.low_cpu_mem_usage=true \
+  model.lora_config.r=8 \
+  model.lora_config.lora_alpha=16 \
+  model.lora_config.lora_dropout=0.0 \
+  trainer.args.per_device_train_batch_size=1 \
+  trainer.args.gradient_accumulation_steps=1 \
+  trainer.args.num_train_epochs=1 \
+  +trainer.args.max_steps=1 \
+  trainer.args.learning_rate=1e-5 \
+  trainer.args.logging_steps=1 \
+  retain_logs_path=null \
+  paths.output_dir=/workspace/unlearning/saves/unlearn/duet/ga/duet_smoke_unsloth_ga_lora
+```
+
+Result:
+- Train path completed successfully.
+- Artifacts created:
+  - `adapter_model.safetensors`
+  - `adapter_config.json`
+  - tokenizer files and trainer state in run dir.
+
+### 10.4 Lightweight eval smoke (same code path as `ga_duet.sh`)
+
+Command:
+
+```bash
+python src/eval.py \
+  experiment=eval/duet/default.yaml \
+  model=Llama-3.1-8B-Instruct-lora \
+  "forget_split='city_forget_rare_5[:2]'" \
+  "holdout_split='city_fast_retain_500[:2]'" \
+  task_name=duet_smoke_unsloth_ga_lora \
+  model.model_args.pretrained_model_name_or_path=/workspace/unlearning/saves/unlearn/duet/ga/duet_smoke_unsloth_ga_lora \
+  model.model_args.base_model_name_or_path=unsloth/Llama-3.1-8B-Instruct \
+  model.tokenizer_args.pretrained_model_name_or_path=unsloth/Llama-3.1-8B-Instruct \
+  model.model_args.device_map=auto \
+  model.model_args.low_cpu_mem_usage=true \
+  model.lora_config.r=8 \
+  model.lora_config.lora_alpha=16 \
+  model.lora_config.lora_dropout=0.0 \
+  eval.duet.overwrite=true \
+  eval.duet.batch_size=1 \
+  eval.duet.metrics.forget_qa_rouge.generation_args.max_new_tokens=8 \
+  eval.duet.metrics.holdout_qa_rouge.generation_args.max_new_tokens=8 \
+  paths.output_dir=/workspace/unlearning/saves/unlearn/duet/ga/duet_smoke_unsloth_ga_lora/evals \
+  retain_logs_path=null
+```
+
+Result:
+- Eval path completed successfully.
+- Outputs:
+  - `DUET_EVAL.json`
+  - `DUET_SUMMARY.json` with keys `forget_qa_rouge`, `holdout_qa_rouge`.
+
+### 10.5 `ga_duet.sh` logic checks
+
+Checked:
+- `bash -n scripts/duet/ga_duet.sh` -> syntax OK.
+- `_splits.sh` behavior:
+  - no merge: rare and popular runs separately
+  - `MERGE_POPULARITY_FORGET=1`: merged forget split label works.
+- Variable resolution for unsloth run:
+  - `USE_SFT_BASE=0` makes base model path come from `HF_BASE_MODEL_PATH`.
+  - `TOKENIZER_MODEL_PATH` now controls tokenizer source for both train and eval.
+
+### 10.6 Final command to run full GA DUET with unsloth
+
+```bash
+cd /workspace/unlearning
+source .venv/bin/activate
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+export HF_DATASETS_CACHE=/workspace/unlearning/.hf_home/datasets
+mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$HF_DATASETS_CACHE"
+
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=0 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/duet/ga_duet.sh
+```
+
+Optional fast sanity run before full sweep:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=0 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+LRS="1e-5" \
+LORA_RS="8" \
+LORA_ALPHAS="16" \
+LORA_DROPOUTS="0.0" \
+NUM_EPOCHS=1 \
+GRAD_ACCUM=1 \
+PER_DEVICE_TRAIN_BS=1 \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/duet/ga_duet.sh
+```
