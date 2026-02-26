@@ -501,3 +501,74 @@ Result summaries (`DUET_SUMMARY.json`):
 Notes:
 - Best holdout retention in this sweep was at `lr=1e-5`.
 - High learning rates (`>=1e-4`) collapsed both forget and holdout ROUGE toward zero in this setup.
+
+## 12) `npo_duet.sh` start (unsloth Llama-3.1-8B-Instruct)
+
+### 12.1 Small script fix needed (tokenizer path override)
+
+Issue observed:
+- `scripts/duet/npo_duet.sh` used `HF_BASE_MODEL_PATH` for model weights but did not override tokenizer source.
+- This caused tokenizer fallback to gated `meta-llama/Llama-3.1-8B-Instruct` and a `401` access error.
+
+Patch applied in `scripts/duet/npo_duet.sh`:
+- Added:
+  - `tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${hf_base_model_path}}"`
+- Passed tokenizer override to both train and eval calls:
+  - `model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}`
+
+### 12.2 Exact command started (verbatim)
+
+```bash
+cd /workspace/unlearning
+source .venv/bin/activate
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+export HF_DATASETS_CACHE=/workspace/unlearning/.hf_home/datasets
+mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$HF_DATASETS_CACHE"
+
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=0 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/duet/npo_duet.sh
+```
+
+## 13) Full `npo_duet.sh` run results (unsloth Llama-3.1-8B-Instruct)
+
+Run context:
+- Script: `scripts/duet/npo_duet.sh`
+- Merge mode: `MERGE_POPULARITY_FORGET=1`
+- Base model source: `unsloth/Llama-3.1-8B-Instruct`
+- LoRA grid:
+  - `LORA_RS=32`
+  - `LORA_ALPHAS=64`
+  - `LORA_DROPOUTS=0.0`
+- NPO method args:
+  - `BETAS=0.5`
+  - `ALPHAS=1.0`
+  - `GAMMAS=1.0`
+- Learning-rate sweep (default): `1e-5 5e-5 1e-4 5e-4 1e-3`
+
+Outcome:
+- Full sweep completed: `5/5` runs finished.
+- No active NPO train/eval process remained after completion check.
+- All run directories contain expected train + eval artifacts:
+  - train: `adapter_model.safetensors`, `adapter_config.json`, tokenizer/config files, trainer state/logs
+  - eval: `evals/DUET_EVAL.json`, `evals/DUET_SUMMARY.json`, `evals/eval.log`
+
+Result summaries (`DUET_SUMMARY.json`):
+
+| LR   | forget_qa_rouge | holdout_qa_rouge |
+|------|------------------|------------------|
+| 1e-5 | 0.7006224066390041 | 0.7973333333333332 |
+| 5e-5 | 0.6979598893499308 | 0.853 |
+| 1e-4 | 0.4785788381742739 | 0.8015 |
+| 5e-4 | 0.4073997233748271 | 0.8795 |
+| 1e-3 | 0.07717842323651451 | 0.9581666666666666 |
+
+Notes:
+- Highest holdout retention in this sweep was at `lr=1e-3`.
+- Forget-score reduction improved with higher learning rate in this run set (lowest forget ROUGE at `lr=1e-3`).
