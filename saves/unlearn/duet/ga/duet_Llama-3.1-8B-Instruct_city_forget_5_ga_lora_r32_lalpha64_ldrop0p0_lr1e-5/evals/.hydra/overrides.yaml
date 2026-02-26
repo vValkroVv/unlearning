@@ -1,0 +1,16 @@
+- experiment=eval/duet/default.yaml
+- model=Llama-3.1-8B-Instruct-lora
+- forget_split=city_forget_rare_5+city_forget_popular_5
+- holdout_split=city_fast_retain_500
+- task_name=duet_Llama-3.1-8B-Instruct_city_forget_5_ga_lora_r32_lalpha64_ldrop0p0_lr1e-5
+- model.model_args.pretrained_model_name_or_path=/workspace/unlearning/saves/unlearn/duet/ga/duet_Llama-3.1-8B-Instruct_city_forget_5_ga_lora_r32_lalpha64_ldrop0p0_lr1e-5
+- model.model_args.base_model_name_or_path=unsloth/Llama-3.1-8B-Instruct
+- model.tokenizer_args.pretrained_model_name_or_path=unsloth/Llama-3.1-8B-Instruct
+- model.model_args.device_map=auto
+- model.model_args.low_cpu_mem_usage=true
+- model.lora_config.r=32
+- model.lora_config.lora_alpha=64
+- model.lora_config.lora_dropout=0.0
+- eval.duet.overwrite=true
+- paths.output_dir=/workspace/unlearning/saves/unlearn/duet/ga/duet_Llama-3.1-8B-Instruct_city_forget_5_ga_lora_r32_lalpha64_ldrop0p0_lr1e-5/evals
+- retain_logs_path=null

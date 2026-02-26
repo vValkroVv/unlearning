@@ -9,7 +9,12 @@ ms_cache/
 logs/
 hf_cache/
 cache*/
-saves*/
+# Track files under saves/, except heavyweight model artifacts.
+saves/*
+!saves/**/
+!saves/**
+saves/**/adapter_model.safetensors
+saves/**/tokenizer.json
 notebooks/
 output*/
 wandb/
@@ -17,6 +22,8 @@ data/
 !*/data/ 
 evals/
 !*/evals/  
+!saves/**/evals/
+!saves/**/evals/**
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

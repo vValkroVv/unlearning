@@ -430,6 +430,38 @@ MERGE_POPULARITY_FORGET=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
+## 11) Full `ga_duet.sh` run results (unsloth Llama-3.1-8B-Instruct)
+
+Run context:
+- Script: `scripts/duet/ga_duet.sh`
+- Merge mode: `MERGE_POPULARITY_FORGET=1`
+- Base model source: `unsloth/Llama-3.1-8B-Instruct`
+- LoRA grid:
+  - `LORA_RS=32`
+  - `LORA_ALPHAS=64`
+  - `LORA_DROPOUTS=0.0`
+- Learning-rate sweep (default): `1e-5 5e-5 1e-4 5e-4 1e-3`
+
+Outcome:
+- Full sweep completed: `5/5` runs finished.
+- All run directories contain expected train + eval artifacts:
+  - train: `adapter_model.safetensors`, `adapter_config.json`, tokenizer/config files, trainer state/logs
+  - eval: `evals/DUET_EVAL.json`, `evals/DUET_SUMMARY.json`, `evals/eval.log`
+
+Result summaries (`DUET_SUMMARY.json`):
+
+| LR   | forget_qa_rouge | holdout_qa_rouge |
+|------|------------------|------------------|
+| 1e-5 | 0.7045643153526971 | 0.8003333333333332 |
+| 5e-5 | 0.5232451590594743 | 0.6377333333333334 |
+| 1e-4 | 0.0 | 0.001 |
+| 5e-4 | 0.0 | 0.0 |
+| 1e-3 | 0.0 | 0.0 |
+
+Notes:
+- Best holdout retention in this sweep was at `lr=1e-5`.
+- High learning rates (`>=1e-4`) collapsed both forget and holdout ROUGE toward zero in this setup.
+
 Optional fast sanity run before full sweep:
 
 ```bash
@@ -446,6 +478,26 @@ LORA_DROPOUTS="0.0" \
 NUM_EPOCHS=1 \
 GRAD_ACCUM=1 \
 PER_DEVICE_TRAIN_BS=1 \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/duet/ga_duet.sh
+```
+
+### 10.7 Exact command started (verbatim)
+
+```bash
+cd /workspace/unlearning
+source .venv/bin/activate
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+export HF_DATASETS_CACHE=/workspace/unlearning/.hf_home/datasets
+mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$HF_DATASETS_CACHE"
+
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=0 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
 MERGE_POPULARITY_FORGET=1 \
 bash scripts/duet/ga_duet.sh
 ```
