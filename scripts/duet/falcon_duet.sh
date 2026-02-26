@@ -30,6 +30,8 @@ trainer="FALCON"
 output_root="${repo_root}/saves/unlearn/duet/falcon"
 mkdir -p "${output_root}"
 
+# Match NPO/GA run style: merge rare+popular forget splits by default.
+export MERGE_POPULARITY_FORGET=${MERGE_POPULARITY_FORGET:-1}
 set_forget_retain_splits
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
@@ -37,7 +39,7 @@ gradient_accumulation_steps=${GRAD_ACCUM:-32}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-5}"
+raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"

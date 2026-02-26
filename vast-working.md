@@ -572,3 +572,77 @@ Result summaries (`DUET_SUMMARY.json`):
 Notes:
 - Highest holdout retention in this sweep was at `lr=1e-3`.
 - Forget-score reduction improved with higher learning rate in this run set (lowest forget ROUGE at `lr=1e-3`).
+
+## 14) Run `falcon_duet.sh` with DUET dataset (unsloth Llama-3.1-8B-Instruct)
+
+### 14.1 Runtime notes for FALCON DUET
+
+- Script: `scripts/duet/falcon_duet.sh`
+- DUET splits are sourced from `scripts/duet/_splits.sh`:
+  - `city_forget_rare_5 city_fast_retain_500`
+  - `city_forget_popular_5 city_fast_retain_500`
+- FALCON defaults currently set for stable launch:
+  - `RETAIN_MODES=cosine` by default in script
+  - `GRADIENT_CHECKPOINTING=false` by default in script + FALCON experiment yaml
+- If you use `USE_SFT_BASE=0` without overrides, script defaults to gated
+  `meta-llama/Llama-3.1-8B-Instruct`; use unsloth paths to avoid auth failures.
+
+### 14.2 Exact command to run FALCON on DUET (verbatim)
+
+```bash
+cd /workspace/unlearning
+source .venv/bin/activate
+export HF_HOME=/workspace/unlearning/.hf_home
+export TRITON_CACHE_DIR=/workspace/unlearning/.triton
+export HF_DATASETS_CACHE=/workspace/unlearning/.hf_home/datasets
+mkdir -p "$HF_HOME" "$TRITON_CACHE_DIR" "$HF_DATASETS_CACHE"
+
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=0 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/duet/falcon_duet.sh
+```
+
+### 14.3 Optional fast sanity run before full sweep
+
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=0 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=unsloth/Llama-3.1-8B-Instruct \
+MERGE_POPULARITY_FORGET=1 \
+FORCE_RERUN=1 \
+NUM_EPOCHS=0.01 \
+GRAD_ACCUM=1 \
+PER_DEVICE_TRAIN_BS=1 \
+LRS="1e-5" \
+K_SVDS="4" \
+TARGET_LAYERS="7" \
+RETAIN_MODES="cosine" \
+bash scripts/duet/falcon_duet.sh
+```
+
+### 14.4 Expected artifacts
+
+For each task under:
+
+```bash
+/workspace/unlearning/saves/unlearn/duet/falcon/<task_name>/
+```
+
+Expected train artifacts:
+
+- `adapter_model.safetensors`
+- `adapter_config.json`
+- `trainer_state.json`
+
+Expected eval artifacts:
+
+- `evals/DUET_EVAL.json`
+- `evals/DUET_SUMMARY.json`
