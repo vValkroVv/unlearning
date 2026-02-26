@@ -56,7 +56,7 @@ trainer:
     do_eval: false
     eval_on_start: false
     remove_unused_columns: false
-    gradient_checkpointing: true
+    gradient_checkpointing: false
     ddp_find_unused_parameters: false
 
 task_name: popqa_falcon_lora

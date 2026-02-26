@@ -77,7 +77,7 @@ for split in "${forget_retain_splits[@]}"; do
                             task_name=popqa_${base_model}_${forget_split}_gd_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_alpha${alpha_tag}_gamma${gamma_tag}
                             run_dir=${output_root}/${task_name}
                             eval_dir=${run_dir}/evals
-                            summary_path=${eval_dir}/DUET_SUMMARY.json
+                            summary_path=${eval_dir}/POPQA_SUMMARY.json
 
                             if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
                                 echo "[popqa][GD] Skipping ${task_name}: found existing summary at ${summary_path}"
@@ -115,7 +115,7 @@ for split in "${forget_retain_splits[@]}"; do
 
                             mkdir -p "${eval_dir}"
                             if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
-                                rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"
+                                rm -f "${summary_path}" "${eval_dir}/POPQA_EVAL.json"
                             fi
 
                             eval_cmd=( \

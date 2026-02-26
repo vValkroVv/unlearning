@@ -35,6 +35,7 @@ set_forget_retain_splits
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
 num_train_epochs=${NUM_EPOCHS:-5}
+gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
 raw_lrs="${LRS:-1e-5}"
 raw_lrs="${raw_lrs//,/ }"
@@ -168,6 +169,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                     trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
                                                                     trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
                                                                     trainer.args.num_train_epochs=${num_train_epochs} \
+                                                                    trainer.args.gradient_checkpointing=${gradient_checkpointing} \
                                                                     trainer.args.learning_rate=${lr} \
                                                                     trainer.method_args.temperature=${temp} \
                                                                     trainer.method_args.k_svd=${k_svd} \

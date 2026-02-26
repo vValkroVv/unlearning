@@ -6,6 +6,7 @@ defaults:
     - holdout_qa_rouge
 
 handler: DUETEvaluator
+name: POPQA
 output_dir: ${paths.output_dir}
 metrics: {}
 overwrite: false

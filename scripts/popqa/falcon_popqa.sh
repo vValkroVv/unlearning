@@ -37,6 +37,7 @@ forget_retain_splits=(
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
 num_train_epochs=${NUM_EPOCHS:-5}
+gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
 raw_lrs="${LRS:-1e-5}"
 raw_lrs="${raw_lrs//,/ }"
@@ -139,7 +140,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                             task_name=popqa_${base_model}_${forget_split}_falcon_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_t${temp_tag}_k${k_svd}_pova${pov_alpha_tag}_povn${pov_noise_tag}_pov${pov_transform}_layer${target_layer}_a${alpha_tag}_g${gamma_tag}_cth${conflict_tag}_rm${retain_mode}
                                                             run_dir=${output_root}/${task_name}
                                                             eval_dir=${run_dir}/evals
-                                                            summary_path=${eval_dir}/DUET_SUMMARY.json
+                                                            summary_path=${eval_dir}/POPQA_SUMMARY.json
 
                                                             if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
                                                                 echo "[popqa][FALCON] Skipping ${task_name}: found existing summary at ${summary_path}"
@@ -168,6 +169,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                     trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
                                                                     trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
                                                                     trainer.args.num_train_epochs=${num_train_epochs} \
+                                                                    trainer.args.gradient_checkpointing=${gradient_checkpointing} \
                                                                     trainer.args.learning_rate=${lr} \
                                                                     trainer.method_args.temperature=${temp} \
                                                                     trainer.method_args.k_svd=${k_svd} \
@@ -185,7 +187,7 @@ for split in "${forget_retain_splits[@]}"; do
 
                                                             mkdir -p "${eval_dir}"
                                                             if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
-                                                                rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"
+                                                                rm -f "${summary_path}" "${eval_dir}/POPQA_EVAL.json"
                                                             fi
 
                                                             eval_cmd=( \
