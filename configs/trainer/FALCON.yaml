@@ -1,0 +1,21 @@
+defaults:
+  - finetune
+
+handler: FALCON
+
+method_args:
+  gamma: 1.0
+  alpha: 1.0
+
+  temperature: 0.07
+
+  k_svd: 16
+  pov_alpha: 1.0
+  pov_noise_std: 0.0
+  pov_transform: tanh
+
+  target_layer: 7
+
+  conflict_cos_threshold: 0.0
+
+  retain_mode: contrastive

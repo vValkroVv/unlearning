@@ -18,6 +18,7 @@ from trainer.unlearn.pdu import PDU
 from trainer.unlearn.ada_wgd import AdaWGD, AdaWGDCallback
 from trainer.unlearn.ada_pop import AdaPop
 from trainer.unlearn.pop_dynam_b_wga import PopDynamBWGA
+from trainer.unlearn.falcon import FALCON
 
 
 import logging
@@ -105,3 +106,4 @@ _register_trainer(PDU)
 _register_trainer(AdaWGD)
 _register_trainer(AdaPop)
 _register_trainer(PopDynamBWGA)
+_register_trainer(FALCON)
