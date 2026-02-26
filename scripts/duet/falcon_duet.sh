@@ -96,7 +96,7 @@ raw_conflict_thresholds="${raw_conflict_thresholds//\"/}"
 raw_conflict_thresholds="${raw_conflict_thresholds//\'/}"
 read -r -a conflict_thresholds <<< "${raw_conflict_thresholds}"
 
-raw_retain_modes="${RETAIN_MODES:-contrastive}"
+raw_retain_modes="${RETAIN_MODES:-cosine}"
 raw_retain_modes="${raw_retain_modes//,/ }"
 raw_retain_modes="${raw_retain_modes//\"/}"
 raw_retain_modes="${raw_retain_modes//\'/}"

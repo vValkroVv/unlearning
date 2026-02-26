@@ -18,4 +18,4 @@ method_args:
 
   conflict_cos_threshold: 0.0
 
-  retain_mode: contrastive
+  retain_mode: cosine

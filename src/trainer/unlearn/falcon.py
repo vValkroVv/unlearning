@@ -24,6 +24,7 @@ class FALCON(GradDiff):
     - Uses token-level samples (labels != -100) to make contrastive losses meaningful
       with per_device_train_batch_size=1.
     - Exposes target_layer directly (manual substitute for MI-guided layer selection).
+    - Uses cosine retain alignment (paper Eq. 11) by default.
     - Applies orthogonal gradient projection when cosine(g_forget, g_retain) is below
       conflict_cos_threshold.
     """
@@ -39,7 +40,7 @@ class FALCON(GradDiff):
         pov_transform: str = "tanh",
         target_layer: int = 7,
         conflict_cos_threshold: float = 0.0,
-        retain_mode: str = "contrastive",
+        retain_mode: str = "cosine",
         *args,
         **kwargs,
     ):
@@ -143,8 +144,14 @@ class FALCON(GradDiff):
             yield self.model
             return
 
-        with disable_adapter():
-            yield self.model
+        was_training = self.model.training
+        try:
+            self.model.eval()
+            with disable_adapter():
+                yield self.model
+        finally:
+            if was_training:
+                self.model.train()
 
     def _token_samples(
         self,
@@ -209,10 +216,16 @@ class FALCON(GradDiff):
         return F.cross_entropy(logits.float(), labels)
 
     def _retain_alignment_loss(self, upd: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
-        if self.retain_mode == "mse":
+        mode = self.retain_mode
+        if mode in {"cosine", "cos"}:
+            # Paper Eq. (11): L_R = 1 - mean cosine similarity
+            a = F.normalize(upd, dim=-1)
+            p = F.normalize(ref, dim=-1)
+            return (1.0 - (a * p).sum(dim=-1)).mean()
+        if mode == "mse":
             return F.mse_loss(upd, ref)
-        if self.retain_mode != "contrastive":
-            raise ValueError(f"[FALCON] Unsupported retain_mode={self.retain_mode}")
+        if mode != "contrastive":
+            raise ValueError(f"[FALCON] Unsupported retain_mode={mode}")
 
         a = F.normalize(upd, dim=-1)
         p = F.normalize(ref, dim=-1)
