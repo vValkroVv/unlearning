@@ -12,16 +12,30 @@ echo "Master Port: $MASTER_PORT"
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
-tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${hf_base_model_path}}"
 local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb}"
+sft_subfolder="${SFT_SUBFOLDER:-}"
 
 use_sft_base=${USE_SFT_BASE:-1}
 if [[ "${use_sft_base}" == "1" ]]; then
     base_model_path="${local_sft_base}"
+    default_tokenizer_model_path="${base_model_path}"
     echo "[duet][GA] Using locally finetuned base checkpoint at ${base_model_path}"
 else
     base_model_path="${hf_base_model_path}"
+    default_tokenizer_model_path="${hf_base_model_path}"
     echo "[duet][GA] Using Hugging Face base checkpoint ${base_model_path}"
+fi
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${default_tokenizer_model_path}}"
+tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
+extra_train_args=()
+extra_eval_args=()
+if [[ "${use_sft_base}" == "1" && -n "${sft_subfolder}" ]]; then
+    extra_train_args+=(+model.model_args.subfolder=${sft_subfolder})
+    extra_eval_args+=(+model.model_args.subfolder=${sft_subfolder})
+fi
+if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
+    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
 fi
 
 experiment="unlearn/duet/grad_ascent_lora.yaml"
@@ -93,6 +107,7 @@ for split in "${forget_retain_splits[@]}"; do
                             trainer.args.num_train_epochs=${num_train_epochs} \
                             trainer.args.learning_rate=${lr} \
                             retain_logs_path=null \
+                            "${extra_train_args[@]}" \
                             paths.output_dir=${run_dir}
                     fi
 
@@ -116,6 +131,7 @@ for split in "${forget_retain_splits[@]}"; do
                         model.lora_config.lora_alpha=${lora_alpha} \
                         model.lora_config.lora_dropout=${lora_dropout} \
                         eval.duet.overwrite=true \
+                        "${extra_eval_args[@]}" \
                         paths.output_dir=${eval_dir} \
                         retain_logs_path=null \
                     )
