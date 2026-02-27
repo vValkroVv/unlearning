@@ -293,7 +293,9 @@ def _parse_args():
     parser = argparse.ArgumentParser(description="Select FALCON target layers via MI.")
     parser.add_argument("--model_cfg", required=True)
     parser.add_argument("--model_path", required=True)
+    parser.add_argument("--model_subfolder", default=None)
     parser.add_argument("--tokenizer_path", default=None)
+    parser.add_argument("--tokenizer_subfolder", default=None)
 
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--forget_splits", nargs="+", required=True)
@@ -343,8 +345,12 @@ def main():
     cfg = OmegaConf.load(args.model_cfg)
     with open_dict(cfg):
         cfg.model_args.pretrained_model_name_or_path = args.model_path
+        if args.model_subfolder:
+            cfg.model_args.subfolder = args.model_subfolder
         if args.tokenizer_path:
             cfg.tokenizer_args.pretrained_model_name_or_path = args.tokenizer_path
+        if args.tokenizer_subfolder:
+            cfg.tokenizer_args.subfolder = args.tokenizer_subfolder
 
     model, tokenizer = get_model(cfg)
     model.to(args.device)

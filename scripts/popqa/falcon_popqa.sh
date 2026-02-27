@@ -134,7 +134,9 @@ lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
 mi_select_layers=${MI_SELECT_LAYERS:-0}
 mi_model_cfg="${MI_MODEL_CFG:-${repo_root}/configs/model/Llama-3.1-8B-Instruct.yaml}"
 mi_model_path="${MI_MODEL_PATH:-${base_model_path}}"
+mi_model_subfolder="${MI_MODEL_SUBFOLDER-${sft_subfolder}}"
 mi_tokenizer_path="${MI_TOKENIZER_PATH:-${tokenizer_model_path}}"
+mi_tokenizer_subfolder="${MI_TOKENIZER_SUBFOLDER-${tokenizer_subfolder}}"
 mi_dataset_path="${MI_DATASET_PATH:-SwetieePawsss/exp_UNLamb}"
 mi_question_key="${MI_QUESTION_KEY:-question}"
 mi_answer_key="${MI_ANSWER_KEY:-possible_answers}"
@@ -197,6 +199,12 @@ for split in "${forget_retain_splits[@]}"; do
                 --print_layers
                 --quiet
             )
+            if [[ -n "${mi_model_subfolder}" ]]; then
+                mi_cmd+=(--model_subfolder "${mi_model_subfolder}")
+            fi
+            if [[ -n "${mi_tokenizer_subfolder}" ]]; then
+                mi_cmd+=(--tokenizer_subfolder "${mi_tokenizer_subfolder}")
+            fi
             if [[ -n "${mi_answer_index}" ]]; then
                 mi_cmd+=(--answer_index "${mi_answer_index}")
             fi
