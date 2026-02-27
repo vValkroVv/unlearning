@@ -48,6 +48,41 @@ To make FALCON runs stable by default:
   - `GRADIENT_CHECKPOINTING=${GRADIENT_CHECKPOINTING:-false}`
   - passed as `trainer.args.gradient_checkpointing=...`
 
+### 1.5 Paper-style MI layer selection + sweep defaults
+
+Implemented MI-guided layer selection utility:
+
+- `src/tools/falcon_mi_select.py`
+
+Estimator behavior:
+
+- Per-layer MI over forget/retain activations.
+- Multi-domain aggregate MI objective with `eta` weighting.
+- PCA reduction before KDE (`pca_var` threshold).
+- Gaussian KDE with Scott bandwidth.
+
+Integrated optional MI preselection in run scripts:
+
+- `scripts/duet/falcon_duet.sh`
+- `scripts/popqa/falcon_popqa.sh`
+
+Activation (off by default):
+
+- `MI_SELECT_LAYERS=1`
+
+Common MI env overrides:
+
+- `MI_MODEL_CFG`, `MI_MODEL_PATH`, `MI_TOKENIZER_PATH`
+- `MI_DATASET_PATH`, `MI_FORGET_SPLITS`, `MI_RETAIN_SPLIT`
+- `MI_ETA`, `MI_PCA_VAR`, `MI_MAX_EXAMPLES`, `MI_TOPK`
+- `MI_DEVICE`, `MI_BATCH_SIZE`, `MI_OUT_DIR`
+
+Sweep defaults in both FALCON scripts now:
+
+- `K_SVDS=2,4,8,16`
+- `ALPHAS=1,2,4`
+- `GAMMAS=1,2,4`
+
 ## 2) POPQA eval file naming fix
 
 Question raised: why POPQA wrote `DUET_SUMMARY.json`.
@@ -150,9 +185,11 @@ NUM_EPOCHS=0.01 \
 GRAD_ACCUM=1 \
 PER_DEVICE_TRAIN_BS=1 \
 LRS="1e-5" \
-K_SVDS="4" \
-TARGET_LAYERS="7" \
+K_SVDS="2,4,8,16" \
+ALPHAS="1,2,4" \
+GAMMAS="1,2,4" \
+MI_SELECT_LAYERS=1 \
+MI_TOPK=1 \
 RETAIN_MODES="cosine" \
 bash scripts/popqa/falcon_popqa.sh
 ```
-
