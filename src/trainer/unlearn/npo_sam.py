@@ -62,15 +62,25 @@ class NPOSAM(NPO):
         if not params:
             return torch.zeros((), device=self.accelerator.device, dtype=torch.float32)
 
-        device = params[0].device
-        sq_sum = torch.zeros((), device=device, dtype=torch.float32)
+        ref_device = None
+        for g in grads:
+            if g is not None:
+                ref_device = g.device
+                break
+        if ref_device is None:
+            return torch.zeros((), device=self.accelerator.device, dtype=torch.float32)
+
+        sq_sum = torch.zeros((), device=ref_device, dtype=torch.float32)
         for p, g in zip(params, grads):
             if g is None:
                 continue
             grad = g
             if self.sam_adaptive:
                 grad = p.detach().abs() * grad
-            sq_sum = sq_sum + (grad.float() * grad.float()).sum()
+            grad_sq = grad.float()
+            if grad_sq.device != ref_device:
+                grad_sq = grad_sq.to(ref_device)
+            sq_sum = sq_sum + (grad_sq * grad_sq).sum()
         return torch.sqrt(sq_sum)
 
     @torch.no_grad()
@@ -93,7 +103,8 @@ class NPOSAM(NPO):
             else:
                 perturb = g
 
-            e_w = (perturb * scale.to(perturb.dtype)).to(p.dtype)
+            scale_t = scale.to(device=perturb.device, dtype=perturb.dtype)
+            e_w = (perturb * scale_t).to(dtype=p.dtype)
             p.add_(e_w)
             e_ws.append(e_w)
 
