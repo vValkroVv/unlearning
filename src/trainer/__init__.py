@@ -7,6 +7,7 @@ from trainer.base import FinetuneTrainer
 from trainer.unlearn.grad_ascent import GradAscent
 from trainer.unlearn.grad_diff import GradDiff
 from trainer.unlearn.npo import NPO
+from trainer.unlearn.npo_sam import NPOSAM
 from trainer.unlearn.dpo import DPO
 from trainer.unlearn.simnpo import SimNPO
 from trainer.unlearn.rmu import RMU
@@ -95,6 +96,7 @@ _register_trainer(FinetuneTrainer)
 _register_trainer(GradAscent)
 _register_trainer(GradDiff)
 _register_trainer(NPO)
+_register_trainer(NPOSAM)
 _register_trainer(DPO)
 _register_trainer(SimNPO)
 _register_trainer(RMU)
