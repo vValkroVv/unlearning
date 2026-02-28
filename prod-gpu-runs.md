@@ -136,6 +136,6 @@ MERGE_POPULARITY_FORGET=1 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
-MI_TOKENIZER_PATH=/data/home/vkropoti/unlearning/assets/tokenizers/llama-3.1-8b-instruct-chat-template \
+MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 bash scripts/popqa/falcon_popqa.sh
 ```

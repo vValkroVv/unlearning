@@ -15,24 +15,17 @@ local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/s
 sft_subfolder="${SFT_SUBFOLDER:-}"
 
 use_sft_base=${USE_SFT_BASE:-1}
-chat_template_tokenizer_path="${CHAT_TEMPLATE_TOKENIZER_PATH:-${repo_root}/assets/tokenizers/llama-3.1-8b-instruct-chat-template}"
 if [[ "${use_sft_base}" == "1" ]]; then
     base_model_path="${local_sft_base}"
     default_tokenizer_model_path="${base_model_path}"
-    default_tokenizer_subfolder="${sft_subfolder}"
-    if [[ "${sft_subfolder}" == "llama-3.1-8b-instruct-popqa-ft" ]]; then
-        default_tokenizer_model_path="${chat_template_tokenizer_path}"
-        default_tokenizer_subfolder=""
-    fi
     echo "[popqa][FALCON] Using locally finetuned base checkpoint at ${base_model_path}"
 else
     base_model_path="${hf_base_model_path}"
     default_tokenizer_model_path="${hf_base_model_path}"
-    default_tokenizer_subfolder=""
     echo "[popqa][FALCON] Using Hugging Face base checkpoint ${base_model_path}"
 fi
 tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${default_tokenizer_model_path}}"
-tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${default_tokenizer_subfolder}}"
+tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
 extra_train_args=()
 extra_eval_args=()
 if [[ "${use_sft_base}" == "1" && -n "${sft_subfolder}" ]]; then

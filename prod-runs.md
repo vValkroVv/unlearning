@@ -117,6 +117,6 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
-MI_TOKENIZER_PATH=/workspace/unlearning/assets/tokenizers/llama-3.1-8b-instruct-chat-template \
+MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 bash scripts/popqa/falcon_popqa.sh
 ```
