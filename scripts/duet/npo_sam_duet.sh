@@ -77,7 +77,7 @@ raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
 read -r -a gammas <<< "${raw_gammas}"
 
-raw_sam_rhos="${SAM_RHOS:-0.05}"
+raw_sam_rhos="${SAM_RHOS:-0.01}"
 raw_sam_rhos="${raw_sam_rhos//,/ }"
 raw_sam_rhos="${raw_sam_rhos//\"/}"
 raw_sam_rhos="${raw_sam_rhos//\'/}"

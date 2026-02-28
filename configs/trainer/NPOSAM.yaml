@@ -9,6 +9,6 @@ method_args:
   gamma: 1.0
   retain_loss_type: NLL
 
-  sam_rho: 0.05
+  sam_rho: 0.01
   sam_adaptive: false
   sam_eps: 1e-12
