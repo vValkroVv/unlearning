@@ -46,65 +46,77 @@ export TRITON_CACHE_DIR=/workspace/unlearning/.triton
 ## 1) GA - DUET
 
 ```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
 USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
-CUDA_VISIBLE_DEVICES=0 \
+MERGE_POPULARITY_FORGET=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
 ## 2) GA - UNLamb
 
 ```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
 USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
-CUDA_VISIBLE_DEVICES=0 \
+MERGE_POPULARITY_FORGET=1 \
 bash scripts/popqa/ga_popqa.sh
 ```
 
 ## 3) NPO - DUET
 
 ```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
 USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
-CUDA_VISIBLE_DEVICES=0 \
+MERGE_POPULARITY_FORGET=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
 ## 4) NPO - UNLamb
 
 ```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
 USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
-CUDA_VISIBLE_DEVICES=0 \
+MERGE_POPULARITY_FORGET=1 \
 bash scripts/popqa/npo_popqa.sh
 ```
 
 ## 5) FALCON - DUET
 
 ```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
 USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
-CUDA_VISIBLE_DEVICES=0 \
 bash scripts/duet/falcon_duet.sh
 ```
 
 ## 6) FALCON - UNLamb
 
 ```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
 USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_PATH=/workspace/unlearning/assets/tokenizers/llama-3.1-8b-instruct-chat-template \
-CUDA_VISIBLE_DEVICES=0 \
 bash scripts/popqa/falcon_popqa.sh
 ```

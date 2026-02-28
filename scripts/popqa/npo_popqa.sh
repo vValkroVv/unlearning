@@ -86,6 +86,7 @@ read -r -a gammas <<< "${raw_gammas}"
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -171,6 +172,13 @@ for split in "${forget_retain_splits[@]}"; do
                                     retain_logs_path=null \
                                 )
                                 python src/eval.py "${eval_cmd[@]}"
+
+                                if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                                    if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                                        rm -f "${run_dir}"/*.safetensors
+                                        echo "[popqa][NPO] Removed safetensors from ${run_dir}"
+                                    fi
+                                fi
                             done
                         done
                     done
