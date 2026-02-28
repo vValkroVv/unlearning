@@ -50,10 +50,18 @@ trainer="GradAscent"
 output_root="${repo_root}/saves/unlearn/popqa/ga"
 mkdir -p "${output_root}"
 
-forget_retain_splits=(
+base_forget_retain_splits=(
     "rare_forget5_sum fast_retain_500"
     "popular_forget5_sum fast_retain_500"
 )
+
+if [[ "${MERGE_POPULARITY_FORGET:-0}" == "1" ]]; then
+    forget_retain_splits=(
+        "rare_forget5_sum+popular_forget5_sum fast_retain_500 forget5_sum"
+    )
+else
+    forget_retain_splits=("${base_forget_retain_splits[@]}")
+fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
@@ -73,15 +81,17 @@ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
 for split in "${forget_retain_splits[@]}"; do
-    forget_split=$(echo "$split" | cut -d' ' -f1)
-    retain_split=$(echo "$split" | cut -d' ' -f2)
+    read -r forget_split retain_split forget_label <<< "${split}"
+    if [[ -z "${forget_label:-}" ]]; then
+        forget_label="${forget_split}"
+    fi
 
     for lr in "${lrs[@]}"; do
         for lora_r in "${lora_rs[@]}"; do
             for lora_alpha in "${lora_alphas[@]}"; do
                 for lora_dropout in "${lora_dropouts[@]}"; do
                     dropout_tag=${lora_dropout//./p}
-                    task_name=popqa_${base_model}_${forget_split}_ga_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}
+                    task_name=popqa_${base_model}_${forget_label}_ga_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}
                     run_dir=${output_root}/${task_name}
                     eval_dir=${run_dir}/evals
                     summary_path=${eval_dir}/POPQA_SUMMARY.json

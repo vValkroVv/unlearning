@@ -43,10 +43,18 @@ trainer="FALCON"
 output_root="${repo_root}/saves/unlearn/popqa/falcon"
 mkdir -p "${output_root}"
 
-forget_retain_splits=(
+base_forget_retain_splits=(
     "rare_forget5_sum fast_retain_500"
     "popular_forget5_sum fast_retain_500"
 )
+
+if [[ "${MERGE_POPULARITY_FORGET:-0}" == "1" ]]; then
+    forget_retain_splits=(
+        "rare_forget5_sum+popular_forget5_sum fast_retain_500 forget5_sum"
+    )
+else
+    forget_retain_splits=("${base_forget_retain_splits[@]}")
+fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
@@ -152,8 +160,10 @@ mi_out_dir="${MI_OUT_DIR:-${output_root}/mi_layers}"
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
 for split in "${forget_retain_splits[@]}"; do
-    forget_split=$(echo "$split" | cut -d' ' -f1)
-    retain_split=$(echo "$split" | cut -d' ' -f2)
+    read -r forget_split retain_split forget_label <<< "${split}"
+    if [[ -z "${forget_label:-}" ]]; then
+        forget_label="${forget_split}"
+    fi
     mi_loop_topks=("_none")
     if [[ "${mi_select_layers}" == "1" ]]; then
         mi_loop_topks=("${mi_topks[@]}")
@@ -164,12 +174,12 @@ for split in "${forget_retain_splits[@]}"; do
         mi_topk_tag=""
 
         if [[ "${mi_select_layers}" == "1" ]]; then
-            mi_forget_splits_raw="${MI_FORGET_SPLITS:-${forget_split}}"
+            mi_forget_splits_raw="${MI_FORGET_SPLITS:-${forget_split//+/ }}"
             mi_forget_splits_raw="${mi_forget_splits_raw//,/ }"
             read -r -a mi_forget_splits <<< "${mi_forget_splits_raw}"
             mi_retain_split="${MI_RETAIN_SPLIT:-${retain_split}}"
             mkdir -p "${mi_out_dir}"
-            mi_out_json="${mi_out_dir}/${base_model}_${forget_split}_mi_topk${mi_topk}_layers.json"
+            mi_out_json="${mi_out_dir}/${base_model}_${forget_label}_mi_topk${mi_topk}_layers.json"
 
             mi_cmd=(
                 python "${repo_root}/src/tools/falcon_mi_select.py"
@@ -237,7 +247,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                         for lora_dropout in "${lora_dropouts[@]}"; do
                                                             dropout_tag=${lora_dropout//./p}
 
-                                                            task_name=popqa_${base_model}_${forget_split}_falcon_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_t${temp_tag}_k${k_svd}_pova${pov_alpha_tag}_povn${pov_noise_tag}_pov${pov_transform}_layer${target_layer}${mi_topk_tag}_a${alpha_tag}_g${gamma_tag}_cth${conflict_tag}_rm${retain_mode}
+                                                            task_name=popqa_${base_model}_${forget_label}_falcon_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_t${temp_tag}_k${k_svd}_pova${pov_alpha_tag}_povn${pov_noise_tag}_pov${pov_transform}_layer${target_layer}${mi_topk_tag}_a${alpha_tag}_g${gamma_tag}_cth${conflict_tag}_rm${retain_mode}
                                                             run_dir=${output_root}/${task_name}
                                                             eval_dir=${run_dir}/evals
                                                             summary_path=${eval_dir}/POPQA_SUMMARY.json
