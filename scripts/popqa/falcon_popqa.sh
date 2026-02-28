@@ -53,7 +53,7 @@ gradient_accumulation_steps=${GRAD_ACCUM:-32}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-5}"
+raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -95,13 +95,13 @@ raw_target_layers="${raw_target_layers//\"/}"
 raw_target_layers="${raw_target_layers//\'/}"
 read -r -a target_layers <<< "${raw_target_layers}"
 
-raw_alphas="${ALPHAS:-1,2,4}"
+raw_alphas="${ALPHAS:-2}"
 raw_alphas="${raw_alphas//,/ }"
 raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-1,2,4}"
+raw_gammas="${GAMMAS:-2}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
