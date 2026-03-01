@@ -4,10 +4,21 @@ defaults:
 handler: R2D
 
 method_args:
-  noise_std: 0.0
-  noise_seed: null
+  # direct noise (if set, overrides DP params)
+  noise_std: null
+  noise_seed: 0
   noise_trainable_only: true
 
+  # DP calibration inputs (if noise_std is null)
   dp_epsilon: null
   dp_delta: null
   dp_sensitivity: null
+  dp_use_analytic_gaussian: true
+
+  # optional paper-based sensitivity when dp_sensitivity is null
+  r2d_L: null
+  r2d_G: null
+  r2d_n: null
+  r2d_m: null
+  r2d_rewind_step: null
+  r2d_eta: null

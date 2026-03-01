@@ -98,9 +98,35 @@ lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
 
-r2d_noise_std="${R2D_NOISE_STD:-0.0}"
-r2d_noise_seed="${R2D_NOISE_SEED:-42}"
+r2d_noise_std="${R2D_NOISE_STD:-null}"
+r2d_noise_seed="${R2D_NOISE_SEED:-0}"
+r2d_eps="${R2D_EPS:-null}"
+r2d_delta="${R2D_DELTA:-null}"
+r2d_sens="${R2D_SENS:-null}"
+r2d_use_analytic_gaussian="${R2D_USE_ANALYTIC_GAUSSIAN:-true}"
+r2d_L="${R2D_L:-null}"
+r2d_G="${R2D_G:-null}"
+r2d_n="${R2D_N:-null}"
+r2d_m="${R2D_M:-null}"
+r2d_eta="${R2D_ETA:-null}"
+r2d_rewind_step_for_sigma="${R2D_REWIND_STEP_FOR_SIGMA:-}"
+if [[ -z "${r2d_rewind_step_for_sigma}" ]]; then
+    if [[ -n "${R2D_REWIND_STEP:-}" ]]; then
+        r2d_rewind_step_for_sigma="${R2D_REWIND_STEP}"
+    elif [[ "${rewind_subfolder}" =~ checkpoint-([0-9]+) ]]; then
+        r2d_rewind_step_for_sigma="${BASH_REMATCH[1]}"
+    elif [[ "${rewind_model_path}" =~ checkpoint-([0-9]+) ]]; then
+        r2d_rewind_step_for_sigma="${BASH_REMATCH[1]}"
+    fi
+fi
+if [[ -z "${r2d_rewind_step_for_sigma}" ]]; then
+    r2d_rewind_step_for_sigma="null"
+fi
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+
+if [[ "${max_steps}" == "0" ]]; then
+    echo "[popqa][R2D] WARNING: R2D_MAX_STEPS=0, using NUM_EPOCHS instead of explicit K steps."
+fi
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -116,7 +142,9 @@ for split in "${forget_retain_splits[@]}"; do
                 for lora_dropout in "${lora_dropouts[@]}"; do
                     dropout_tag=${lora_dropout//./p}
                     rewind_tag="${R2D_REWIND_TAG:-rewind}"
-                    task_name=popqa_${base_model}_${forget_label}_r2d_${rewind_tag}_lr${lr}_sigma${r2d_noise_std}_r${lora_r}_a${lora_alpha}_d${dropout_tag}
+                    sigma_tag=${r2d_noise_std//./p}
+                    sigma_tag=${sigma_tag//null/dp}
+                    task_name=popqa_${base_model}_${forget_label}_r2d_${rewind_tag}_lr${lr}_sigma${sigma_tag}_r${lora_r}_a${lora_alpha}_d${dropout_tag}
                     run_dir=${output_root}/${task_name}
                     eval_dir=${run_dir}/evals
                     summary_path=${eval_dir}/POPQA_SUMMARY.json
@@ -155,6 +183,8 @@ for split in "${forget_retain_splits[@]}"; do
                             trainer.args.num_train_epochs=${num_train_epochs} \
                             trainer.args.gradient_checkpointing=${gradient_checkpointing} \
                             trainer.args.learning_rate=${lr} \
+                            trainer.args.optim=sgd \
+                            trainer.args.weight_decay=0.0 \
                             trainer.args.lr_scheduler_type=constant \
                             trainer.args.warmup_ratio=0.0 \
                             trainer.args.save_strategy=no \
@@ -165,6 +195,16 @@ for split in "${forget_retain_splits[@]}"; do
                             trainer.method_args.noise_std=${r2d_noise_std} \
                             trainer.method_args.noise_seed=${r2d_noise_seed} \
                             trainer.method_args.noise_trainable_only=true \
+                            trainer.method_args.dp_epsilon=${r2d_eps} \
+                            trainer.method_args.dp_delta=${r2d_delta} \
+                            trainer.method_args.dp_sensitivity=${r2d_sens} \
+                            trainer.method_args.dp_use_analytic_gaussian=${r2d_use_analytic_gaussian} \
+                            trainer.method_args.r2d_L=${r2d_L} \
+                            trainer.method_args.r2d_G=${r2d_G} \
+                            trainer.method_args.r2d_n=${r2d_n} \
+                            trainer.method_args.r2d_m=${r2d_m} \
+                            trainer.method_args.r2d_rewind_step=${r2d_rewind_step_for_sigma} \
+                            trainer.method_args.r2d_eta=${r2d_eta} \
                             retain_logs_path=null \
                             "${extra_train_args[@]}" \
                             paths.output_dir=${run_dir} \

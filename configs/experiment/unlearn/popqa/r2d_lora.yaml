@@ -48,8 +48,10 @@ trainer:
     gradient_accumulation_steps: 32
     learning_rate: 1e-5
     num_train_epochs: 5
+    optim: sgd
+    weight_decay: 0.0
     lr_scheduler_type: constant
-    warmup_ratio: 0.1
+    warmup_ratio: 0.0
     logging_steps: 10
     eval_strategy: "no"
     save_strategy: "no"
@@ -59,7 +61,7 @@ trainer:
     gradient_checkpointing: false
     ddp_find_unused_parameters: false
   method_args:
-    noise_std: 0.0
+    noise_std: null
     noise_trainable_only: true
 
 task_name: popqa_r2d_lora
