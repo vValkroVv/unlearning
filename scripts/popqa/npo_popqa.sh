@@ -65,6 +65,7 @@ fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 
 raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3 5e-3 1e-2}"
@@ -176,6 +177,7 @@ for split in "${forget_retain_splits[@]}"; do
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \
+                                    eval.duet.batch_size=${eval_batch_size} \
                                     eval.duet.overwrite=true \
                                     "${extra_eval_args[@]}" \
                                     paths.output_dir=${eval_dir} \

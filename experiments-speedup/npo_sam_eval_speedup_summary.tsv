@@ -1,0 +1,9 @@
+dataset	bs	status	peak_mem_mib	wall_time_sec	total_eval_samples	samples_per_sec	speedup_vs_bs8
+duet	8	success	17355	338.9193	1464	4.3196	1.00x
+duet	12	success	17355	270.4592	1464	5.4130	1.25x
+duet	32	success	17355	177.0171	1464	8.2704	1.91x
+popqa	8	success	17355	246.6311	1664	6.7469	1.00x
+popqa	12	success	17355	197.6969	1664	8.4169	1.25x
+popqa	16	success	17355	212.9739	1664	7.8132	1.16x
+popqa	24	success	17355	198.9930	1664	8.3621	1.24x
+popqa	32	success	17355	189.8022	1664	8.7670	1.30x

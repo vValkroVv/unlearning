@@ -1,0 +1,9 @@
+dataset	bs	status	peak_mem_mib	wall_time_sec	total_eval_samples	samples_per_sec	run_dir
+popqa	8	success	17355	246.6311	1664	6.7469	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs8
+popqa	12	success	17355	197.6969	1664	8.4169	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs12
+popqa	16	success	17355	212.9739	1664	7.8132	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs16
+popqa	24	success	17355	198.9930	1664	8.3621	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs24
+popqa	32	success	17355	189.8022	1664	8.7670	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs32
+duet	8	success	17355	338.9193	1464	4.3196	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/duet/bs8
+duet	12	success	17355	270.4592	1464	5.4130	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/duet/bs12
+duet	32	success	17355	177.0171	1464	8.2704	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/duet/bs32

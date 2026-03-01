@@ -43,6 +43,21 @@ export HF_DATASETS_CACHE=/workspace/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/workspace/unlearning/.triton
 ```
 
+## Eval batch size in same run
+
+For all scripts below (`1` to `8`), evaluation runs inside the same command and supports:
+
+- `EVAL_BATCH_SIZE` (default: `8`)
+
+Example style (same as train params):
+
+```bash
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=32 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
 ## 1) GA - DUET
 
 ```bash
@@ -54,6 +69,7 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
 PER_DEVICE_TRAIN_BS=1 \
 GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/duet/ga_duet.sh
 ```
 
@@ -68,6 +84,7 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
 PER_DEVICE_TRAIN_BS=1 \
 GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/popqa/ga_popqa.sh
 ```
 
@@ -82,6 +99,7 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
 PER_DEVICE_TRAIN_BS=1 \
 GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/duet/npo_duet.sh
 ```
 
@@ -96,6 +114,7 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
 PER_DEVICE_TRAIN_BS=1 \
 GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/popqa/npo_popqa.sh
 ```
 
@@ -110,6 +129,7 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
 PER_DEVICE_TRAIN_BS=1 \
 GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
@@ -127,6 +147,7 @@ SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
 PER_DEVICE_TRAIN_BS=1 \
 GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
@@ -142,8 +163,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
@@ -156,7 +178,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/popqa/npo_sam_popqa.sh
 ```
