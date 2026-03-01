@@ -1,0 +1,41 @@
+# Syntax: gitignore rules
+
+# Ignore files and directories for all sections from gitignore file
+# Default: True
+gitignore-import-and-ignore: True
+
+# Ignore files and directories for tree
+# and contents sections (<content full_path="...">...</content>)
+ignore-tree-and-content:
+  - ".repo-to-text-settings.yaml"
+  - ".venv"
+  - "logs"
+  - "data"
+  - "data_raw"
+  - "__pycache__"
+  - ".ipynb_checkpoints"
+  - ".DS_Store"
+  - "cfsv"
+  - "*.txt"
+  - "envcheck"
+  - "sber-asr-tts"
+  - "metrics"
+  - "*.zip"
+  - "downloads_for_gpu"
+  - "zips_for_gpu"
+  - "*.png"
+  - "saves"
+  - "saves-clean"
+  - "*.arrow"
+  - "*.json"
+  - "*.jsonl"
+
+
+
+# Ignore files and directories for contents sections
+ignore-content:
+  # - "README.md"
+  - "LICENSE"
+  - "tests/"
+  - "*.lock"
+  - "recording_truncate/"
