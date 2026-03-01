@@ -1,6 +1,6 @@
 import re
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Sequence, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -21,19 +21,17 @@ class FALCON(GradDiff):
     FALCON: Fine-grained Activation Manipulation by Contrastive Orthogonal Unalignment.
 
     Integration choices for this repository:
-    - Uses token-level samples (labels != -100) to make contrastive losses meaningful
-      with per_device_train_batch_size=1.
+    - `official_mode=True` follows the official code path (single steering vector,
+      2-class contrastive logits, per-parameter gradient conflict resolution).
+    - `official_mode=False` keeps the paper-style integration used previously in this repo.
     - Exposes target_layer directly (manual substitute for MI-guided layer selection).
-    - Uses cosine retain alignment (paper Eq. 11) by default.
-    - Applies orthogonal gradient projection when cosine(g_forget, g_retain) is below
-      conflict_cos_threshold.
     """
 
     def __init__(
         self,
         gamma: float = 1.0,
         alpha: float = 1.0,
-        temperature: float = 0.07,
+        temperature: float = 0.7,
         k_svd: int = 16,
         pov_alpha: float = 1.0,
         pov_noise_std: float = 0.0,
@@ -41,6 +39,11 @@ class FALCON(GradDiff):
         target_layer: int = 7,
         conflict_cos_threshold: float = 0.0,
         retain_mode: str = "cosine",
+        steering_coeff: float = 20.0,
+        conflict_w: Sequence[float] = (0.8, 1.2),
+        align_w: Sequence[float] = (0.1, 1.9),
+        retain_weight: float = 100.0,
+        official_mode: bool = True,
         *args,
         **kwargs,
     ):
@@ -55,6 +58,11 @@ class FALCON(GradDiff):
         self.target_layer = int(target_layer)
         self.conflict_cos_threshold = float(conflict_cos_threshold)
         self.retain_mode = str(retain_mode).lower()
+        self.steering_coeff = float(steering_coeff)
+        self.conflict_w = self._to_weight_pair(conflict_w, name="conflict_w")
+        self.align_w = self._to_weight_pair(align_w, name="align_w")
+        self.retain_weight = float(retain_weight)
+        self.official_mode = bool(official_mode)
 
         model_unwrapped = self._unwrap(self.model)
         self.uses_lora = hasattr(model_unwrapped, "disable_adapter")
@@ -66,6 +74,22 @@ class FALCON(GradDiff):
         self.model_module = self._find_layer_module(self.model, self.target_layer)
         ref_for_hook = self.ref_model if self.ref_model is not None else self.model
         self.ref_module = self._find_layer_module(ref_for_hook, self.target_layer)
+
+    @staticmethod
+    def _to_weight_pair(values: Sequence[float], name: str) -> Tuple[float, float]:
+        if isinstance(values, torch.Tensor):
+            values = values.detach().cpu().tolist()
+
+        try:
+            first, second = values[0], values[1]
+            valid_len = len(values) == 2
+        except Exception:
+            valid_len = False
+            first = second = None
+
+        if not valid_len:
+            raise ValueError(f"[FALCON] `{name}` must be a sequence of length 2.")
+        return float(first), float(second)
 
     def _unwrap(self, model):
         if _HAS_DEEPSPEED and isinstance(model, deepspeed.DeepSpeedEngine):
@@ -236,6 +260,123 @@ class FALCON(GradDiff):
         labels = torch.arange(n, device=a.device)
         return F.cross_entropy(logits.float(), labels)
 
+    def _generate_steering_vector_official(
+        self, model, hidden_states: torch.Tensor
+    ) -> torch.Tensor:
+        if hidden_states.dim() != 3:
+            raise ValueError(
+                f"[FALCON] Expected hidden_states with shape (B, L, D), got {tuple(hidden_states.shape)}"
+            )
+
+        _ = model  # kept for parity with official signature
+        _, _, d_model = hidden_states.shape
+        device = hidden_states.device
+        dtype = hidden_states.dtype
+
+        with torch.no_grad():
+            base_vector = torch.ones(1, 1, d_model, dtype=dtype, device=device)
+            base_vector = base_vector / (torch.norm(base_vector) + 1e-6)
+
+            states_matrix = hidden_states.detach().reshape(-1, d_model).to(torch.float32)
+            try:
+                _u, s_vals, vh = torch.linalg.svd(states_matrix, full_matrices=False)
+            except RuntimeError:
+                # Fallback keeps behavior deterministic on occasional SVD backend failures.
+                q = max(1, min(states_matrix.shape))
+                _u, s_vals, vh = torch.pca_lowrank(states_matrix, q=q, center=False)
+                vh = vh.transpose(0, 1).contiguous()
+
+            if s_vals.numel() == 0 or vh.numel() == 0:
+                return base_vector.detach()
+
+            k = min(1000, vh.shape[0])
+            key_directions = vh[:k].to(device=device, dtype=dtype)
+
+            s0 = s_vals[0].clamp_min(1e-12)
+            weights = (
+                torch.sigmoid((s_vals[:k] / s0).to(device=device, dtype=dtype)) * (-1000.0)
+            )
+
+            projection = torch.eye(d_model, dtype=dtype, device=device)
+            weighted_dirs = key_directions.transpose(0, 1) * weights.unsqueeze(0)
+            projection = projection - torch.matmul(weighted_dirs, key_directions)
+
+            noise = torch.randn_like(projection) * 0.01
+            projection = torch.tanh(projection + noise)
+
+            final_vector = base_vector
+            for _ in range(6):
+                final_vector = torch.matmul(final_vector, projection)
+                final_vector = torch.tanh(final_vector)
+                final_vector = final_vector / (torch.norm(final_vector) + 1e-6)
+
+        return final_vector.detach()
+
+    def _contrastive_loss_official(
+        self, anchor: torch.Tensor, positive: torch.Tensor, negatives: torch.Tensor
+    ) -> torch.Tensor:
+        if anchor.dim() != 3 or positive.dim() != 3 or negatives.dim() != 3:
+            raise ValueError(
+                "[FALCON] Official contrastive loss expects (B, L, D) tensors for anchor/positive/negatives."
+            )
+
+        device = anchor.device
+        positive = positive.to(device=device, dtype=anchor.dtype)
+        negatives = negatives.to(device=device, dtype=anchor.dtype)
+
+        anchor = F.normalize(anchor, dim=-1)
+        positive = F.normalize(positive, dim=-1)
+        negatives = F.normalize(negatives, dim=-1)
+
+        negatives = negatives.unsqueeze(2)  # (B, L, 1, D)
+
+        pos_sim = torch.sum(anchor * positive, dim=-1, keepdim=True)  # (B, L, 1)
+        neg_sim = torch.einsum("bld,blnd->bln", anchor, negatives)  # (B, L, 1)
+
+        logits = torch.cat([pos_sim, neg_sim], dim=-1) / self.temperature  # (B, L, 2)
+        labels = torch.zeros(
+            logits.size(0), logits.size(1), dtype=torch.long, device=device
+        )
+        return F.cross_entropy(logits.reshape(-1, logits.size(-1)).float(), labels.reshape(-1))
+
+    def _resolve_grad_conflict_official(
+        self,
+        g_u: Sequence[Optional[torch.Tensor]],
+        g_r: Sequence[Optional[torch.Tensor]],
+    ) -> Tuple[list, list]:
+        combined = []
+        cos_sims = []
+
+        for u_grad, r_grad in zip(g_u, g_r):
+            if u_grad is None and r_grad is None:
+                combined.append(None)
+                cos_sims.append(0.0)
+                continue
+
+            if u_grad is None:
+                u_grad = torch.zeros_like(r_grad)
+            if r_grad is None:
+                r_grad = torch.zeros_like(u_grad)
+
+            cos = F.cosine_similarity(u_grad.view(-1), r_grad.view(-1), dim=0)
+            cos_value = float(cos.detach().item())
+            cos_sims.append(cos_value)
+
+            if cos_value < 0.0:
+                denom = torch.dot(r_grad.view(-1), r_grad.view(-1))
+                if float(denom.abs().detach().item()) < 1e-12:
+                    proj_grad = u_grad
+                else:
+                    coeff = torch.dot(u_grad.view(-1), r_grad.view(-1)) / denom
+                    proj_grad = u_grad - coeff * r_grad
+                merged = self.conflict_w[0] * proj_grad + self.conflict_w[1] * r_grad
+            else:
+                merged = self.align_w[0] * u_grad + self.align_w[1] * r_grad
+
+            combined.append(merged)
+
+        return combined, cos_sims
+
     def training_step(self, model: torch.nn.Module, inputs) -> torch.Tensor:
         if self.is_deepspeed_enabled:
             raise NotImplementedError(
@@ -263,14 +404,30 @@ class FALCON(GradDiff):
                     frozen_model, forget_inputs, module=self.ref_module, no_grad=True
                 )
 
-            upd_f = self._token_samples(
-                upd_f_acts, forget_inputs.get("labels"), forget_inputs.get("attention_mask")
-            )
-            ref_f = self._token_samples(
-                ref_f_acts, forget_inputs.get("labels"), forget_inputs.get("attention_mask")
-            )
-            povs = self._compute_povs(ref_f, num_samples=upd_f.shape[0])
-            forget_loss = self._forget_infonce(anchor=upd_f, positives=povs, negatives=ref_f)
+            if self.official_mode:
+                steer_vec = self._generate_steering_vector_official(
+                    model, upd_f_acts.detach()
+                )
+                steer_scaled = (
+                    steer_vec.expand_as(upd_f_acts).to(
+                        device=upd_f_acts.device, dtype=upd_f_acts.dtype
+                    )
+                    * self.steering_coeff
+                )
+                forget_loss = self._contrastive_loss_official(
+                    anchor=upd_f_acts,
+                    positive=steer_scaled,
+                    negatives=ref_f_acts.to(device=upd_f_acts.device, dtype=upd_f_acts.dtype),
+                )
+            else:
+                upd_f = self._token_samples(
+                    upd_f_acts, forget_inputs.get("labels"), forget_inputs.get("attention_mask")
+                )
+                ref_f = self._token_samples(
+                    ref_f_acts, forget_inputs.get("labels"), forget_inputs.get("attention_mask")
+                )
+                povs = self._compute_povs(ref_f, num_samples=upd_f.shape[0])
+                forget_loss = self._forget_infonce(anchor=upd_f, positives=povs, negatives=ref_f)
 
             upd_r_acts, _ = self._forward_with_cache(
                 model, retain_inputs, module=self.model_module, no_grad=False
@@ -280,13 +437,18 @@ class FALCON(GradDiff):
                     frozen_model, retain_inputs, module=self.ref_module, no_grad=True
                 )
 
-            upd_r = self._token_samples(
-                upd_r_acts, retain_inputs.get("labels"), retain_inputs.get("attention_mask")
-            )
-            ref_r = self._token_samples(
-                ref_r_acts, retain_inputs.get("labels"), retain_inputs.get("attention_mask")
-            )
-            retain_loss = self._retain_alignment_loss(upd=upd_r, ref=ref_r.to(upd_r.device))
+            if self.official_mode:
+                ref_r_acts = ref_r_acts.to(device=upd_r_acts.device, dtype=upd_r_acts.dtype)
+                retain_loss = 1.0 - F.cosine_similarity(upd_r_acts, ref_r_acts, dim=-1).mean()
+                retain_loss = retain_loss * self.retain_weight
+            else:
+                upd_r = self._token_samples(
+                    upd_r_acts, retain_inputs.get("labels"), retain_inputs.get("attention_mask")
+                )
+                ref_r = self._token_samples(
+                    ref_r_acts, retain_inputs.get("labels"), retain_inputs.get("attention_mask")
+                )
+                retain_loss = self._retain_alignment_loss(upd=upd_r, ref=ref_r.to(upd_r.device))
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         if not trainable_params:
@@ -307,54 +469,82 @@ class FALCON(GradDiff):
             allow_unused=True,
         )
 
-        dot = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
-        nf = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
-        nr = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
-        for gf, gr in zip(g_forget, g_retain):
-            if gf is None or gr is None:
-                continue
-            gf32 = gf.float()
-            gr32 = gr.float()
-            dot = dot + (gf32 * gr32).sum()
-            nf = nf + (gf32 * gf32).sum()
-            nr = nr + (gr32 * gr32).sum()
+        conflict = False
+        proj_coeff = None
+        cos = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
+        if not self.official_mode:
+            dot = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
+            nf = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
+            nr = torch.zeros((), device=forget_loss.device, dtype=torch.float32)
+            for gf, gr in zip(g_forget, g_retain):
+                if gf is None or gr is None:
+                    continue
+                gf32 = gf.float()
+                gr32 = gr.float()
+                dot = dot + (gf32 * gr32).sum()
+                nf = nf + (gf32 * gf32).sum()
+                nr = nr + (gr32 * gr32).sum()
 
-        eps = 1e-12
-        cos = dot / (torch.sqrt(nf + eps) * torch.sqrt(nr + eps) + eps)
-        conflict = bool(
-            cos.detach().item() < self.conflict_cos_threshold and nr.detach().item() > 0.0
-        )
-        proj_coeff = (dot / (nr + eps)) if conflict else None
+            eps = 1e-12
+            cos = dot / (torch.sqrt(nf + eps) * torch.sqrt(nr + eps) + eps)
+            conflict = bool(
+                cos.detach().item() < self.conflict_cos_threshold and nr.detach().item() > 0.0
+            )
+            proj_coeff = (dot / (nr + eps)) if conflict else None
 
         grad_acc_steps = max(1, int(self.args.gradient_accumulation_steps))
         grad_scale = 1.0 / grad_acc_steps
 
-        for param, gf, gr in zip(trainable_params, g_forget, g_retain):
-            if gf is None and gr is None:
-                continue
-            if gf is None:
-                gf = torch.zeros_like(gr)
-            if gr is None:
-                gr = torch.zeros_like(gf)
+        if self.official_mode:
+            merged_grads, cos_sims = self._resolve_grad_conflict_official(g_forget, g_retain)
+            for param, grad in zip(trainable_params, merged_grads):
+                if grad is None:
+                    continue
+                grad = grad.detach() * grad_scale
+                if param.grad is None:
+                    param.grad = grad
+                else:
+                    param.grad.add_(grad)
 
-            if conflict and proj_coeff is not None:
-                gf = gf - proj_coeff.to(gf.dtype) * gr
-
-            grad = (self.gamma * gf + self.alpha * gr).detach() * grad_scale
-            if param.grad is None:
-                param.grad = grad
+            if cos_sims:
+                cos_value = float(sum(cos_sims) / len(cos_sims))
+                conflict_ratio = float(sum(1 for c in cos_sims if c < 0.0) / len(cos_sims))
             else:
-                param.grad.add_(grad)
+                cos_value = 0.0
+                conflict_ratio = 0.0
+            conflict = conflict_ratio > 0.0
+            total_loss = forget_loss + retain_loss
+        else:
+            for param, gf, gr in zip(trainable_params, g_forget, g_retain):
+                if gf is None and gr is None:
+                    continue
+                if gf is None:
+                    gf = torch.zeros_like(gr)
+                if gr is None:
+                    gr = torch.zeros_like(gf)
 
-        total_loss = self.gamma * forget_loss + self.alpha * retain_loss
+                if conflict and proj_coeff is not None:
+                    gf = gf - proj_coeff.to(gf.dtype) * gr
+
+                grad = (self.gamma * gf + self.alpha * gr).detach() * grad_scale
+                if param.grad is None:
+                    param.grad = grad
+                else:
+                    param.grad.add_(grad)
+
+            cos_value = float(cos.detach().item())
+            conflict_ratio = 1.0 if conflict else 0.0
+            total_loss = self.gamma * forget_loss + self.alpha * retain_loss
 
         try:
             self.log(
                 {
                     "falcon_forget_loss": float(forget_loss.detach().item()),
                     "falcon_retain_loss": float(retain_loss.detach().item()),
-                    "falcon_grad_cos": float(cos.detach().item()),
+                    "falcon_grad_cos": cos_value,
                     "falcon_conflict": 1.0 if conflict else 0.0,
+                    "falcon_conflict_ratio": conflict_ratio,
+                    "falcon_official_mode": 1.0 if self.official_mode else 0.0,
                 }
             )
         except Exception:

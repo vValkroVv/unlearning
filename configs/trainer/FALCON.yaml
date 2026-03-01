@@ -4,11 +4,19 @@ defaults:
 handler: FALCON
 
 method_args:
+  # Backward-compatible GradDiff weights (used in paper mode).
   gamma: 1.0
   alpha: 1.0
 
-  temperature: 0.07
+  # Official FALCON defaults.
+  temperature: 0.7
+  retain_weight: 100.0
+  steering_coeff: 20.0
+  conflict_w: [0.8, 1.2]
+  align_w: [0.1, 1.9]
+  official_mode: true
 
+  # Legacy paper-style knobs kept for compatibility (used when official_mode=false).
   k_svd: 16
   pov_alpha: 1.0
   pov_noise_std: 0.0
