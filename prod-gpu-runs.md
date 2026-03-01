@@ -56,6 +56,21 @@ Important:
 - Wrong: `export HF_DATASETS OFFLINE=1`
 - Correct: `export HF_DATASETS_OFFLINE=1`
 
+## Eval batch size in same run
+
+For all scripts below (`1` to `8`), evaluation runs inside the same command and supports:
+
+- `EVAL_BATCH_SIZE` (default: `8`)
+
+Example style (same as train params):
+
+```bash
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=32 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
 ## 1) GA - DUET
 
 ```bash
@@ -65,6 +80,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
@@ -78,6 +96,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/ga_popqa.sh
 ```
@@ -91,6 +112,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
@@ -104,6 +128,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/npo_popqa.sh
 ```
@@ -117,6 +144,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
@@ -133,9 +163,44 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 bash scripts/popqa/falcon_popqa.sh
+```
+
+## 7) NPO-SAM - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+## 8) NPO-SAM - UNLamb
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/popqa/npo_sam_popqa.sh
 ```
