@@ -149,6 +149,7 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/duet/falcon_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/grad_ascent_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/npo_sam_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/r2d_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/undial_lora_popular.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/undial_lora.yaml
 │   │       │   └── configs/experiment/unlearn/duet/wga_lora.yaml
@@ -164,6 +165,7 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/popqa/grad_diff_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/popqa/npo_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/popqa/npo_sam_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/popqa/r2d_lora.yaml
 │   │       │   └── configs/experiment/unlearn/popqa/wga_lora.yaml
 │   │       ├── configs/experiment/unlearn/rwku
 │   │       │   ├── configs/experiment/unlearn/rwku/grad_ascent_lora.yaml
@@ -221,6 +223,7 @@ Directory Structure:
 │   │   ├── configs/trainer/NPOSAM.yaml
 │   │   ├── configs/trainer/PDU.yaml
 │   │   ├── configs/trainer/PopDynamBWGA.yaml
+│   │   ├── configs/trainer/R2D.yaml
 │   │   ├── configs/trainer/RMU.yaml
 │   │   ├── configs/trainer/SatImp.yaml
 │   │   ├── configs/trainer/SimNPO.yaml
@@ -234,14 +237,22 @@ Directory Structure:
 │   ├── docs/hydra.md
 │   ├── docs/links.md
 │   └── docs/repro.md
+│   ├── experiments-speedup/duet_npo_sam_bs_sweep_results.tsv
+│   ├── experiments-speedup/eval_npo_sam_bs_sweep_results.tsv
+│   ├── experiments-speedup/npo_sam_eval_speedup_summary.tsv
+│   ├── experiments-speedup/npo_sam_speedup_summary.tsv
+│   └── experiments-speedup/popqa_npo_sam_bs_sweep_results.tsv
 ├── falcon_integration_diff.md
 ├── falcon.md
 ├── LICENSE
 ├── Makefile
 ├── MU.yml
 ├── npo_sam_integration_diff.md
+├── npo_sam.md
+├── package_saves.sh
 ├── prod-gpu-runs.md
 ├── prod-runs.md
+├── r2d_integration_diff.md
 ├── README.md
 │   ├── scripts/calc_cos_sim.py
 │   ├── scripts/duet
@@ -253,6 +264,7 @@ Directory Structure:
 │   │   ├── scripts/duet/gd_duet.sh
 │   │   ├── scripts/duet/npo_duet.sh
 │   │   ├── scripts/duet/npo_sam_duet.sh
+│   │   ├── scripts/duet/r2d_duet.sh
 │   │   ├── scripts/duet/run_all_gemma7b.sh
 │   │   ├── scripts/duet/run_all_merge_compare.sh
 │   │   ├── scripts/duet/run_all_merge.sh
@@ -269,7 +281,6 @@ Directory Structure:
 │   │   └── scripts/forget_metrics/run_forget_metrics_rwku.sh
 │   ├── scripts/GA_DUET.sh
 │   ├── scripts/muse_unlearn.sh
-│   ├── scripts/package_saves.sh
 │   ├── scripts/popqa
 │   │   ├── scripts/popqa/ada_pop_popqa.sh
 │   │   ├── scripts/popqa/ada_wgd_popqa.sh
@@ -279,6 +290,7 @@ Directory Structure:
 │   │   ├── scripts/popqa/gd_popqa.sh
 │   │   ├── scripts/popqa/npo_popqa.sh
 │   │   ├── scripts/popqa/npo_sam_popqa.sh
+│   │   ├── scripts/popqa/r2d_popqa.sh
 │   │   ├── scripts/popqa/run_all_gemma7b.sh
 │   │   ├── scripts/popqa/run_all_qwen25_7b.sh
 │   │   └── scripts/popqa/wga_popqa.sh
@@ -334,14 +346,73 @@ Directory Structure:
 │       │   ├── src/trainer/unlearn/npo.py
 │       │   ├── src/trainer/unlearn/pdu.py
 │       │   ├── src/trainer/unlearn/pop_dynam_b_wga.py
+│       │   ├── src/trainer/unlearn/r2d.py
 │       │   ├── src/trainer/unlearn/rmu.py
 │       │   ├── src/trainer/unlearn/satimp.py
 │       │   ├── src/trainer/unlearn/simnpo.py
 │       │   ├── src/trainer/unlearn/undial.py
 │       │   └── src/trainer/unlearn/wga.py
 │       └── src/trainer/utils.py
-├── vast-working.md
+└── vast-working.md
 </directory_structure>
+
+<content full_path="package_saves.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ ! -d "saves" ]]; then
+    echo "Error: run this script from repo root (missing ./saves directory)." >&2
+    exit 1
+fi
+
+if ! command -v zip >/dev/null 2>&1; then
+    echo "Error: 'zip' command is required but not found." >&2
+    exit 1
+fi
+
+src_dir="saves"
+clean_dir="saves-clean"
+zip_path="${clean_dir}.zip"
+
+echo "[package_saves] Rebuilding ${clean_dir} and ${zip_path}"
+rm -rf "${clean_dir}" "${zip_path}" "saves-summary"
+mkdir -p "${clean_dir}"
+
+copied_files=0
+skipped_files=0
+
+while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#${src_dir}/}"
+    base_name="$(basename "${src_file}")"
+    dir_name="$(dirname "${src_file}")"
+
+    keep=0
+    if [[ "${base_name}" == *_SUMMARY.json ]]; then
+        keep=1
+    elif [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
+        keep=1
+    fi
+
+    if [[ "${keep}" -eq 0 ]]; then
+        skipped_files=$((skipped_files + 1))
+        continue
+    fi
+
+    dst_file="${clean_dir}/${rel_path}"
+    mkdir -p "$(dirname "${dst_file}")"
+    cp -p "${src_file}" "${dst_file}"
+    copied_files=$((copied_files + 1))
+done < <(find "${src_dir}" -type f -print0)
+
+echo "[package_saves] copied files: ${copied_files}"
+echo "[package_saves] skipped files: ${skipped_files}"
+
+zip -rq "${zip_path}" "${clean_dir}"
+echo "[package_saves] wrote ${zip_path}"
+echo "[package_saves] done"
+
+</content>
 
 <content full_path="vast-working.md">
 # VAST Working Log: GPU venv setup for `unlearning`
@@ -995,6 +1066,263 @@ Expected eval artifacts:
 
 </content>
 
+<content full_path="npo_sam.md">
+# NPO-SAM Integration and Validation Notes
+
+Date: 2026-03-01
+Repo: `/workspace/unlearning`
+
+## 1) What was validated
+
+### 1.1 NPO-SAM trainer/config wiring
+
+Checked that NPO-SAM is fully wired in code/config:
+
+- Trainer implementation:
+  - `src/trainer/unlearn/npo_sam.py`
+- Trainer registration:
+  - `src/trainer/__init__.py`
+- Trainer config:
+  - `configs/trainer/NPOSAM.yaml`
+- Experiment configs:
+  - `configs/experiment/unlearn/duet/npo_sam_lora.yaml`
+  - `configs/experiment/unlearn/popqa/npo_sam_lora.yaml`
+
+Verified method args are present and plumbed through scripts:
+
+- `beta`, `alpha`, `gamma`
+- `sam_rho`, `sam_adaptive`, `sam_eps`
+
+### 1.2 NPO-SAM run scripts
+
+Validated both target scripts end-to-end:
+
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/popqa/npo_sam_popqa.sh`
+
+### 1.3 Production docs coverage
+
+Added production launch commands for NPO-SAM to:
+
+- `prod-runs.md`
+  - `## 7) NPO-SAM - DUET`
+  - `## 8) NPO-SAM - UNLamb`
+
+## 2) Issues found and fixes applied
+
+### 2.1 Hydra strict override compatibility
+
+Two Hydra failures were found during smoke runs:
+
+1. Missing-key failure on some model configs:
+   - `model.model_args.low_cpu_mem_usage`
+2. Missing-key failure on eval:
+   - `model.model_args.base_model_name_or_path`
+
+Initial fix used `+...` (append).  
+Then 8B runs showed `+...` fails when key already exists.
+
+Final robust fix:
+
+- switched to `++...` (add-or-override) in both scripts:
+  - `scripts/popqa/npo_sam_popqa.sh`
+  - `scripts/duet/npo_sam_duet.sh`
+
+Specifically:
+
+- `++model.model_args.low_cpu_mem_usage=true` (train + eval)
+- `++model.model_args.base_model_name_or_path=...` (eval)
+
+This now works for both cases:
+
+- configs where keys are absent (e.g., some 1B configs)
+- configs where keys are already present (8B configs)
+
+## 3) What was checked
+
+### 3.1 Static checks
+
+- `bash -n scripts/popqa/npo_sam_popqa.sh`
+- `bash -n scripts/duet/npo_sam_duet.sh`
+
+Both passed.
+
+### 3.2 Runtime prerequisites and data/model accessibility
+
+Verified:
+
+- GPU is visible in host execution context.
+- HF repos are accessible:
+  - `SwetieePawsss/UNLamb_ft_models`
+  - `SwetieePawsss/DUET_ft_models`
+  - datasets `SwetieePawsss/exp_UNLamb` and `SwetieePawsss/DUET`
+- Required splits resolve and load:
+  - POPQA: `rare_forget5_sum`, `popular_forget5_sum`, `fast_retain_500`
+  - DUET: `city_forget_rare_5`, `city_forget_popular_5`, `city_fast_retain_500`
+
+### 3.3 Small-model pipeline smoke (1B)
+
+Purpose:
+
+- validate full train + eval pipeline quickly
+- verify NPO-SAM logging and artifact generation
+
+Runs used:
+
+- `BASE_MODEL=Llama-3.2-1B-Instruct`
+- `MODEL_CONFIG=Llama-3.2-1B-Instruct-lora`
+- `LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models`
+- `SFT_SUBFOLDER=llama-3.2-1b-instruct-popqa-ft`
+- `MERGE_POPULARITY_FORGET=1`
+- method args:
+  - `BETAS=0.1`
+  - `ALPHAS=1.0`
+  - `GAMMAS=1.0`
+  - `SAM_RHOS=0.01`
+  - `SAM_ADAPTIVES=false`
+  - `SAM_EPS=1e-12`
+- training args:
+  - `LRS=1e-5`
+  - `PER_DEVICE_TRAIN_BS=1`
+  - `GRAD_ACCUM=32`
+  - `NUM_EPOCHS=0.03`
+  - `LORA_RS=32`
+  - `LORA_ALPHAS=64`
+  - `LORA_DROPOUTS=0.0`
+
+Result: POPQA 1B smoke run (train + eval) succeeded
+
+- run dir:
+  - `/workspace/unlearning/saves/unlearn/popqa/npo_sam/popqa_Llama-3.2-1B-Instruct_forget5_sum_npo_sam_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p1_alpha1p0_gamma1p0_rho0p01_adF`
+- summary:
+  - `forget_qa_rouge`: `0.28651202749140897`
+  - `holdout_qa_rouge`: `0.10333333333333333`
+- trainer state:
+  - `global_step=2`, `max_steps=2`, `train_runtime=52.2863s`
+
+Result: DUET 1B smoke run (train + eval) succeeded
+
+- run dir:
+  - `/workspace/unlearning/saves/unlearn/duet/npo_sam/duet_Llama-3.2-1B-Instruct_city_forget_5_npo_sam_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p1_alpha1p0_gamma1p0_rho0p01_adF`
+- summary:
+  - `forget_qa_rouge`: `0.2664851313969571`
+  - `holdout_qa_rouge`: `0.3706666666666667`
+- trainer state:
+  - `global_step=1`, `max_steps=1`, `train_runtime=27.9585s`
+
+### 3.4 Production-like smoke on referenced 8B checkpoints
+
+Purpose:
+
+- verify scripts in a setup matching `prod-runs.md`
+- keep training minimal while preserving full train+eval flow
+
+Runs used:
+
+- `USE_SFT_BASE=1`
+- `MERGE_POPULARITY_FORGET=1`
+- same method/training args as above
+- `NUM_EPOCHS=0.02` (minimal smoke; still performed optimizer step)
+
+UNLamb 8B run:
+
+- base:
+  - `LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models`
+  - `SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft`
+- script:
+  - `bash scripts/popqa/npo_sam_popqa.sh`
+- run dir:
+  - `/workspace/unlearning/saves/unlearn/popqa/npo_sam/popqa_Llama-3.1-8B-Instruct_forget5_sum_npo_sam_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p1_alpha1p0_gamma1p0_rho0p01_adF`
+- summary:
+  - `forget_qa_rouge`: `0.820303550973654`
+  - `holdout_qa_rouge`: `0.8168333333333333`
+- trainer state:
+  - `global_step=1`, `max_steps=1`, `train_runtime=35.8008s`
+
+DUET 8B run:
+
+- base:
+  - `LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models`
+  - `SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft`
+- script:
+  - `bash scripts/duet/npo_sam_duet.sh`
+- run dir:
+  - `/workspace/unlearning/saves/unlearn/duet/npo_sam/duet_Llama-3.1-8B-Instruct_city_forget_5_npo_sam_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p1_alpha1p0_gamma1p0_rho0p01_adF`
+- summary:
+  - `forget_qa_rouge`: `0.9382434301521438`
+  - `holdout_qa_rouge`: `0.9675`
+- trainer state:
+  - `global_step=1`, `max_steps=1`, `train_runtime=38.3406s`
+
+## 4) Commands used for production-like 8B smoke checks
+
+### 4.1 UNLamb (POPQA) 8B
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+LRS=1e-5 \
+BETAS=0.1 \
+ALPHAS=1.0 \
+GAMMAS=1.0 \
+SAM_RHOS=0.01 \
+SAM_ADAPTIVES=false \
+SAM_EPS=1e-12 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+NUM_EPOCHS=0.02 \
+LORA_RS=32 \
+LORA_ALPHAS=64 \
+LORA_DROPOUTS=0.0 \
+FORCE_RERUN=1 \
+bash scripts/popqa/npo_sam_popqa.sh
+```
+
+### 4.2 DUET 8B
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+LRS=1e-5 \
+BETAS=0.1 \
+ALPHAS=1.0 \
+GAMMAS=1.0 \
+SAM_RHOS=0.01 \
+SAM_ADAPTIVES=false \
+SAM_EPS=1e-12 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+NUM_EPOCHS=0.02 \
+LORA_RS=32 \
+LORA_ALPHAS=64 \
+LORA_DROPOUTS=0.0 \
+FORCE_RERUN=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+## 5) Full production command pattern
+
+For full runs with default script hyperparameters (same style as other algorithms), use the commands added in:
+
+- `prod-runs.md`
+  - `## 7) NPO-SAM - DUET`
+  - `## 8) NPO-SAM - UNLamb`
+
+## 6) Notes
+
+- In this environment, GPU visibility is available in host execution context.
+- NPO-SAM logs were emitted during training (`npo_sam_forget_loss_1`, `npo_sam_forget_loss_2`, `npo_sam_retain_loss`, `npo_sam_grad_norm`, `npo_sam_rho`, `npo_sam_adaptive`), confirming trainer path execution.
+
+</content>
+
 <content full_path="prod-gpu-runs.md">
 # Production GPU Runs (Offline Server)
 
@@ -1054,6 +1382,21 @@ Important:
 - Wrong: `export HF_DATASETS OFFLINE=1`
 - Correct: `export HF_DATASETS_OFFLINE=1`
 
+## Eval batch size in same run
+
+For all scripts below (`1` to `8`), evaluation runs inside the same command and supports:
+
+- `EVAL_BATCH_SIZE` (default: `8`)
+
+Example style (same as train params):
+
+```bash
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=32 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
 ## 1) GA - DUET
 
 ```bash
@@ -1063,6 +1406,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
@@ -1076,6 +1422,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/ga_popqa.sh
 ```
@@ -1089,6 +1438,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
@@ -1102,6 +1454,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/npo_popqa.sh
 ```
@@ -1115,6 +1470,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
@@ -1131,11 +1489,829 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 bash scripts/popqa/falcon_popqa.sh
+```
+
+## 7) NPO-SAM - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+## 8) NPO-SAM - UNLamb
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/popqa/npo_sam_popqa.sh
+```
+
+</content>
+
+<content full_path="r2d_integration_diff.md">
+# R2D Integration Diff
+
+Base commit: ac4e90a8019475d1f9837700ef980ee511237732 (before R2D integration)
+Target: current working tree
+
+```diff
+diff --git a/src/trainer/__init__.py b/src/trainer/__init__.py
+index 7f4ccdc..67edfff 100644
+--- a/src/trainer/__init__.py
++++ b/src/trainer/__init__.py
+@@ -20,6 +20,7 @@ from trainer.unlearn.ada_wgd import AdaWGD, AdaWGDCallback
+ from trainer.unlearn.ada_pop import AdaPop
+ from trainer.unlearn.pop_dynam_b_wga import PopDynamBWGA
+ from trainer.unlearn.falcon import FALCON
++from trainer.unlearn.r2d import R2D
+ 
+ 
+ import logging
+@@ -109,3 +110,4 @@ _register_trainer(AdaWGD)
+ _register_trainer(AdaPop)
+ _register_trainer(PopDynamBWGA)
+ _register_trainer(FALCON)
++_register_trainer(R2D)
+diff --git a/configs/experiment/unlearn/duet/r2d_lora.yaml b/configs/experiment/unlearn/duet/r2d_lora.yaml
+new file mode 100644
+index 0000000..63c1808
+--- /dev/null
++++ b/configs/experiment/unlearn/duet/r2d_lora.yaml
+@@ -0,0 +1,65 @@
++# @package _global_
++
++defaults:
++  - override /model: Llama-3.1-8B-Instruct-lora
++  - override /trainer: R2D
++  - override /data: unlearn
++  - override /data/datasets@data.forget: DUET_QA_forget
++  - override /data/datasets@data.retain: DUET_QA_retain
++  - override /eval: duet
++
++forget_split: city_forget_rare_5
++retain_split: city_fast_retain_500
++holdout_split: ${retain_split}
++retain_logs_path: null
++question_key: question
++
++model:
++  model_args:
++    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
++
++data:
++  anchor: retain
++  forget:
++    DUET_QA_forget:
++      args:
++        hf_args:
++          path: SwetieePawsss/DUET
++          split: ${forget_split}
++        question_key: ${question_key}
++  retain:
++    DUET_QA_retain:
++      args:
++        hf_args:
++          path: SwetieePawsss/DUET
++          split: ${retain_split}
++        question_key: ${question_key}
++
++eval:
++  duet:
++    forget_split: ${forget_split}
++    holdout_split: ${holdout_split}
++    retain_logs_path: ${retain_logs_path}
++    question_key: ${question_key}
++
++trainer:
++  args:
++    per_device_train_batch_size: 1
++    gradient_accumulation_steps: 32
++    learning_rate: 1e-5
++    num_train_epochs: 5
++    lr_scheduler_type: constant
++    warmup_ratio: 0.1
++    logging_steps: 10
++    eval_strategy: "no"
++    save_strategy: "no"
++    do_eval: false
++    eval_on_start: false
++    remove_unused_columns: false
++    gradient_checkpointing: false
++    ddp_find_unused_parameters: false
++  method_args:
++    noise_std: 0.0
++    noise_trainable_only: true
++
++task_name: duet_r2d_lora
+diff --git a/configs/experiment/unlearn/popqa/r2d_lora.yaml b/configs/experiment/unlearn/popqa/r2d_lora.yaml
+new file mode 100644
+index 0000000..36e3ce7
+--- /dev/null
++++ b/configs/experiment/unlearn/popqa/r2d_lora.yaml
+@@ -0,0 +1,65 @@
++# @package _global_
++
++defaults:
++  - override /model: Llama-3.1-8B-Instruct-lora
++  - override /trainer: R2D
++  - override /data: unlearn
++  - override /data/datasets@data.forget: POPQA_QA_forget
++  - override /data/datasets@data.retain: POPQA_QA_retain
++  - override /eval: popqa
++
++forget_split: rare_forget5_sum
++retain_split: fast_retain_500
++holdout_split: ${retain_split}
++retain_logs_path: null
++question_key: question
++
++model:
++  model_args:
++    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
++
++data:
++  anchor: retain
++  forget:
++    POPQA_QA_forget:
++      args:
++        hf_args:
++          path: SwetieePawsss/exp_UNLamb
++          split: ${forget_split}
++        question_key: ${question_key}
++  retain:
++    POPQA_QA_retain:
++      args:
++        hf_args:
++          path: SwetieePawsss/exp_UNLamb
++          split: ${retain_split}
++        question_key: ${question_key}
++
++eval:
++  duet:
++    forget_split: ${forget_split}
++    holdout_split: ${holdout_split}
++    retain_logs_path: ${retain_logs_path}
++    question_key: ${question_key}
++
++trainer:
++  args:
++    per_device_train_batch_size: 1
++    gradient_accumulation_steps: 32
++    learning_rate: 1e-5
++    num_train_epochs: 5
++    lr_scheduler_type: constant
++    warmup_ratio: 0.1
++    logging_steps: 10
++    eval_strategy: "no"
++    save_strategy: "no"
++    do_eval: false
++    eval_on_start: false
++    remove_unused_columns: false
++    gradient_checkpointing: false
++    ddp_find_unused_parameters: false
++  method_args:
++    noise_std: 0.0
++    noise_trainable_only: true
++
++task_name: popqa_r2d_lora
+diff --git a/configs/trainer/R2D.yaml b/configs/trainer/R2D.yaml
+new file mode 100644
+index 0000000..5be3b95
+--- /dev/null
++++ b/configs/trainer/R2D.yaml
+@@ -0,0 +1,13 @@
++defaults:
++  - finetune
++
++handler: R2D
++
++method_args:
++  noise_std: 0.0
++  noise_seed: null
++  noise_trainable_only: true
++
++  dp_epsilon: null
++  dp_delta: null
++  dp_sensitivity: null
+diff --git a/scripts/duet/r2d_duet.sh b/scripts/duet/r2d_duet.sh
+new file mode 100755
+index 0000000..d3dcddb
+--- /dev/null
++++ b/scripts/duet/r2d_duet.sh
+@@ -0,0 +1,205 @@
++#!/bin/bash
++
++set -euo pipefail
++
++script_dir=$(dirname "$(realpath "$0")")
++repo_root=$(realpath "${script_dir}/../..")
++source "${script_dir}/_splits.sh"
++
++export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
++echo "Master Port: $MASTER_PORT"
++
++base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
++lora_model="${MODEL_CONFIG:-${base_model}-lora}"
++hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
++local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb}"
++
++sft_subfolder="${SFT_SUBFOLDER:-}"
++tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
++
++use_sft_base=${USE_SFT_BASE:-1}
++if [[ "${use_sft_base}" == "1" ]]; then
++    trained_model_path="${local_sft_base}"
++    echo "[duet][R2D] Using finetuned model path ${trained_model_path}"
++else
++    trained_model_path="${hf_base_model_path}"
++    echo "[duet][R2D] Using HF base model path ${trained_model_path}"
++fi
++
++# Required rewind inputs:
++# - R2D_REWIND_CKPT_PATH
++# - or R2D_REWIND_SUBFOLDER
++# - or R2D_REWIND_STEP (resolved as checkpoint-${R2D_REWIND_STEP})
++rewind_model_path="${R2D_REWIND_CKPT_PATH:-${trained_model_path}}"
++rewind_subfolder="${R2D_REWIND_SUBFOLDER:-}"
++
++if [[ -z "${rewind_subfolder}" && -n "${R2D_REWIND_STEP:-}" ]]; then
++    if [[ -n "${sft_subfolder}" ]]; then
++        rewind_subfolder="${sft_subfolder}/checkpoint-${R2D_REWIND_STEP}"
++    else
++        rewind_subfolder="checkpoint-${R2D_REWIND_STEP}"
++    fi
++fi
++
++if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${R2D_REWIND_STEP:-}" ]]; then
++    echo "[duet][R2D] ERROR: set R2D_REWIND_CKPT_PATH or R2D_REWIND_SUBFOLDER or R2D_REWIND_STEP."
++    exit 1
++fi
++
++echo "[duet][R2D] Rewind model path: ${rewind_model_path}"
++echo "[duet][R2D] Rewind subfolder : ${rewind_subfolder}"
++
++tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${trained_model_path}}"
++
++extra_train_args=()
++extra_eval_args=()
++if [[ -n "${rewind_subfolder}" ]]; then
++    extra_train_args+=(+model.model_args.subfolder=${rewind_subfolder})
++    extra_eval_args+=(+model.model_args.subfolder=${rewind_subfolder})
++fi
++if [[ -n "${tokenizer_subfolder}" ]]; then
++    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
++    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
++fi
++
++experiment="unlearn/duet/r2d_lora.yaml"
++trainer="R2D"
++
++output_root="${repo_root}/saves/unlearn/duet/r2d"
++mkdir -p "${output_root}"
++
++set_forget_retain_splits
++
++per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
++gradient_accumulation_steps=${GRAD_ACCUM:-32}
++eval_batch_size=${EVAL_BATCH_SIZE:-8}
++num_train_epochs=${NUM_EPOCHS:-1}
++max_steps=${R2D_MAX_STEPS:-0}
++gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
++
++raw_lrs="${LRS:-1e-5}"
++raw_lrs="${raw_lrs//,/ }"
++raw_lrs="${raw_lrs//\"/}"
++raw_lrs="${raw_lrs//\'/}"
++read -r -a lrs <<< "${raw_lrs}"
++
++lora_rs=(${LORA_RS:-"32"})
++lora_alphas=(${LORA_ALPHAS:-"64"})
++lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
++
++r2d_noise_std="${R2D_NOISE_STD:-0.0}"
++r2d_noise_seed="${R2D_NOISE_SEED:-42}"
++delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
++
++export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
++
++for split in "${forget_retain_splits[@]}"; do
++    read -r forget_split retain_split forget_label <<< "${split}"
++    if [[ -z "${forget_label:-}" ]]; then
++        forget_label="${forget_split}"
++    fi
++
++    for lr in "${lrs[@]}"; do
++        for lora_r in "${lora_rs[@]}"; do
++            for lora_alpha in "${lora_alphas[@]}"; do
++                for lora_dropout in "${lora_dropouts[@]}"; do
++                    dropout_tag=${lora_dropout//./p}
++                    rewind_tag="${R2D_REWIND_TAG:-rewind}"
++                    task_name=duet_${base_model}_${forget_label}_r2d_${rewind_tag}_lr${lr}_sigma${r2d_noise_std}_r${lora_r}_a${lora_alpha}_d${dropout_tag}
++                    run_dir=${output_root}/${task_name}
++                    eval_dir=${run_dir}/evals
++                    summary_path=${eval_dir}/DUET_SUMMARY.json
++
++                    if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
++                        echo "[duet][R2D] Skipping ${task_name}: found existing summary at ${summary_path}"
++                        continue
++                    fi
++
++                    echo "[duet][R2D] ${task_name}"
++                    echo "  rewind=${rewind_model_path} subfolder=${rewind_subfolder}"
++                    echo "  forget=${forget_split} retain=${retain_split} epochs=${num_train_epochs} max_steps=${max_steps}"
++
++                    adapter_path=${run_dir}/adapter_model.safetensors
++                    if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
++                        mkdir -p "${run_dir}"
++
++                        train_cmd=( \
++                            --config-name=unlearn.yaml \
++                            experiment=${experiment} \
++                            trainer=${trainer} \
++                            task_name=${task_name} \
++                            model=${lora_model} \
++                            forget_split=${forget_split} \
++                            retain_split=${retain_split} \
++                            holdout_split=${retain_split} \
++                            model.model_args.pretrained_model_name_or_path=${rewind_model_path} \
++                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
++                            model.model_args.device_map="auto" \
++                            model.model_args.low_cpu_mem_usage=true \
++                            model.lora_config.r=${lora_r} \
++                            model.lora_config.lora_alpha=${lora_alpha} \
++                            model.lora_config.lora_dropout=${lora_dropout} \
++                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
++                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
++                            trainer.args.num_train_epochs=${num_train_epochs} \
++                            trainer.args.gradient_checkpointing=${gradient_checkpointing} \
++                            trainer.args.learning_rate=${lr} \
++                            trainer.args.lr_scheduler_type=constant \
++                            trainer.args.warmup_ratio=0.0 \
++                            trainer.args.save_strategy=no \
++                            trainer.args.eval_strategy=no \
++                            trainer.args.do_eval=false \
++                            trainer.args.eval_on_start=false \
++                            trainer.args.report_to=none \
++                            trainer.method_args.noise_std=${r2d_noise_std} \
++                            trainer.method_args.noise_seed=${r2d_noise_seed} \
++                            trainer.method_args.noise_trainable_only=true \
++                            retain_logs_path=null \
++                            "${extra_train_args[@]}" \
++                            paths.output_dir=${run_dir} \
++                        )
++                        if [[ "${max_steps}" != "0" ]]; then
++                            train_cmd+=(trainer.args.max_steps=${max_steps})
++                        fi
++
++                        python src/train.py "${train_cmd[@]}"
++                    fi
++
++                    mkdir -p "${eval_dir}"
++                    if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
++                        rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"
++                    fi
++
++                    eval_cmd=( \
++                        experiment=eval/duet/default.yaml \
++                        model=${lora_model} \
++                        forget_split=${forget_split} \
++                        holdout_split=${retain_split} \
++                        task_name=${task_name} \
++                        model.model_args.pretrained_model_name_or_path=${run_dir} \
++                        model.model_args.base_model_name_or_path=${rewind_model_path} \
++                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
++                        model.model_args.device_map="auto" \
++                        model.model_args.low_cpu_mem_usage=true \
++                        model.lora_config.r=${lora_r} \
++                        model.lora_config.lora_alpha=${lora_alpha} \
++                        model.lora_config.lora_dropout=${lora_dropout} \
++                        eval.duet.batch_size=${eval_batch_size} \
++                        eval.duet.overwrite=true \
++                        "${extra_eval_args[@]}" \
++                        paths.output_dir=${eval_dir} \
++                        retain_logs_path=null \
++                    )
++                    python src/eval.py "${eval_cmd[@]}"
++
++                    if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
++                        if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
++                            rm -f "${run_dir}"/*.safetensors
++                            echo "[duet][R2D] Removed safetensors from ${run_dir}"
++                        fi
++                    fi
++                done
++            done
++        done
++    done
++done
+diff --git a/scripts/popqa/r2d_popqa.sh b/scripts/popqa/r2d_popqa.sh
+new file mode 100755
+index 0000000..0dd307c
+--- /dev/null
++++ b/scripts/popqa/r2d_popqa.sh
+@@ -0,0 +1,216 @@
++#!/bin/bash
++
++set -euo pipefail
++
++script_dir=$(dirname "$(realpath "$0")")
++repo_root=$(realpath "${script_dir}/../..")
++
++export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
++echo "Master Port: $MASTER_PORT"
++
++base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
++lora_model="${MODEL_CONFIG:-${base_model}-lora}"
++hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
++local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/popqa/llama3.1-8b_full_5ep_ft_popqa}"
++
++sft_subfolder="${SFT_SUBFOLDER:-}"
++tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
++chat_template_tokenizer_path="${CHAT_TEMPLATE_TOKENIZER_PATH:-${repo_root}/assets/tokenizers/llama-3.1-8b-instruct-chat-template}"
++
++use_sft_base=${USE_SFT_BASE:-1}
++if [[ "${use_sft_base}" == "1" ]]; then
++    trained_model_path="${local_sft_base}"
++    echo "[popqa][R2D] Using finetuned model path ${trained_model_path}"
++else
++    trained_model_path="${hf_base_model_path}"
++    echo "[popqa][R2D] Using HF base model path ${trained_model_path}"
++fi
++
++rewind_model_path="${R2D_REWIND_CKPT_PATH:-${trained_model_path}}"
++rewind_subfolder="${R2D_REWIND_SUBFOLDER:-}"
++
++if [[ -z "${rewind_subfolder}" && -n "${R2D_REWIND_STEP:-}" ]]; then
++    if [[ -n "${sft_subfolder}" ]]; then
++        rewind_subfolder="${sft_subfolder}/checkpoint-${R2D_REWIND_STEP}"
++    else
++        rewind_subfolder="checkpoint-${R2D_REWIND_STEP}"
++    fi
++fi
++
++if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${R2D_REWIND_STEP:-}" ]]; then
++    echo "[popqa][R2D] ERROR: set R2D_REWIND_CKPT_PATH or R2D_REWIND_SUBFOLDER or R2D_REWIND_STEP."
++    exit 1
++fi
++
++echo "[popqa][R2D] Rewind model path: ${rewind_model_path}"
++echo "[popqa][R2D] Rewind subfolder : ${rewind_subfolder}"
++
++tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${trained_model_path}}"
++if [[ "${use_sft_base}" == "1" && "${sft_subfolder}" == "llama-3.1-8b-instruct-popqa-ft" ]]; then
++    tokenizer_model_path="${chat_template_tokenizer_path}"
++    tokenizer_subfolder=""
++fi
++
++extra_train_args=()
++extra_eval_args=()
++if [[ -n "${rewind_subfolder}" ]]; then
++    extra_train_args+=(+model.model_args.subfolder=${rewind_subfolder})
++    extra_eval_args+=(+model.model_args.subfolder=${rewind_subfolder})
++fi
++if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
++    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
++    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
++fi
++
++experiment="unlearn/popqa/r2d_lora.yaml"
++trainer="R2D"
++
++output_root="${repo_root}/saves/unlearn/popqa/r2d"
++mkdir -p "${output_root}"
++
++base_forget_retain_splits=(
++    "rare_forget5_sum fast_retain_500"
++    "popular_forget5_sum fast_retain_500"
++)
++
++if [[ "${MERGE_POPULARITY_FORGET:-0}" == "1" ]]; then
++    forget_retain_splits=(
++        "rare_forget5_sum+popular_forget5_sum fast_retain_500 forget5_sum"
++    )
++else
++    forget_retain_splits=("${base_forget_retain_splits[@]}")
++fi
++
++per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
++gradient_accumulation_steps=${GRAD_ACCUM:-32}
++eval_batch_size=${EVAL_BATCH_SIZE:-8}
++num_train_epochs=${NUM_EPOCHS:-1}
++max_steps=${R2D_MAX_STEPS:-0}
++gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
++
++raw_lrs="${LRS:-1e-5}"
++raw_lrs="${raw_lrs//,/ }"
++raw_lrs="${raw_lrs//\"/}"
++raw_lrs="${raw_lrs//\'/}"
++read -r -a lrs <<< "${raw_lrs}"
++
++lora_rs=(${LORA_RS:-"32"})
++lora_alphas=(${LORA_ALPHAS:-"64"})
++lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
++
++r2d_noise_std="${R2D_NOISE_STD:-0.0}"
++r2d_noise_seed="${R2D_NOISE_SEED:-42}"
++delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
++
++export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
++
++for split in "${forget_retain_splits[@]}"; do
++    read -r forget_split retain_split forget_label <<< "${split}"
++    if [[ -z "${forget_label:-}" ]]; then
++        forget_label="${forget_split}"
++    fi
++
++    for lr in "${lrs[@]}"; do
++        for lora_r in "${lora_rs[@]}"; do
++            for lora_alpha in "${lora_alphas[@]}"; do
++                for lora_dropout in "${lora_dropouts[@]}"; do
++                    dropout_tag=${lora_dropout//./p}
++                    rewind_tag="${R2D_REWIND_TAG:-rewind}"
++                    task_name=popqa_${base_model}_${forget_label}_r2d_${rewind_tag}_lr${lr}_sigma${r2d_noise_std}_r${lora_r}_a${lora_alpha}_d${dropout_tag}
++                    run_dir=${output_root}/${task_name}
++                    eval_dir=${run_dir}/evals
++                    summary_path=${eval_dir}/POPQA_SUMMARY.json
++
++                    if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
++                        echo "[popqa][R2D] Skipping ${task_name}: found existing summary at ${summary_path}"
++                        continue
++                    fi
++
++                    echo "[popqa][R2D] ${task_name}"
++                    echo "  rewind=${rewind_model_path} subfolder=${rewind_subfolder}"
++                    echo "  forget=${forget_split} retain=${retain_split} epochs=${num_train_epochs} max_steps=${max_steps}"
++
++                    adapter_path=${run_dir}/adapter_model.safetensors
++                    if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
++                        mkdir -p "${run_dir}"
++
++                        train_cmd=( \
++                            --config-name=unlearn.yaml \
++                            experiment=${experiment} \
++                            trainer=${trainer} \
++                            task_name=${task_name} \
++                            model=${lora_model} \
++                            forget_split=${forget_split} \
++                            retain_split=${retain_split} \
++                            holdout_split=${retain_split} \
++                            model.model_args.pretrained_model_name_or_path=${rewind_model_path} \
++                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
++                            model.model_args.device_map="auto" \
++                            model.model_args.low_cpu_mem_usage=true \
++                            model.lora_config.r=${lora_r} \
++                            model.lora_config.lora_alpha=${lora_alpha} \
++                            model.lora_config.lora_dropout=${lora_dropout} \
++                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
++                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
++                            trainer.args.num_train_epochs=${num_train_epochs} \
++                            trainer.args.gradient_checkpointing=${gradient_checkpointing} \
++                            trainer.args.learning_rate=${lr} \
++                            trainer.args.lr_scheduler_type=constant \
++                            trainer.args.warmup_ratio=0.0 \
++                            trainer.args.save_strategy=no \
++                            trainer.args.eval_strategy=no \
++                            trainer.args.do_eval=false \
++                            trainer.args.eval_on_start=false \
++                            trainer.args.report_to=none \
++                            trainer.method_args.noise_std=${r2d_noise_std} \
++                            trainer.method_args.noise_seed=${r2d_noise_seed} \
++                            trainer.method_args.noise_trainable_only=true \
++                            retain_logs_path=null \
++                            "${extra_train_args[@]}" \
++                            paths.output_dir=${run_dir} \
++                        )
++                        if [[ "${max_steps}" != "0" ]]; then
++                            train_cmd+=(trainer.args.max_steps=${max_steps})
++                        fi
++
++                        python src/train.py "${train_cmd[@]}"
++                    fi
++
++                    mkdir -p "${eval_dir}"
++                    if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
++                        rm -f "${summary_path}" "${eval_dir}/POPQA_EVAL.json"
++                    fi
++
++                    eval_cmd=( \
++                        experiment=eval/popqa/default.yaml \
++                        model=${lora_model} \
++                        forget_split=${forget_split} \
++                        holdout_split=${retain_split} \
++                        task_name=${task_name} \
++                        model.model_args.pretrained_model_name_or_path=${run_dir} \
++                        model.model_args.base_model_name_or_path=${rewind_model_path} \
++                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
++                        model.model_args.device_map="auto" \
++                        model.model_args.low_cpu_mem_usage=true \
++                        model.lora_config.r=${lora_r} \
++                        model.lora_config.lora_alpha=${lora_alpha} \
++                        model.lora_config.lora_dropout=${lora_dropout} \
++                        eval.duet.batch_size=${eval_batch_size} \
++                        eval.duet.overwrite=true \
++                        "${extra_eval_args[@]}" \
++                        paths.output_dir=${eval_dir} \
++                        retain_logs_path=null \
++                    )
++                    python src/eval.py "${eval_cmd[@]}"
++
++                    if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
++                        if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
++                            rm -f "${run_dir}"/*.safetensors
++                            echo "[popqa][R2D] Removed safetensors from ${run_dir}"
++                        fi
++                    fi
++                done
++            done
++        done
++    done
++done
+diff --git a/src/trainer/unlearn/r2d.py b/src/trainer/unlearn/r2d.py
+new file mode 100644
+index 0000000..d42ad70
+--- /dev/null
++++ b/src/trainer/unlearn/r2d.py
+@@ -0,0 +1,155 @@
++import logging
++import math
++from typing import Optional
++
++import torch
++
++from trainer.unlearn.base import UnlearnTrainer
++from trainer.utils import _filter_model_inputs
++
++logger = logging.getLogger(__name__)
++
++
++def _default_sigma_from_dp(epsilon: float, delta: float, sensitivity: float) -> float:
++    """
++    Dependency-free fallback for Gaussian mechanism calibration:
++        sigma = sensitivity * sqrt(2 * log(1.25 / delta)) / epsilon
++    """
++    if epsilon <= 0:
++        raise ValueError("epsilon must be > 0")
++    if not (0 < delta < 1):
++        raise ValueError("delta must be in (0, 1)")
++    if sensitivity < 0:
++        raise ValueError("sensitivity must be >= 0")
++    return float(sensitivity) * math.sqrt(2.0 * math.log(1.25 / float(delta))) / float(
++        epsilon
++    )
++
++
++@torch.no_grad()
++def _apply_noise(
++    model: torch.nn.Module,
++    sigma: float,
++    trainable_only: bool = True,
++) -> None:
++    for param in model.parameters():
++        if trainable_only and not param.requires_grad:
++            continue
++        if not torch.is_floating_point(param):
++            continue
++        noise = torch.randn_like(param, dtype=torch.float32) * sigma
++        param.add_(noise.to(dtype=param.dtype))
++
++
++@torch.no_grad()
++def add_gaussian_noise_to_weights(
++    model: torch.nn.Module,
++    sigma: float,
++    seed: Optional[int] = None,
++    trainable_only: bool = True,
++) -> None:
++    """
++    Output perturbation: add N(0, sigma^2) noise to model parameters.
++    """
++    if sigma <= 0:
++        return
++
++    if seed is None:
++        _apply_noise(model=model, sigma=sigma, trainable_only=trainable_only)
++        return
++
++    devices = []
++    if torch.cuda.is_available():
++        devices = list(range(torch.cuda.device_count()))
++
++    with torch.random.fork_rng(devices=devices):
++        torch.manual_seed(seed)
++        if torch.cuda.is_available():
++            torch.cuda.manual_seed_all(seed)
++        _apply_noise(model=model, sigma=sigma, trainable_only=trainable_only)
++
++
++class R2D(UnlearnTrainer):
++    """
++    Rewind-to-Delete (R2D) unlearning:
++    - train on retain-only NLL
++    - apply optional Gaussian output perturbation on final save
++    """
++
++    def __init__(
++        self,
++        *args,
++        noise_std: float = 0.0,
++        noise_seed: Optional[int] = None,
++        noise_trainable_only: bool = True,
++        dp_epsilon: Optional[float] = None,
++        dp_delta: Optional[float] = None,
++        dp_sensitivity: Optional[float] = None,
++        **kwargs,
++    ):
++        super().__init__(*args, **kwargs)
++        self.noise_std = float(noise_std)
++        self.noise_seed = noise_seed
++        self.noise_trainable_only = bool(noise_trainable_only)
++        self.dp_epsilon = dp_epsilon
++        self.dp_delta = dp_delta
++        self.dp_sensitivity = dp_sensitivity
++        self._noise_applied = False
++
++    def _resolve_sigma(self) -> float:
++        if self.noise_std < 0:
++            raise ValueError("noise_std must be >= 0")
++        if self.noise_std > 0:
++            return float(self.noise_std)
++
++        if (
++            self.dp_epsilon is not None
++            and self.dp_delta is not None
++            and self.dp_sensitivity is not None
++        ):
++            return _default_sigma_from_dp(
++                epsilon=float(self.dp_epsilon),
++                delta=float(self.dp_delta),
++                sensitivity=float(self.dp_sensitivity),
++            )
++
++        return 0.0
++
++    def compute_loss(self, model, inputs, return_outputs=False):
++        retain_inputs = _filter_model_inputs(inputs["retain"])
++        outputs = model(**retain_inputs)
++        loss = outputs.loss
++        return (loss, outputs) if return_outputs else loss
++
++    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
++        out_dir = output_dir or self.args.output_dir
++        sigma = self._resolve_sigma()
++
++        if (not self._noise_applied) and sigma > 0 and "checkpoint-" not in str(out_dir):
++            seed = self.noise_seed
++            if seed is None:
++                seed = int(getattr(self.args, "seed", 42))
++            process_index = int(getattr(self.args, "process_index", 0))
++            effective_seed = int(seed) + process_index
++            model_to_noise = self.model
++            if getattr(self, "accelerator", None) is not None:
++                try:
++                    model_to_noise = self.accelerator.unwrap_model(self.model)
++                except Exception:
++                    model_to_noise = self.model
++
++            logger.info(
++                "[R2D] Applying Gaussian output perturbation: sigma=%s trainable_only=%s seed=%s",
++                sigma,
++                self.noise_trainable_only,
++                effective_seed,
++            )
++            add_gaussian_noise_to_weights(
++                model=model_to_noise,
++                sigma=sigma,
++                seed=effective_seed,
++                trainable_only=self.noise_trainable_only,
++            )
++            self._noise_applied = True
++
++        return super().save_model(output_dir=output_dir, _internal_call=_internal_call)
 ```
 
 </content>
@@ -1268,6 +2444,21 @@ export HF_DATASETS_CACHE=/workspace/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/workspace/unlearning/.triton
 ```
 
+## Eval batch size in same run
+
+For all scripts below (`1` to `8`), evaluation runs inside the same command and supports:
+
+- `EVAL_BATCH_SIZE` (default: `8`)
+
+Example style (same as train params):
+
+```bash
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=32 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
 ## 1) GA - DUET
 
 ```bash
@@ -1277,6 +2468,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/duet/ga_duet.sh
 ```
 
@@ -1289,6 +2483,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/popqa/ga_popqa.sh
 ```
 
@@ -1301,6 +2498,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/duet/npo_duet.sh
 ```
 
@@ -1313,6 +2513,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 bash scripts/popqa/npo_popqa.sh
 ```
 
@@ -1325,6 +2528,9 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
@@ -1340,10 +2546,43 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 bash scripts/popqa/falcon_popqa.sh
+```
+
+## 7) NPO-SAM - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+## 8) NPO-SAM - UNLamb
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+EVAL_BATCH_SIZE=8 \
+bash scripts/popqa/npo_sam_popqa.sh
 ```
 
 </content>
@@ -7738,6 +8977,75 @@ task_name: duet_undial_lora_popular
 
 </content>
 
+<content full_path="configs/experiment/unlearn/duet/r2d_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: R2D
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: retain
+  forget:
+    DUET_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${forget_split}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    noise_std: 0.0
+    noise_trainable_only: true
+
+task_name: duet_r2d_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/duet/wga_lora.yaml">
 # @package _global_
 
@@ -8512,6 +9820,75 @@ trainer:
     retain_loss_type: NLL
 
 task_name: popqa_npo_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/popqa/r2d_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: R2D
+  - override /data: unlearn
+  - override /data/datasets@data.forget: POPQA_QA_forget
+  - override /data/datasets@data.retain: POPQA_QA_retain
+  - override /eval: popqa
+
+forget_split: rare_forget5_sum
+retain_split: fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: retain
+  forget:
+    POPQA_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_UNLamb
+          split: ${forget_split}
+        question_key: ${question_key}
+  retain:
+    POPQA_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_UNLamb
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    noise_std: 0.0
+    noise_trainable_only: true
+
+task_name: popqa_r2d_lora
 
 </content>
 
@@ -11369,6 +12746,23 @@ method_args:
 
 </content>
 
+<content full_path="configs/trainer/R2D.yaml">
+defaults:
+  - finetune
+
+handler: R2D
+
+method_args:
+  noise_std: 0.0
+  noise_seed: null
+  noise_trainable_only: true
+
+  dp_epsilon: null
+  dp_delta: null
+  dp_sensitivity: null
+
+</content>
+
 <content full_path="configs/trainer/GradDiff.yaml">
 defaults:
   - finetune
@@ -11545,91 +12939,6 @@ for split in "${splits[@]}"; do
     paths.output_dir=${eval_dir} \
     retain_logs_path=null
 done
-
-</content>
-
-<content full_path="scripts/package_saves.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-if [[ ! -d "saves" ]]; then
-    echo "Error: run this script from repo root (missing ./saves directory)." >&2
-    exit 1
-fi
-
-if ! command -v zip >/dev/null 2>&1; then
-    echo "Error: 'zip' command is required but not found." >&2
-    exit 1
-fi
-
-src_dir="saves"
-clean_dir="saves-clean"
-summary_dir="saves-summary"
-zip_path="${clean_dir}.zip"
-
-# Tokenizer artifacts to exclude from saves-clean.
-tokenizer_patterns=(
-    "tokenizer.json"
-    "tokenizer_config.json"
-    "special_tokens_map.json"
-    "added_tokens.json"
-    "vocab.json"
-    "merges.txt"
-    "spiece.model"
-    "sentencepiece.bpe.model"
-    "tokenizer.model"
-)
-
-echo "[package_saves] Rebuilding ${clean_dir}, ${summary_dir}, ${zip_path}"
-rm -rf "${clean_dir}" "${summary_dir}" "${zip_path}"
-
-mkdir -p "${clean_dir}"
-
-copied_clean=0
-excluded_tokenizer=0
-copied_summary=0
-
-while IFS= read -r -d '' src_file; do
-    rel_path="${src_file#${src_dir}/}"
-    base_name="$(basename "${src_file}")"
-
-    skip=0
-    for pattern in "${tokenizer_patterns[@]}"; do
-        if [[ "${base_name}" == "${pattern}" ]]; then
-            skip=1
-            break
-        fi
-    done
-
-    if [[ "${skip}" -eq 1 ]]; then
-        excluded_tokenizer=$((excluded_tokenizer + 1))
-        continue
-    fi
-
-    dst_file="${clean_dir}/${rel_path}"
-    mkdir -p "$(dirname "${dst_file}")"
-    cp -p "${src_file}" "${dst_file}"
-    copied_clean=$((copied_clean + 1))
-done < <(find "${src_dir}" -type f -print0)
-
-echo "[package_saves] saves-clean files copied: ${copied_clean}"
-echo "[package_saves] tokenizer files excluded: ${excluded_tokenizer}"
-
-zip -rq "${zip_path}" "${clean_dir}"
-echo "[package_saves] wrote ${zip_path}"
-
-mkdir -p "${summary_dir}"
-while IFS= read -r -d '' src_file; do
-    rel_path="${src_file#${src_dir}/}"
-    dst_file="${summary_dir}/${rel_path}"
-    mkdir -p "$(dirname "${dst_file}")"
-    cp -p "${src_file}" "${dst_file}"
-    copied_summary=$((copied_summary + 1))
-done < <(find "${src_dir}" -type f -name '*_SUMMARY.json' -print0)
-
-echo "[package_saves] saves-summary files copied: ${copied_summary}"
-echo "[package_saves] done"
 
 </content>
 
@@ -12489,6 +13798,7 @@ set_forget_retain_splits
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
@@ -12498,7 +13808,7 @@ raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_betas="${BETAS:-0.01, 0.05 0.15}"
+raw_betas="${BETAS:-0.01 0.05 0.15}"
 raw_betas="${raw_betas//,/ }"
 raw_betas="${raw_betas//\"/}"
 raw_betas="${raw_betas//\'/}"
@@ -12516,7 +13826,7 @@ raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
 read -r -a gammas <<< "${raw_gammas}"
 
-raw_sam_rhos="${SAM_RHOS:-0.003 0.01 0.03}"
+raw_sam_rhos="${SAM_RHOS:-0.01}"
 raw_sam_rhos="${raw_sam_rhos//,/ }"
 raw_sam_rhos="${raw_sam_rhos//\"/}"
 raw_sam_rhos="${raw_sam_rhos//\'/}"
@@ -12585,7 +13895,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                 model.model_args.pretrained_model_name_or_path=${base_model_path} \
                                                 model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                                 model.model_args.device_map="auto" \
-                                                model.model_args.low_cpu_mem_usage=true \
+                                                ++model.model_args.low_cpu_mem_usage=true \
                                                 model.lora_config.r=${lora_r} \
                                                 model.lora_config.lora_alpha=${lora_alpha} \
                                                 model.lora_config.lora_dropout=${lora_dropout} \
@@ -12618,13 +13928,14 @@ for split in "${forget_retain_splits[@]}"; do
                                             holdout_split=${retain_split} \
                                             task_name=${task_name} \
                                             model.model_args.pretrained_model_name_or_path=${run_dir} \
-                                            model.model_args.base_model_name_or_path=${base_model_path} \
+                                            ++model.model_args.base_model_name_or_path=${base_model_path} \
                                             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                             model.model_args.device_map="auto" \
-                                            model.model_args.low_cpu_mem_usage=true \
+                                            ++model.model_args.low_cpu_mem_usage=true \
                                             model.lora_config.r=${lora_r} \
                                             model.lora_config.lora_alpha=${lora_alpha} \
                                             model.lora_config.lora_dropout=${lora_dropout} \
+                                            eval.duet.batch_size=${eval_batch_size} \
                                             eval.duet.overwrite=true \
                                             "${extra_eval_args[@]}" \
                                             paths.output_dir=${eval_dir} \
@@ -12643,6 +13954,215 @@ for split in "${forget_retain_splits[@]}"; do
                             done
                         done
                     done
+                done
+            done
+        done
+    done
+done
+
+</content>
+
+<content full_path="scripts/duet/r2d_duet.sh">
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir=$(dirname "$(realpath "$0")")
+repo_root=$(realpath "${script_dir}/../..")
+source "${script_dir}/_splits.sh"
+
+export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+echo "Master Port: $MASTER_PORT"
+
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
+lora_model="${MODEL_CONFIG:-${base_model}-lora}"
+hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb}"
+
+sft_subfolder="${SFT_SUBFOLDER:-}"
+tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
+
+use_sft_base=${USE_SFT_BASE:-1}
+if [[ "${use_sft_base}" == "1" ]]; then
+    trained_model_path="${local_sft_base}"
+    echo "[duet][R2D] Using finetuned model path ${trained_model_path}"
+else
+    trained_model_path="${hf_base_model_path}"
+    echo "[duet][R2D] Using HF base model path ${trained_model_path}"
+fi
+
+# Required rewind inputs:
+# - R2D_REWIND_CKPT_PATH
+# - or R2D_REWIND_SUBFOLDER
+# - or R2D_REWIND_STEP (resolved as checkpoint-${R2D_REWIND_STEP})
+rewind_model_path="${R2D_REWIND_CKPT_PATH:-${trained_model_path}}"
+rewind_subfolder="${R2D_REWIND_SUBFOLDER:-}"
+
+if [[ -z "${rewind_subfolder}" && -n "${R2D_REWIND_STEP:-}" ]]; then
+    if [[ -n "${sft_subfolder}" ]]; then
+        rewind_subfolder="${sft_subfolder}/checkpoint-${R2D_REWIND_STEP}"
+    else
+        rewind_subfolder="checkpoint-${R2D_REWIND_STEP}"
+    fi
+fi
+
+if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${R2D_REWIND_STEP:-}" ]]; then
+    echo "[duet][R2D] ERROR: set R2D_REWIND_CKPT_PATH or R2D_REWIND_SUBFOLDER or R2D_REWIND_STEP."
+    exit 1
+fi
+
+echo "[duet][R2D] Rewind model path: ${rewind_model_path}"
+echo "[duet][R2D] Rewind subfolder : ${rewind_subfolder}"
+
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${trained_model_path}}"
+
+extra_train_args=()
+extra_eval_args=()
+if [[ -n "${rewind_subfolder}" ]]; then
+    extra_train_args+=(+model.model_args.subfolder=${rewind_subfolder})
+    extra_eval_args+=(+model.model_args.subfolder=${rewind_subfolder})
+fi
+if [[ -n "${tokenizer_subfolder}" ]]; then
+    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+fi
+
+experiment="unlearn/duet/r2d_lora.yaml"
+trainer="R2D"
+
+output_root="${repo_root}/saves/unlearn/duet/r2d"
+mkdir -p "${output_root}"
+
+set_forget_retain_splits
+
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
+gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
+num_train_epochs=${NUM_EPOCHS:-1}
+max_steps=${R2D_MAX_STEPS:-0}
+gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
+
+raw_lrs="${LRS:-1e-5}"
+raw_lrs="${raw_lrs//,/ }"
+raw_lrs="${raw_lrs//\"/}"
+raw_lrs="${raw_lrs//\'/}"
+read -r -a lrs <<< "${raw_lrs}"
+
+lora_rs=(${LORA_RS:-"32"})
+lora_alphas=(${LORA_ALPHAS:-"64"})
+lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+
+r2d_noise_std="${R2D_NOISE_STD:-0.0}"
+r2d_noise_seed="${R2D_NOISE_SEED:-42}"
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+for split in "${forget_retain_splits[@]}"; do
+    read -r forget_split retain_split forget_label <<< "${split}"
+    if [[ -z "${forget_label:-}" ]]; then
+        forget_label="${forget_split}"
+    fi
+
+    for lr in "${lrs[@]}"; do
+        for lora_r in "${lora_rs[@]}"; do
+            for lora_alpha in "${lora_alphas[@]}"; do
+                for lora_dropout in "${lora_dropouts[@]}"; do
+                    dropout_tag=${lora_dropout//./p}
+                    rewind_tag="${R2D_REWIND_TAG:-rewind}"
+                    task_name=duet_${base_model}_${forget_label}_r2d_${rewind_tag}_lr${lr}_sigma${r2d_noise_std}_r${lora_r}_a${lora_alpha}_d${dropout_tag}
+                    run_dir=${output_root}/${task_name}
+                    eval_dir=${run_dir}/evals
+                    summary_path=${eval_dir}/DUET_SUMMARY.json
+
+                    if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
+                        echo "[duet][R2D] Skipping ${task_name}: found existing summary at ${summary_path}"
+                        continue
+                    fi
+
+                    echo "[duet][R2D] ${task_name}"
+                    echo "  rewind=${rewind_model_path} subfolder=${rewind_subfolder}"
+                    echo "  forget=${forget_split} retain=${retain_split} epochs=${num_train_epochs} max_steps=${max_steps}"
+
+                    adapter_path=${run_dir}/adapter_model.safetensors
+                    if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                        mkdir -p "${run_dir}"
+
+                        train_cmd=( \
+                            --config-name=unlearn.yaml \
+                            experiment=${experiment} \
+                            trainer=${trainer} \
+                            task_name=${task_name} \
+                            model=${lora_model} \
+                            forget_split=${forget_split} \
+                            retain_split=${retain_split} \
+                            holdout_split=${retain_split} \
+                            model.model_args.pretrained_model_name_or_path=${rewind_model_path} \
+                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                            model.model_args.device_map="auto" \
+                            model.model_args.low_cpu_mem_usage=true \
+                            model.lora_config.r=${lora_r} \
+                            model.lora_config.lora_alpha=${lora_alpha} \
+                            model.lora_config.lora_dropout=${lora_dropout} \
+                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
+                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
+                            trainer.args.num_train_epochs=${num_train_epochs} \
+                            trainer.args.gradient_checkpointing=${gradient_checkpointing} \
+                            trainer.args.learning_rate=${lr} \
+                            trainer.args.lr_scheduler_type=constant \
+                            trainer.args.warmup_ratio=0.0 \
+                            trainer.args.save_strategy=no \
+                            trainer.args.eval_strategy=no \
+                            trainer.args.do_eval=false \
+                            trainer.args.eval_on_start=false \
+                            trainer.args.report_to=none \
+                            trainer.method_args.noise_std=${r2d_noise_std} \
+                            trainer.method_args.noise_seed=${r2d_noise_seed} \
+                            trainer.method_args.noise_trainable_only=true \
+                            retain_logs_path=null \
+                            "${extra_train_args[@]}" \
+                            paths.output_dir=${run_dir} \
+                        )
+                        if [[ "${max_steps}" != "0" ]]; then
+                            train_cmd+=(trainer.args.max_steps=${max_steps})
+                        fi
+
+                        python src/train.py "${train_cmd[@]}"
+                    fi
+
+                    mkdir -p "${eval_dir}"
+                    if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+                        rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"
+                    fi
+
+                    eval_cmd=( \
+                        experiment=eval/duet/default.yaml \
+                        model=${lora_model} \
+                        forget_split=${forget_split} \
+                        holdout_split=${retain_split} \
+                        task_name=${task_name} \
+                        model.model_args.pretrained_model_name_or_path=${run_dir} \
+                        model.model_args.base_model_name_or_path=${rewind_model_path} \
+                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                        model.model_args.device_map="auto" \
+                        model.model_args.low_cpu_mem_usage=true \
+                        model.lora_config.r=${lora_r} \
+                        model.lora_config.lora_alpha=${lora_alpha} \
+                        model.lora_config.lora_dropout=${lora_dropout} \
+                        eval.duet.batch_size=${eval_batch_size} \
+                        eval.duet.overwrite=true \
+                        "${extra_eval_args[@]}" \
+                        paths.output_dir=${eval_dir} \
+                        retain_logs_path=null \
+                    )
+                    python src/eval.py "${eval_cmd[@]}"
+
+                    if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                        if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                            rm -f "${run_dir}"/*.safetensors
+                            echo "[duet][R2D] Removed safetensors from ${run_dir}"
+                        fi
+                    fi
                 done
             done
         done
@@ -13053,6 +14573,7 @@ set_forget_retain_splits
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 
 raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3}"
@@ -13136,6 +14657,7 @@ for split in "${forget_retain_splits[@]}"; do
                         model.lora_config.r=${lora_r} \
                         model.lora_config.lora_alpha=${lora_alpha} \
                         model.lora_config.lora_dropout=${lora_dropout} \
+                        eval.duet.batch_size=${eval_batch_size} \
                         eval.duet.overwrite=true \
                         "${extra_eval_args[@]}" \
                         paths.output_dir=${eval_dir} \
@@ -13208,6 +14730,7 @@ set_forget_retain_splits
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 
 raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3}"
@@ -13319,6 +14842,7 @@ for split in "${forget_retain_splits[@]}"; do
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \
+                                    eval.duet.batch_size=${eval_batch_size} \
                                     eval.duet.overwrite=true \
                                     "${extra_eval_args[@]}" \
                                     paths.output_dir=${eval_dir} \
@@ -13480,6 +15004,7 @@ set_forget_retain_splits
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
@@ -13737,6 +15262,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                 model.lora_config.r=${lora_r} \
                                                                 model.lora_config.lora_alpha=${lora_alpha} \
                                                                 model.lora_config.lora_dropout=${lora_dropout} \
+                                                                eval.duet.batch_size=${eval_batch_size} \
                                                                 eval.duet.overwrite=true \
                                                                 "${extra_eval_args[@]}" \
                                                                 paths.output_dir=${eval_dir} \
@@ -15246,6 +16772,7 @@ fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
@@ -15503,6 +17030,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                 model.lora_config.r=${lora_r} \
                                                                 model.lora_config.lora_alpha=${lora_alpha} \
                                                                 model.lora_config.lora_dropout=${lora_dropout} \
+                                                                eval.duet.batch_size=${eval_batch_size} \
                                                                 eval.duet.overwrite=true \
                                                                 "${extra_eval_args[@]}" \
                                                                 paths.output_dir=${eval_dir} \
@@ -15778,6 +17306,7 @@ fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 
 raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3 5e-3 1e-2}"
@@ -15889,6 +17418,7 @@ for split in "${forget_retain_splits[@]}"; do
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \
+                                    eval.duet.batch_size=${eval_batch_size} \
                                     eval.duet.overwrite=true \
                                     "${extra_eval_args[@]}" \
                                     paths.output_dir=${eval_dir} \
@@ -15981,6 +17511,7 @@ fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 
 raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3 5e-3 1e-2}"
@@ -16064,6 +17595,7 @@ for split in "${forget_retain_splits[@]}"; do
                         model.lora_config.r=${lora_r} \
                         model.lora_config.lora_alpha=${lora_alpha} \
                         model.lora_config.lora_dropout=${lora_dropout} \
+                        eval.duet.batch_size=${eval_batch_size} \
                         eval.duet.overwrite=true \
                         "${extra_eval_args[@]}" \
                         paths.output_dir=${eval_dir} \
@@ -16075,6 +17607,226 @@ for split in "${forget_retain_splits[@]}"; do
                         if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
                             rm -f "${run_dir}"/*.safetensors
                             echo "[popqa][GA] Removed safetensors from ${run_dir}"
+                        fi
+                    fi
+                done
+            done
+        done
+    done
+done
+
+</content>
+
+<content full_path="scripts/popqa/r2d_popqa.sh">
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir=$(dirname "$(realpath "$0")")
+repo_root=$(realpath "${script_dir}/../..")
+
+export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+echo "Master Port: $MASTER_PORT"
+
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
+lora_model="${MODEL_CONFIG:-${base_model}-lora}"
+hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/popqa/llama3.1-8b_full_5ep_ft_popqa}"
+
+sft_subfolder="${SFT_SUBFOLDER:-}"
+tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
+chat_template_tokenizer_path="${CHAT_TEMPLATE_TOKENIZER_PATH:-${repo_root}/assets/tokenizers/llama-3.1-8b-instruct-chat-template}"
+
+use_sft_base=${USE_SFT_BASE:-1}
+if [[ "${use_sft_base}" == "1" ]]; then
+    trained_model_path="${local_sft_base}"
+    echo "[popqa][R2D] Using finetuned model path ${trained_model_path}"
+else
+    trained_model_path="${hf_base_model_path}"
+    echo "[popqa][R2D] Using HF base model path ${trained_model_path}"
+fi
+
+rewind_model_path="${R2D_REWIND_CKPT_PATH:-${trained_model_path}}"
+rewind_subfolder="${R2D_REWIND_SUBFOLDER:-}"
+
+if [[ -z "${rewind_subfolder}" && -n "${R2D_REWIND_STEP:-}" ]]; then
+    if [[ -n "${sft_subfolder}" ]]; then
+        rewind_subfolder="${sft_subfolder}/checkpoint-${R2D_REWIND_STEP}"
+    else
+        rewind_subfolder="checkpoint-${R2D_REWIND_STEP}"
+    fi
+fi
+
+if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${R2D_REWIND_STEP:-}" ]]; then
+    echo "[popqa][R2D] ERROR: set R2D_REWIND_CKPT_PATH or R2D_REWIND_SUBFOLDER or R2D_REWIND_STEP."
+    exit 1
+fi
+
+echo "[popqa][R2D] Rewind model path: ${rewind_model_path}"
+echo "[popqa][R2D] Rewind subfolder : ${rewind_subfolder}"
+
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${trained_model_path}}"
+if [[ "${use_sft_base}" == "1" && "${sft_subfolder}" == "llama-3.1-8b-instruct-popqa-ft" ]]; then
+    tokenizer_model_path="${chat_template_tokenizer_path}"
+    tokenizer_subfolder=""
+fi
+
+extra_train_args=()
+extra_eval_args=()
+if [[ -n "${rewind_subfolder}" ]]; then
+    extra_train_args+=(+model.model_args.subfolder=${rewind_subfolder})
+    extra_eval_args+=(+model.model_args.subfolder=${rewind_subfolder})
+fi
+if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
+    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+fi
+
+experiment="unlearn/popqa/r2d_lora.yaml"
+trainer="R2D"
+
+output_root="${repo_root}/saves/unlearn/popqa/r2d"
+mkdir -p "${output_root}"
+
+base_forget_retain_splits=(
+    "rare_forget5_sum fast_retain_500"
+    "popular_forget5_sum fast_retain_500"
+)
+
+if [[ "${MERGE_POPULARITY_FORGET:-0}" == "1" ]]; then
+    forget_retain_splits=(
+        "rare_forget5_sum+popular_forget5_sum fast_retain_500 forget5_sum"
+    )
+else
+    forget_retain_splits=("${base_forget_retain_splits[@]}")
+fi
+
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
+gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
+num_train_epochs=${NUM_EPOCHS:-1}
+max_steps=${R2D_MAX_STEPS:-0}
+gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
+
+raw_lrs="${LRS:-1e-5}"
+raw_lrs="${raw_lrs//,/ }"
+raw_lrs="${raw_lrs//\"/}"
+raw_lrs="${raw_lrs//\'/}"
+read -r -a lrs <<< "${raw_lrs}"
+
+lora_rs=(${LORA_RS:-"32"})
+lora_alphas=(${LORA_ALPHAS:-"64"})
+lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+
+r2d_noise_std="${R2D_NOISE_STD:-0.0}"
+r2d_noise_seed="${R2D_NOISE_SEED:-42}"
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+for split in "${forget_retain_splits[@]}"; do
+    read -r forget_split retain_split forget_label <<< "${split}"
+    if [[ -z "${forget_label:-}" ]]; then
+        forget_label="${forget_split}"
+    fi
+
+    for lr in "${lrs[@]}"; do
+        for lora_r in "${lora_rs[@]}"; do
+            for lora_alpha in "${lora_alphas[@]}"; do
+                for lora_dropout in "${lora_dropouts[@]}"; do
+                    dropout_tag=${lora_dropout//./p}
+                    rewind_tag="${R2D_REWIND_TAG:-rewind}"
+                    task_name=popqa_${base_model}_${forget_label}_r2d_${rewind_tag}_lr${lr}_sigma${r2d_noise_std}_r${lora_r}_a${lora_alpha}_d${dropout_tag}
+                    run_dir=${output_root}/${task_name}
+                    eval_dir=${run_dir}/evals
+                    summary_path=${eval_dir}/POPQA_SUMMARY.json
+
+                    if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
+                        echo "[popqa][R2D] Skipping ${task_name}: found existing summary at ${summary_path}"
+                        continue
+                    fi
+
+                    echo "[popqa][R2D] ${task_name}"
+                    echo "  rewind=${rewind_model_path} subfolder=${rewind_subfolder}"
+                    echo "  forget=${forget_split} retain=${retain_split} epochs=${num_train_epochs} max_steps=${max_steps}"
+
+                    adapter_path=${run_dir}/adapter_model.safetensors
+                    if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                        mkdir -p "${run_dir}"
+
+                        train_cmd=( \
+                            --config-name=unlearn.yaml \
+                            experiment=${experiment} \
+                            trainer=${trainer} \
+                            task_name=${task_name} \
+                            model=${lora_model} \
+                            forget_split=${forget_split} \
+                            retain_split=${retain_split} \
+                            holdout_split=${retain_split} \
+                            model.model_args.pretrained_model_name_or_path=${rewind_model_path} \
+                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                            model.model_args.device_map="auto" \
+                            model.model_args.low_cpu_mem_usage=true \
+                            model.lora_config.r=${lora_r} \
+                            model.lora_config.lora_alpha=${lora_alpha} \
+                            model.lora_config.lora_dropout=${lora_dropout} \
+                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
+                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
+                            trainer.args.num_train_epochs=${num_train_epochs} \
+                            trainer.args.gradient_checkpointing=${gradient_checkpointing} \
+                            trainer.args.learning_rate=${lr} \
+                            trainer.args.lr_scheduler_type=constant \
+                            trainer.args.warmup_ratio=0.0 \
+                            trainer.args.save_strategy=no \
+                            trainer.args.eval_strategy=no \
+                            trainer.args.do_eval=false \
+                            trainer.args.eval_on_start=false \
+                            trainer.args.report_to=none \
+                            trainer.method_args.noise_std=${r2d_noise_std} \
+                            trainer.method_args.noise_seed=${r2d_noise_seed} \
+                            trainer.method_args.noise_trainable_only=true \
+                            retain_logs_path=null \
+                            "${extra_train_args[@]}" \
+                            paths.output_dir=${run_dir} \
+                        )
+                        if [[ "${max_steps}" != "0" ]]; then
+                            train_cmd+=(trainer.args.max_steps=${max_steps})
+                        fi
+
+                        python src/train.py "${train_cmd[@]}"
+                    fi
+
+                    mkdir -p "${eval_dir}"
+                    if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+                        rm -f "${summary_path}" "${eval_dir}/POPQA_EVAL.json"
+                    fi
+
+                    eval_cmd=( \
+                        experiment=eval/popqa/default.yaml \
+                        model=${lora_model} \
+                        forget_split=${forget_split} \
+                        holdout_split=${retain_split} \
+                        task_name=${task_name} \
+                        model.model_args.pretrained_model_name_or_path=${run_dir} \
+                        model.model_args.base_model_name_or_path=${rewind_model_path} \
+                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                        model.model_args.device_map="auto" \
+                        model.model_args.low_cpu_mem_usage=true \
+                        model.lora_config.r=${lora_r} \
+                        model.lora_config.lora_alpha=${lora_alpha} \
+                        model.lora_config.lora_dropout=${lora_dropout} \
+                        eval.duet.batch_size=${eval_batch_size} \
+                        eval.duet.overwrite=true \
+                        "${extra_eval_args[@]}" \
+                        paths.output_dir=${eval_dir} \
+                        retain_logs_path=null \
+                    )
+                    python src/eval.py "${eval_cmd[@]}"
+
+                    if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                        if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                            rm -f "${run_dir}"/*.safetensors
+                            echo "[popqa][R2D] Removed safetensors from ${run_dir}"
                         fi
                     fi
                 done
@@ -16518,6 +18270,7 @@ fi
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
@@ -16527,7 +18280,7 @@ raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_betas="${BETAS:-0.01, 0.05 0.15}"
+raw_betas="${BETAS:-0.01 0.05 0.15}"
 raw_betas="${raw_betas//,/ }"
 raw_betas="${raw_betas//\"/}"
 raw_betas="${raw_betas//\'/}"
@@ -16545,7 +18298,7 @@ raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
 read -r -a gammas <<< "${raw_gammas}"
 
-raw_sam_rhos="${SAM_RHOS:-0.003 0.01 0.03}"
+raw_sam_rhos="${SAM_RHOS:-0.01}"
 raw_sam_rhos="${raw_sam_rhos//,/ }"
 raw_sam_rhos="${raw_sam_rhos//\"/}"
 raw_sam_rhos="${raw_sam_rhos//\'/}"
@@ -16614,7 +18367,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                 model.model_args.pretrained_model_name_or_path=${base_model_path} \
                                                 model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                                 model.model_args.device_map="auto" \
-                                                model.model_args.low_cpu_mem_usage=true \
+                                                ++model.model_args.low_cpu_mem_usage=true \
                                                 model.lora_config.r=${lora_r} \
                                                 model.lora_config.lora_alpha=${lora_alpha} \
                                                 model.lora_config.lora_dropout=${lora_dropout} \
@@ -16647,13 +18400,14 @@ for split in "${forget_retain_splits[@]}"; do
                                             holdout_split=${retain_split} \
                                             task_name=${task_name} \
                                             model.model_args.pretrained_model_name_or_path=${run_dir} \
-                                            model.model_args.base_model_name_or_path=${base_model_path} \
+                                            ++model.model_args.base_model_name_or_path=${base_model_path} \
                                             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                             model.model_args.device_map="auto" \
-                                            model.model_args.low_cpu_mem_usage=true \
+                                            ++model.model_args.low_cpu_mem_usage=true \
                                             model.lora_config.r=${lora_r} \
                                             model.lora_config.lora_alpha=${lora_alpha} \
                                             model.lora_config.lora_dropout=${lora_dropout} \
+                                            eval.duet.batch_size=${eval_batch_size} \
                                             eval.duet.overwrite=true \
                                             "${extra_eval_args[@]}" \
                                             paths.output_dir=${eval_dir} \
@@ -17668,6 +19422,63 @@ for lr in "${lrs[@]}"; do
         done
     done
 done
+
+</content>
+
+<content full_path="experiments-speedup/popqa_npo_sam_bs_sweep_results.tsv">
+bs	ga	status	peak_mem_mib	train_runtime	steps_per_sec	samples_per_sec	run_dir
+1	32	success	35597	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs1_ga32
+2	16	success	36657	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs2_ga16
+4	8	success	39025	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs4_ga8
+8	4	success	43625	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs8_ga4
+16	2	success	48505	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs16_ga2
+32	1	oom	48535	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs32_ga1
+
+</content>
+
+<content full_path="experiments-speedup/duet_npo_sam_bs_sweep_results.tsv">
+bs	ga	status	peak_mem_mib	train_runtime	steps_per_sec	samples_per_sec	run_dir
+1	32	success	35587	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_duet_validate/bs1_ga32
+16	2	success	48549	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_duet_validate/bs16_ga2
+
+</content>
+
+<content full_path="experiments-speedup/eval_npo_sam_bs_sweep_results.tsv">
+dataset	bs	status	peak_mem_mib	wall_time_sec	total_eval_samples	samples_per_sec	run_dir
+popqa	8	success	17355	246.6311	1664	6.7469	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs8
+popqa	12	success	17355	197.6969	1664	8.4169	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs12
+popqa	16	success	17355	212.9739	1664	7.8132	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs16
+popqa	24	success	17355	198.9930	1664	8.3621	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs24
+popqa	32	success	17355	189.8022	1664	8.7670	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/popqa/bs32
+duet	8	success	17355	338.9193	1464	4.3196	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/duet/bs8
+duet	12	success	17355	270.4592	1464	5.4130	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/duet/bs12
+duet	32	success	17355	177.0171	1464	8.2704	/workspace/unlearning/experiments-speedup/eval_bs_sweep_npo_sam/duet/bs32
+
+</content>
+
+<content full_path="experiments-speedup/npo_sam_speedup_summary.tsv">
+dataset	bs	ga	status	peak_mem_mib	train_runtime	steps_per_sec	samples_per_sec	speedup_vs_bs1_ga32
+POPQA	1	32	success	35597	290.5101	0.028	0.881	1.00x
+POPQA	2	16	success	36657	153.7748	0.052	1.665	1.89x
+POPQA	4	8	success	39025	93.3486	0.086	2.742	3.11x
+POPQA	8	4	success	43625	62.2574	0.128	4.112	4.67x
+POPQA	16	2	success	48505	49.2123	0.163	5.202	5.90x
+POPQA	32	1	oom_or_fail	48535	NA	NA	NA	NA
+DUET	1	32	success	35587	292.3971	0.027	0.876	1.00x
+DUET	16	2	success	48549	55.1154	0.145	4.645	5.30x
+
+</content>
+
+<content full_path="experiments-speedup/npo_sam_eval_speedup_summary.tsv">
+dataset	bs	status	peak_mem_mib	wall_time_sec	total_eval_samples	samples_per_sec	speedup_vs_bs8
+duet	8	success	17355	338.9193	1464	4.3196	1.00x
+duet	12	success	17355	270.4592	1464	5.4130	1.25x
+duet	32	success	17355	177.0171	1464	8.2704	1.91x
+popqa	8	success	17355	246.6311	1664	6.7469	1.00x
+popqa	12	success	17355	197.6969	1664	8.4169	1.25x
+popqa	16	success	17355	212.9739	1664	7.8132	1.16x
+popqa	24	success	17355	198.9930	1664	8.3621	1.24x
+popqa	32	success	17355	189.8022	1664	8.7670	1.30x
 
 </content>
 
@@ -22768,6 +24579,7 @@ from trainer.unlearn.ada_wgd import AdaWGD, AdaWGDCallback
 from trainer.unlearn.ada_pop import AdaPop
 from trainer.unlearn.pop_dynam_b_wga import PopDynamBWGA
 from trainer.unlearn.falcon import FALCON
+from trainer.unlearn.r2d import R2D
 
 
 import logging
@@ -22857,6 +24669,7 @@ _register_trainer(AdaWGD)
 _register_trainer(AdaPop)
 _register_trainer(PopDynamBWGA)
 _register_trainer(FALCON)
+_register_trainer(R2D)
 
 </content>
 
@@ -24180,6 +25993,165 @@ class UNDIAL(GradDiff):
 
         loss = self.gamma * forget_loss + self.alpha * retain_loss
         return (loss, forget_outputs) if return_outputs else loss
+
+</content>
+
+<content full_path="src/trainer/unlearn/r2d.py">
+import logging
+import math
+from typing import Optional
+
+import torch
+
+from trainer.unlearn.base import UnlearnTrainer
+from trainer.utils import _filter_model_inputs
+
+logger = logging.getLogger(__name__)
+
+
+def _default_sigma_from_dp(epsilon: float, delta: float, sensitivity: float) -> float:
+    """
+    Dependency-free fallback for Gaussian mechanism calibration:
+        sigma = sensitivity * sqrt(2 * log(1.25 / delta)) / epsilon
+    """
+    if epsilon <= 0:
+        raise ValueError("epsilon must be > 0")
+    if not (0 < delta < 1):
+        raise ValueError("delta must be in (0, 1)")
+    if sensitivity < 0:
+        raise ValueError("sensitivity must be >= 0")
+    return float(sensitivity) * math.sqrt(2.0 * math.log(1.25 / float(delta))) / float(
+        epsilon
+    )
+
+
+@torch.no_grad()
+def _apply_noise(
+    model: torch.nn.Module,
+    sigma: float,
+    trainable_only: bool = True,
+) -> None:
+    for param in model.parameters():
+        if trainable_only and not param.requires_grad:
+            continue
+        if not torch.is_floating_point(param):
+            continue
+        noise = torch.randn_like(param, dtype=torch.float32) * sigma
+        param.add_(noise.to(dtype=param.dtype))
+
+
+@torch.no_grad()
+def add_gaussian_noise_to_weights(
+    model: torch.nn.Module,
+    sigma: float,
+    seed: Optional[int] = None,
+    trainable_only: bool = True,
+) -> None:
+    """
+    Output perturbation: add N(0, sigma^2) noise to model parameters.
+    """
+    if sigma <= 0:
+        return
+
+    if seed is None:
+        _apply_noise(model=model, sigma=sigma, trainable_only=trainable_only)
+        return
+
+    devices = []
+    if torch.cuda.is_available():
+        devices = list(range(torch.cuda.device_count()))
+
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        _apply_noise(model=model, sigma=sigma, trainable_only=trainable_only)
+
+
+class R2D(UnlearnTrainer):
+    """
+    Rewind-to-Delete (R2D) unlearning:
+    - train on retain-only NLL
+    - apply optional Gaussian output perturbation on final save
+    """
+
+    def __init__(
+        self,
+        *args,
+        noise_std: float = 0.0,
+        noise_seed: Optional[int] = None,
+        noise_trainable_only: bool = True,
+        dp_epsilon: Optional[float] = None,
+        dp_delta: Optional[float] = None,
+        dp_sensitivity: Optional[float] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.noise_std = float(noise_std)
+        self.noise_seed = noise_seed
+        self.noise_trainable_only = bool(noise_trainable_only)
+        self.dp_epsilon = dp_epsilon
+        self.dp_delta = dp_delta
+        self.dp_sensitivity = dp_sensitivity
+        self._noise_applied = False
+
+    def _resolve_sigma(self) -> float:
+        if self.noise_std < 0:
+            raise ValueError("noise_std must be >= 0")
+        if self.noise_std > 0:
+            return float(self.noise_std)
+
+        if (
+            self.dp_epsilon is not None
+            and self.dp_delta is not None
+            and self.dp_sensitivity is not None
+        ):
+            return _default_sigma_from_dp(
+                epsilon=float(self.dp_epsilon),
+                delta=float(self.dp_delta),
+                sensitivity=float(self.dp_sensitivity),
+            )
+
+        return 0.0
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        retain_inputs = _filter_model_inputs(inputs["retain"])
+        outputs = model(**retain_inputs)
+        loss = outputs.loss
+        return (loss, outputs) if return_outputs else loss
+
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        out_dir = output_dir or self.args.output_dir
+        sigma = self._resolve_sigma()
+
+        if (not self._noise_applied) and sigma > 0 and "checkpoint-" not in str(out_dir):
+            seed = self.noise_seed
+            if seed is None:
+                seed = int(getattr(self.args, "seed", 42))
+            process_index = int(getattr(self.args, "process_index", 0))
+            effective_seed = int(seed) + process_index
+            model_to_noise = self.model
+            if getattr(self, "accelerator", None) is not None:
+                try:
+                    model_to_noise = self.accelerator.unwrap_model(self.model)
+                except Exception:
+                    model_to_noise = self.model
+
+            logger.info(
+                "[R2D] Applying Gaussian output perturbation: sigma=%s trainable_only=%s seed=%s",
+                sigma,
+                self.noise_trainable_only,
+                effective_seed,
+            )
+            add_gaussian_noise_to_weights(
+                model=model_to_noise,
+                sigma=sigma,
+                seed=effective_seed,
+                trainable_only=self.noise_trainable_only,
+            )
+            self._noise_applied = True
+
+        return super().save_model(output_dir=output_dir, _internal_call=_internal_call)
 
 </content>
 
