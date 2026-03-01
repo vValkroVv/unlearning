@@ -1,0 +1,7 @@
+bs	ga	status	peak_mem_mib	train_runtime	steps_per_sec	samples_per_sec	run_dir
+1	32	success	35597	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs1_ga32
+2	16	success	36657	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs2_ga16
+4	8	success	39025	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs4_ga8
+8	4	success	43625	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs8_ga4
+16	2	success	48505	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs16_ga2
+32	1	oom	48535	NA	NA	NA	/workspace/unlearning/saves/benchmarks/npo_sam_bs_sweep_popqa/bs32_ga1

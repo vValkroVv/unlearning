@@ -52,6 +52,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
 bash scripts/duet/ga_duet.sh
 ```
 
@@ -64,6 +66,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
 bash scripts/popqa/ga_popqa.sh
 ```
 
@@ -76,6 +80,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
 bash scripts/duet/npo_duet.sh
 ```
 
@@ -88,6 +94,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
 bash scripts/popqa/npo_popqa.sh
 ```
 
@@ -100,6 +108,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
@@ -115,6 +125,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
 MI_SELECT_LAYERS=1 \
 MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
@@ -130,6 +142,8 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
@@ -142,5 +156,7 @@ USE_SFT_BASE=1 \
 LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
 SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
 bash scripts/popqa/npo_sam_popqa.sh
 ```
