@@ -146,7 +146,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                 model.model_args.pretrained_model_name_or_path=${base_model_path} \
                                                 model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                                 model.model_args.device_map="auto" \
-                                                model.model_args.low_cpu_mem_usage=true \
+                                                +model.model_args.low_cpu_mem_usage=true \
                                                 model.lora_config.r=${lora_r} \
                                                 model.lora_config.lora_alpha=${lora_alpha} \
                                                 model.lora_config.lora_dropout=${lora_dropout} \
@@ -179,10 +179,10 @@ for split in "${forget_retain_splits[@]}"; do
                                             holdout_split=${retain_split} \
                                             task_name=${task_name} \
                                             model.model_args.pretrained_model_name_or_path=${run_dir} \
-                                            model.model_args.base_model_name_or_path=${base_model_path} \
+                                            +model.model_args.base_model_name_or_path=${base_model_path} \
                                             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                             model.model_args.device_map="auto" \
-                                            model.model_args.low_cpu_mem_usage=true \
+                                            +model.model_args.low_cpu_mem_usage=true \
                                             model.lora_config.r=${lora_r} \
                                             model.lora_config.lora_alpha=${lora_alpha} \
                                             model.lora_config.lora_dropout=${lora_dropout} \
