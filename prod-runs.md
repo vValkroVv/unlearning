@@ -120,3 +120,27 @@ MI_MODEL_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 MI_TOKENIZER_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
 bash scripts/popqa/falcon_popqa.sh
 ```
+
+## 7) NPO-SAM - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+## 8) NPO-SAM - UNLamb
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+bash scripts/popqa/npo_sam_popqa.sh
+```
