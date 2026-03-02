@@ -1582,6 +1582,63 @@ Notes:
 - LoKU includes an extra importance-measurement stage before training, so keep `IMPORTANCE_BATCH_SIZE` conservative.
 - For smoke checks use `IMPORTANCE_MAX_STEPS` (for example `50`) before full runs.
 
+## LoKU Importance Path and Auto-Delete
+
+Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
+
+- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
+- `IMPORTANCE_ROOT`: custom directory root for auto naming.
+- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
+
+### Example A: Exact file path
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+LRS="1e-4" \
+bash scripts/duet/loku_duet.sh
+```
+
+### Example B: Directory root + template placeholders
+
+Supported placeholders in `IMPORTANCE_PATH`:
+- `{base_model}`
+- `{forget_label}`
+- `{retain_split}`
+- `{targets_tag}`
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_ROOT=/data/home/vkropoti/unlearning/importance_custom \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+LRS="1e-4" \
+bash scripts/popqa/loku_popqa.sh
+```
+
 </content>
 
 <content full_path="r2d_integration_diff.md">
@@ -2981,6 +3038,61 @@ bash scripts/popqa/loku_popqa.sh
 Notes:
 - LoKU runs a separate importance pass before training; keep `IMPORTANCE_BATCH_SIZE` small (usually `1`) to avoid OOM.
 - If you only need a quick validation run, set `IMPORTANCE_MAX_STEPS` to a small value (for example `50`).
+
+## LoKU Importance Path and Auto-Delete
+
+Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
+
+- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
+- `IMPORTANCE_ROOT`: custom directory root for auto naming.
+- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
+
+### Example A: Exact file path
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/workspace/unlearning/saves/importances/tmp/duet_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+EVAL_BATCH_SIZE=8 \
+LRS="1e-4" \
+bash scripts/duet/loku_duet.sh
+```
+
+### Example B: Directory root + template placeholders
+
+Supported placeholders in `IMPORTANCE_PATH`:
+- `{base_model}`
+- `{forget_label}`
+- `{retain_split}`
+- `{targets_tag}`
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_ROOT=/workspace/unlearning/saves/importances/custom \
+IMPORTANCE_PATH=/workspace/unlearning/saves/importances/custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+EVAL_BATCH_SIZE=8 \
+LRS="1e-4" \
+bash scripts/popqa/loku_popqa.sh
+```
 
 </content>
 
@@ -5450,6 +5562,612 @@ index 0000000..38d6ea2
 +        done
 +    done
 +done
+```
+
+## 11) LoKU Grid Search Defaults Update (2026-03-03)
+
+Updated scripts:
+- `scripts/duet/loku_duet.sh`
+- `scripts/popqa/loku_popqa.sh`
+
+Default grid-search values now match:
+
+```bash
+LRS="5e-5,1e-4,2e-4" \
+IHL_ALPHAS="1.0" \
+ALPHAS="0.5,1.0" \
+GAMMAS="0.5,1.0,2.0,4.0" \
+LORA_RS="32" \
+LORA_ALPHAS="64" \
+LORA_DROPOUTS="0.0"
+```
+
+Both scripts also now parse `LORA_RS`, `LORA_ALPHAS`, and `LORA_DROPOUTS` as comma-separated grids (same style as `LRS/ALPHAS/GAMMAS`).
+
+### DUET example
+
+```bash
+LRS="5e-5,1e-4,2e-4" \
+IHL_ALPHAS="1.0" \
+ALPHAS="0.5,1.0" \
+GAMMAS="0.5,1.0,2.0,4.0" \
+LORA_RS="32" \
+LORA_ALPHAS="64" \
+LORA_DROPOUTS="0.0" \
+bash scripts/duet/loku_duet.sh
+```
+
+### POPQA example
+
+```bash
+LRS="5e-5,1e-4,2e-4" \
+IHL_ALPHAS="1.0" \
+ALPHAS="0.5,1.0" \
+GAMMAS="0.5,1.0,2.0,4.0" \
+LORA_RS="32" \
+LORA_ALPHAS="64" \
+LORA_DROPOUTS="0.0" \
+bash scripts/popqa/loku_popqa.sh
+```
+
+## Recent updates (2026-03-02, runbook commands for importance path + auto-delete)
+
+```diff
+diff --git a/prod-runs.md b/prod-runs.md
+index 2b66fd1..63a8352 100644
+--- a/prod-runs.md
++++ b/prod-runs.md
+@@ -223,3 +223,58 @@ Notes:
+ - LoKU runs a separate importance pass before training; keep `IMPORTANCE_BATCH_SIZE` small (usually `1`) to avoid OOM.
+ - If you only need a quick validation run, set `IMPORTANCE_MAX_STEPS` to a small value (for example `50`).
++
++## LoKU Importance Path and Auto-Delete
++
++Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
++
++- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
++- `IMPORTANCE_ROOT`: custom directory root for auto naming.
++- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
++
++### Example A: Exact file path
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_PATH=/workspace/unlearning/saves/importances/tmp/duet_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++LRS="1e-4" \
++bash scripts/duet/loku_duet.sh
++```
++
++### Example B: Directory root + template placeholders
++
++Supported placeholders in `IMPORTANCE_PATH`:
++- `{base_model}`
++- `{forget_label}`
++- `{retain_split}`
++- `{targets_tag}`
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_ROOT=/workspace/unlearning/saves/importances/custom \
++IMPORTANCE_PATH=/workspace/unlearning/saves/importances/custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++LRS="1e-4" \
++bash scripts/popqa/loku_popqa.sh
++```
+diff --git a/prod-gpu-runs.md b/prod-gpu-runs.md
+index d665f45..5e6c444 100644
+--- a/prod-gpu-runs.md
++++ b/prod-gpu-runs.md
+@@ -246,3 +246,60 @@ Notes:
+ - LoKU includes an extra importance-measurement stage before training, so keep `IMPORTANCE_BATCH_SIZE` conservative.
+ - For smoke checks use `IMPORTANCE_MAX_STEPS` (for example `50`) before full runs.
++
++## LoKU Importance Path and Auto-Delete
++
++Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
++
++- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
++- `IMPORTANCE_ROOT`: custom directory root for auto naming.
++- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
++
++### Example A: Exact file path
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
++LRS="1e-4" \
++bash scripts/duet/loku_duet.sh
++```
++
++### Example B: Directory root + template placeholders
++
++Supported placeholders in `IMPORTANCE_PATH`:
++- `{base_model}`
++- `{forget_label}`
++- `{retain_split}`
++- `{targets_tag}`
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_ROOT=/data/home/vkropoti/unlearning/importance_custom \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
++LRS="1e-4" \
++bash scripts/popqa/loku_popqa.sh
++```
+```
+
+## Recent updates (2026-03-02)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index 7665bbf..9557ee6 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -90,7 +90,13 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
+ fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
+ run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
+ 
+-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
++loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
++loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
++loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
++loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
++loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
++
++targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
+ force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
+ force_rerun="${FORCE_RERUN:-0}"
+ 
+@@ -125,6 +131,7 @@ for split in "${forget_retain_splits[@]}"; do
+             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+             model.model_args.device_map=null \
+             ++model.model_args.low_cpu_mem_usage=true \
++            "model.lora_config.target_modules=${loku_target_modules}" \
+             trainer.args.per_device_train_batch_size=${importance_batch_size} \
+             trainer.args.gradient_accumulation_steps=1 \
+             trainer.args.gradient_checkpointing=false \
+@@ -171,6 +178,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                         model.model_args.device_map="auto" \
+                                         ++model.model_args.low_cpu_mem_usage=true \
++                                        "model.lora_config.target_modules=${loku_target_modules}" \
+                                         model.lora_config.r=${lora_r} \
+                                         model.lora_config.lora_alpha=${lora_alpha} \
+                                         model.lora_config.lora_dropout=${lora_dropout} \
+@@ -179,6 +187,10 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.num_train_epochs=${num_train_epochs} \
+                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
+                                         trainer.args.learning_rate=${lr} \
++                                        trainer.args.weight_decay=${loku_weight_decay} \
++                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
++                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+                                         trainer.method_args.gamma=${gamma} \
+@@ -209,6 +221,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                     model.model_args.device_map="auto" \
+                                     ++model.model_args.low_cpu_mem_usage=true \
++                                    "model.lora_config.target_modules=${loku_target_modules}" \
+                                     model.lora_config.r=${lora_r} \
+                                     model.lora_config.lora_alpha=${lora_alpha} \
+                                     model.lora_config.lora_dropout=${lora_dropout} \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index 38d6ea2..46998dc 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -105,7 +105,13 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
+ fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
+ run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
+ 
+-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
++loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
++loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
++loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
++loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
++loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
++
++targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
+ force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
+ force_rerun="${FORCE_RERUN:-0}"
+ 
+@@ -140,6 +146,7 @@ for split in "${forget_retain_splits[@]}"; do
+             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+             model.model_args.device_map=null \
+             ++model.model_args.low_cpu_mem_usage=true \
++            "model.lora_config.target_modules=${loku_target_modules}" \
+             trainer.args.per_device_train_batch_size=${importance_batch_size} \
+             trainer.args.gradient_accumulation_steps=1 \
+             trainer.args.gradient_checkpointing=false \
+@@ -186,6 +193,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                         model.model_args.device_map="auto" \
+                                         ++model.model_args.low_cpu_mem_usage=true \
++                                        "model.lora_config.target_modules=${loku_target_modules}" \
+                                         model.lora_config.r=${lora_r} \
+                                         model.lora_config.lora_alpha=${lora_alpha} \
+                                         model.lora_config.lora_dropout=${lora_dropout} \
+@@ -194,6 +202,10 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.num_train_epochs=${num_train_epochs} \
+                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
+                                         trainer.args.learning_rate=${lr} \
++                                        trainer.args.weight_decay=${loku_weight_decay} \
++                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
++                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+                                         trainer.method_args.gamma=${gamma} \
+@@ -224,6 +236,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                     model.model_args.device_map="auto" \
+                                     ++model.model_args.low_cpu_mem_usage=true \
++                                    "model.lora_config.target_modules=${loku_target_modules}" \
+                                     model.lora_config.r=${lora_r} \
+                                     model.lora_config.lora_alpha=${lora_alpha} \
+                                     model.lora_config.lora_dropout=${lora_dropout} \
+diff --git a/src/model/fila.py b/src/model/fila.py
+index 064839d..34a3e46 100644
+--- a/src/model/fila.py
++++ b/src/model/fila.py
+@@ -19,7 +19,7 @@ def canonicalize_weight_name(name: str) -> str:
+ 
+ 
+ def _weight_matches_targets(weight_name: str, target_modules: Sequence[str]) -> bool:
+-    return any(weight_name.endswith(f".{target}.weight") for target in target_modules)
++    return any(target in weight_name for target in target_modules)
+ 
+ 
+ def get_lora_layer_map(
+diff --git a/src/tools/loku_measure_importance.py b/src/tools/loku_measure_importance.py
+index 4cb0dd7..aa8420b 100755
+--- a/src/tools/loku_measure_importance.py
++++ b/src/tools/loku_measure_importance.py
+@@ -81,6 +81,11 @@ def _resolve_target_modules(cfg) -> List[str]:
+     target_modules = list(lora_cfg.get("target_modules", []) or [])
+     if not target_modules:
+         raise ValueError("model.lora_config.target_modules must be non-empty.")
++    if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
++        raise ValueError(
++            "LoKU importance measurement requires `lm_head` to be excluded from "
++            "model.lora_config.target_modules."
++        )
+     return target_modules
+ 
+ 
+@@ -95,6 +100,8 @@ def _prepare_model_and_data(cfg, args: argparse.Namespace):
+     template_args = model_cfg.template_args
+ 
+     model, tokenizer = get_model(model_cfg)
++    if hasattr(model, "config") and model.config is not None:
++        model.config.use_cache = False
+     device = _select_device(args)
+     if getattr(model, "hf_device_map", None) is None:
+         model = model.to(device)
+diff --git a/src/train.py b/src/train.py
+index 30c9174..d1d2c73 100644
+--- a/src/train.py
++++ b/src/train.py
+@@ -19,6 +19,8 @@ def main(cfg: DictConfig):
+     template_args = model_cfg.template_args
+     assert model_cfg is not None, "Invalid model yaml passed in train config."
+     model, tokenizer = get_model(model_cfg)
++    if hasattr(model, "config") and model.config is not None:
++        model.config.use_cache = False
+ 
+     # Load Dataset
+     data_cfg = cfg.data
+diff --git a/src/trainer/unlearn/loku.py b/src/trainer/unlearn/loku.py
+index 81a02d9..b7af0a2 100644
+--- a/src/trainer/unlearn/loku.py
++++ b/src/trainer/unlearn/loku.py
+@@ -70,6 +70,11 @@ class LoKU(GradDiff):
+         target_modules = list(getattr(cfg, "target_modules", []) or [])
+         if not target_modules:
+             raise ValueError("LoKU FILA needs non-empty model.lora_config.target_modules.")
++        if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
++            raise ValueError(
++                "LoKU requires `lm_head` to be excluded from model.lora_config.target_modules "
++                "to match the official implementation."
++            )
+ 
+         rank = int(getattr(cfg, "r", 0))
+         if rank <= 0:
+diff --git a/src/trainer/utils.py b/src/trainer/utils.py
+index a74c45a..c3db135 100644
+--- a/src/trainer/utils.py
++++ b/src/trainer/utils.py
+@@ -150,29 +150,28 @@ def ihl_loss_from_logits(
+     ignore_index: int = -100,
+     alpha: float = 1.0,
+ ) -> torch.Tensor:
+-    """Inverted Hinge Loss (IHL) on next-token probabilities.
+-
+-    Minimizing this loss encourages the true-token probability to be lower than
+-    the strongest alternative by a margin alpha.
+-    """
++    """Inverted Hinge Loss aligned with the official LoKU helper flow."""
+     shift_logits = logits[..., :-1, :].contiguous()
+     shift_labels = labels[..., 1:].contiguous()
+ 
++    shift_logits = shift_logits.view(-1, shift_logits.size(-1))
++    shift_labels = shift_labels.view(-1)
++
+     valid_mask = shift_labels != ignore_index
+     if not valid_mask.any():
+         return shift_logits.new_zeros(())
+ 
+-    probs = shift_logits.softmax(dim=-1)
+-    probs = probs[valid_mask]  # [N, V]
+-    targets = shift_labels[valid_mask]  # [N]
++    preds = shift_logits[valid_mask, :]
++    targets = shift_labels[valid_mask]
++
++    if not torch.all((preds >= 0) * (preds <= 1)):
++        preds = preds.softmax(dim=1)
+ 
+-    p_true = probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # [N]
+-    probs_other = probs.clone()
+-    probs_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
+-    p_other = probs_other.max(dim=1).values  # [N]
+-    margins = p_true - p_other
++    margins = preds.gather(1, targets.unsqueeze(1)).squeeze(1)
++    preds_other = preds.clone()
++    preds_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
++    margins = margins - preds_other.max(dim=1).values
+ 
+-    # Inverted hinge: alpha + margin (official LoKU convention).
+     measures = (float(alpha) + margins).clamp_min(0.0)
+     return measures.mean()
+ 
+```
+
+## Recent updates (2026-03-02, FILA memory path)
+
+```diff
+diff --git a/src/model/fila.py b/src/model/fila.py
+index 34a3e46..cac0c6e 100644
+--- a/src/model/fila.py
++++ b/src/model/fila.py
+@@ -166,9 +166,8 @@ def apply_fila_initialization(
+         device = base_weight.device
+         weight_fp32 = base_weight.float()
+         imp = (imp_f.float() / f_cnt) / (float(eps) + (imp_r.float() / r_cnt))
+-        imp = imp.to(device=device, dtype=torch.float32)
+-
+         row_importance = imp.sum(dim=1).clamp_min(0.0).sqrt()
++        row_importance = row_importance.to(device=device, dtype=torch.float32)
+         weighted_w = row_importance.unsqueeze(1) * weight_fp32
+ 
+         a_weight = layer.lora_A[adapter_name].weight.data
+```
+
+## Recent updates (2026-03-02, LoKU script Hydra warmup fix)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index 68a21cd..6567cae 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -189,7 +189,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.learning_rate=${lr} \
+                                         trainer.args.weight_decay=${loku_weight_decay} \
+                                         trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+-                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                         trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index ef8fe65..f832ba2 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -204,7 +204,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.learning_rate=${lr} \
+                                         trainer.args.weight_decay=${loku_weight_decay} \
+                                         trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+-                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                         trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+```
+
+## Recent updates (2026-03-02, configurable importance path + auto-delete)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index 6567cae..c6b8207 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -46,7 +46,8 @@ experiment="unlearn/duet/loku_lora.yaml"
+ trainer="LoKU"
+ 
+ output_root="${repo_root}/saves/unlearn/duet/loku"
+-importance_root="${repo_root}/saves/importances/duet/loku"
++importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
++importance_path_template="${IMPORTANCE_PATH:-}"
+ mkdir -p "${output_root}" "${importance_root}"
+@@ -104,7 +105,51 @@ lora_rs=(${LORA_RS:-"32"})
+ lora_alphas=(${LORA_ALPHAS:-"64"})
+ lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
++delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+ 
++importance_cleanup_paths=()
++
++resolve_importance_path() {
++    local forget_label="$1"
++    local retain_split="$2"
++    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    if [[ -n "${importance_path_template}" ]]; then
++        path="${importance_path_template}"
++        path="${path//\{base_model\}/${base_model}}"
++        path="${path//\{forget_label\}/${forget_label}}"
++        path="${path//\{retain_split\}/${retain_split}}"
++        path="${path//\{targets_tag\}/${targets_tag}}"
++    fi
++    echo "${path}"
++}
++
++register_importance_cleanup_path() {
++    local path="$1"
++    local existing
++    for existing in "${importance_cleanup_paths[@]}"; do
++        if [[ "${existing}" == "${path}" ]]; then
++            return
++        fi
++    done
++    importance_cleanup_paths+=("${path}")
++}
++
++cleanup_importance_files() {
++    if [[ "${delete_importance_after_run}" != "1" ]]; then
++        return
++    fi
++    local path
++    for path in "${importance_cleanup_paths[@]}"; do
++        if [[ -f "${path}" ]]; then
++            rm -f "${path}"
++            echo "[duet][LoKU] Removed importance file ${path}"
++        fi
++    done
++}
++
++trap cleanup_importance_files EXIT
++
+ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+@@ -116,7 +161,10 @@ for split in "${forget_retain_splits[@]}"; do
+         forget_label="${forget_split}"
+     fi
+ 
+-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
++    mkdir -p "$(dirname "${imp_path}")"
++    register_importance_cleanup_path "${imp_path}"
++
+     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
+         echo "[duet][LoKU] Measuring importance -> ${imp_path}"
+         python src/tools/loku_measure_importance.py \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index f832ba2..f35c7b4 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -52,7 +52,8 @@ experiment="unlearn/popqa/loku_lora.yaml"
+ trainer="LoKU"
+ 
+ output_root="${repo_root}/saves/unlearn/popqa/loku"
+-importance_root="${repo_root}/saves/importances/popqa/loku"
++importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/popqa/loku}"
++importance_path_template="${IMPORTANCE_PATH:-}"
+ mkdir -p "${output_root}" "${importance_root}"
+@@ -119,7 +120,51 @@ lora_rs=(${LORA_RS:-"32"})
+ lora_alphas=(${LORA_ALPHAS:-"64"})
+ lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
++delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+ 
++importance_cleanup_paths=()
++
++resolve_importance_path() {
++    local forget_label="$1"
++    local retain_split="$2"
++    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    if [[ -n "${importance_path_template}" ]]; then
++        path="${importance_path_template}"
++        path="${path//\{base_model\}/${base_model}}"
++        path="${path//\{forget_label\}/${forget_label}}"
++        path="${path//\{retain_split\}/${retain_split}}"
++        path="${path//\{targets_tag\}/${targets_tag}}"
++    fi
++    echo "${path}"
++}
++
++register_importance_cleanup_path() {
++    local path="$1"
++    local existing
++    for existing in "${importance_cleanup_paths[@]}"; do
++        if [[ "${existing}" == "${path}" ]]; then
++            return
++        fi
++    done
++    importance_cleanup_paths+=("${path}")
++}
++
++cleanup_importance_files() {
++    if [[ "${delete_importance_after_run}" != "1" ]]; then
++        return
++    fi
++    local path
++    for path in "${importance_cleanup_paths[@]}"; do
++        if [[ -f "${path}" ]]; then
++            rm -f "${path}"
++            echo "[popqa][LoKU] Removed importance file ${path}"
++        fi
++    done
++}
++
++trap cleanup_importance_files EXIT
++
+ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+@@ -131,7 +176,10 @@ for split in "${forget_retain_splits[@]}"; do
+         forget_label="${forget_split}"
+     fi
+ 
+-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
++    mkdir -p "$(dirname "${imp_path}")"
++    register_importance_cleanup_path "${imp_path}"
++
+     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
+         echo "[popqa][LoKU] Measuring importance -> ${imp_path}"
+         python src/tools/loku_measure_importance.py \
 ```
 
 </content>
@@ -17113,7 +17831,8 @@ experiment="unlearn/duet/loku_lora.yaml"
 trainer="LoKU"
 
 output_root="${repo_root}/saves/unlearn/duet/loku"
-importance_root="${repo_root}/saves/importances/duet/loku"
+importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
+importance_path_template="${IMPORTANCE_PATH:-}"
 mkdir -p "${output_root}" "${importance_root}"
 
 # Match current DUET default behavior used by NPO-SAM/FALCON scripts.
@@ -17128,7 +17847,7 @@ eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-4}"
+raw_lrs="${LRS:-5e-5,1e-4,2e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -17140,13 +17859,13 @@ raw_ihl_alphas="${raw_ihl_alphas//\"/}"
 raw_ihl_alphas="${raw_ihl_alphas//\'/}"
 read -r -a ihl_alphas <<< "${raw_ihl_alphas}"
 
-raw_alphas="${ALPHAS:-1.0}"
+raw_alphas="${ALPHAS:-0.5,1.0}"
 raw_alphas="${raw_alphas//,/ }"
 raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-0.5,1.0,2.0,4.0}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
@@ -17157,14 +17876,77 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
 fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
 run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
 
-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
+loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
+loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
+loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
+loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
+loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
+
+targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
 force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
 force_rerun="${FORCE_RERUN:-0}"
 
-lora_rs=(${LORA_RS:-"32"})
-lora_alphas=(${LORA_ALPHAS:-"64"})
-lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+raw_lora_rs="${LORA_RS:-32}"
+raw_lora_rs="${raw_lora_rs//,/ }"
+raw_lora_rs="${raw_lora_rs//\"/}"
+raw_lora_rs="${raw_lora_rs//\'/}"
+read -r -a lora_rs <<< "${raw_lora_rs}"
+
+raw_lora_alphas="${LORA_ALPHAS:-64}"
+raw_lora_alphas="${raw_lora_alphas//,/ }"
+raw_lora_alphas="${raw_lora_alphas//\"/}"
+raw_lora_alphas="${raw_lora_alphas//\'/}"
+read -r -a lora_alphas <<< "${raw_lora_alphas}"
+
+raw_lora_dropouts="${LORA_DROPOUTS:-0.0}"
+raw_lora_dropouts="${raw_lora_dropouts//,/ }"
+raw_lora_dropouts="${raw_lora_dropouts//\"/}"
+raw_lora_dropouts="${raw_lora_dropouts//\'/}"
+read -r -a lora_dropouts <<< "${raw_lora_dropouts}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+
+importance_cleanup_paths=()
+
+resolve_importance_path() {
+    local forget_label="$1"
+    local retain_split="$2"
+    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
+    if [[ -n "${importance_path_template}" ]]; then
+        path="${importance_path_template}"
+        path="${path//\{base_model\}/${base_model}}"
+        path="${path//\{forget_label\}/${forget_label}}"
+        path="${path//\{retain_split\}/${retain_split}}"
+        path="${path//\{targets_tag\}/${targets_tag}}"
+    fi
+    echo "${path}"
+}
+
+register_importance_cleanup_path() {
+    local path="$1"
+    local existing
+    for existing in "${importance_cleanup_paths[@]}"; do
+        if [[ "${existing}" == "${path}" ]]; then
+            return
+        fi
+    done
+    importance_cleanup_paths+=("${path}")
+}
+
+cleanup_importance_files() {
+    if [[ "${delete_importance_after_run}" != "1" ]]; then
+        return
+    fi
+    local path
+    for path in "${importance_cleanup_paths[@]}"; do
+        if [[ -f "${path}" ]]; then
+            rm -f "${path}"
+            echo "[duet][LoKU] Removed importance file ${path}"
+        fi
+    done
+}
+
+trap cleanup_importance_files EXIT
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -17174,7 +17956,9 @@ for split in "${forget_retain_splits[@]}"; do
         forget_label="${forget_split}"
     fi
 
-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
+    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
+    mkdir -p "$(dirname "${imp_path}")"
+    register_importance_cleanup_path "${imp_path}"
     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
         echo "[duet][LoKU] Measuring importance -> ${imp_path}"
         python src/tools/loku_measure_importance.py \
@@ -17192,6 +17976,7 @@ for split in "${forget_retain_splits[@]}"; do
             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
             model.model_args.device_map=null \
             ++model.model_args.low_cpu_mem_usage=true \
+            "model.lora_config.target_modules=${loku_target_modules}" \
             trainer.args.per_device_train_batch_size=${importance_batch_size} \
             trainer.args.gradient_accumulation_steps=1 \
             trainer.args.gradient_checkpointing=false \
@@ -17238,6 +18023,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                         model.model_args.device_map="auto" \
                                         ++model.model_args.low_cpu_mem_usage=true \
+                                        "model.lora_config.target_modules=${loku_target_modules}" \
                                         model.lora_config.r=${lora_r} \
                                         model.lora_config.lora_alpha=${lora_alpha} \
                                         model.lora_config.lora_dropout=${lora_dropout} \
@@ -17246,6 +18032,10 @@ for split in "${forget_retain_splits[@]}"; do
                                         trainer.args.num_train_epochs=${num_train_epochs} \
                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
                                         trainer.args.learning_rate=${lr} \
+                                        trainer.args.weight_decay=${loku_weight_decay} \
+                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
                                         trainer.method_args.alpha=${alpha} \
                                         trainer.method_args.gamma=${gamma} \
@@ -17276,6 +18066,7 @@ for split in "${forget_retain_splits[@]}"; do
                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                     model.model_args.device_map="auto" \
                                     ++model.model_args.low_cpu_mem_usage=true \
+                                    "model.lora_config.target_modules=${loku_target_modules}" \
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \
@@ -20802,7 +21593,8 @@ experiment="unlearn/popqa/loku_lora.yaml"
 trainer="LoKU"
 
 output_root="${repo_root}/saves/unlearn/popqa/loku"
-importance_root="${repo_root}/saves/importances/popqa/loku"
+importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/popqa/loku}"
+importance_path_template="${IMPORTANCE_PATH:-}"
 mkdir -p "${output_root}" "${importance_root}"
 
 base_forget_retain_splits=(
@@ -20826,7 +21618,7 @@ eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-4}"
+raw_lrs="${LRS:-5e-5,1e-4,2e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -20838,13 +21630,13 @@ raw_ihl_alphas="${raw_ihl_alphas//\"/}"
 raw_ihl_alphas="${raw_ihl_alphas//\'/}"
 read -r -a ihl_alphas <<< "${raw_ihl_alphas}"
 
-raw_alphas="${ALPHAS:-1.0}"
+raw_alphas="${ALPHAS:-0.5,1.0}"
 raw_alphas="${raw_alphas//,/ }"
 raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-0.5,1.0,2.0,4.0}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
@@ -20855,14 +21647,77 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
 fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
 run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
 
-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
+loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
+loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
+loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
+loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
+loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
+
+targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
 force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
 force_rerun="${FORCE_RERUN:-0}"
 
-lora_rs=(${LORA_RS:-"32"})
-lora_alphas=(${LORA_ALPHAS:-"64"})
-lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+raw_lora_rs="${LORA_RS:-32}"
+raw_lora_rs="${raw_lora_rs//,/ }"
+raw_lora_rs="${raw_lora_rs//\"/}"
+raw_lora_rs="${raw_lora_rs//\'/}"
+read -r -a lora_rs <<< "${raw_lora_rs}"
+
+raw_lora_alphas="${LORA_ALPHAS:-64}"
+raw_lora_alphas="${raw_lora_alphas//,/ }"
+raw_lora_alphas="${raw_lora_alphas//\"/}"
+raw_lora_alphas="${raw_lora_alphas//\'/}"
+read -r -a lora_alphas <<< "${raw_lora_alphas}"
+
+raw_lora_dropouts="${LORA_DROPOUTS:-0.0}"
+raw_lora_dropouts="${raw_lora_dropouts//,/ }"
+raw_lora_dropouts="${raw_lora_dropouts//\"/}"
+raw_lora_dropouts="${raw_lora_dropouts//\'/}"
+read -r -a lora_dropouts <<< "${raw_lora_dropouts}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+
+importance_cleanup_paths=()
+
+resolve_importance_path() {
+    local forget_label="$1"
+    local retain_split="$2"
+    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
+    if [[ -n "${importance_path_template}" ]]; then
+        path="${importance_path_template}"
+        path="${path//\{base_model\}/${base_model}}"
+        path="${path//\{forget_label\}/${forget_label}}"
+        path="${path//\{retain_split\}/${retain_split}}"
+        path="${path//\{targets_tag\}/${targets_tag}}"
+    fi
+    echo "${path}"
+}
+
+register_importance_cleanup_path() {
+    local path="$1"
+    local existing
+    for existing in "${importance_cleanup_paths[@]}"; do
+        if [[ "${existing}" == "${path}" ]]; then
+            return
+        fi
+    done
+    importance_cleanup_paths+=("${path}")
+}
+
+cleanup_importance_files() {
+    if [[ "${delete_importance_after_run}" != "1" ]]; then
+        return
+    fi
+    local path
+    for path in "${importance_cleanup_paths[@]}"; do
+        if [[ -f "${path}" ]]; then
+            rm -f "${path}"
+            echo "[popqa][LoKU] Removed importance file ${path}"
+        fi
+    done
+}
+
+trap cleanup_importance_files EXIT
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -20872,7 +21727,9 @@ for split in "${forget_retain_splits[@]}"; do
         forget_label="${forget_split}"
     fi
 
-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
+    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
+    mkdir -p "$(dirname "${imp_path}")"
+    register_importance_cleanup_path "${imp_path}"
     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
         echo "[popqa][LoKU] Measuring importance -> ${imp_path}"
         python src/tools/loku_measure_importance.py \
@@ -20890,6 +21747,7 @@ for split in "${forget_retain_splits[@]}"; do
             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
             model.model_args.device_map=null \
             ++model.model_args.low_cpu_mem_usage=true \
+            "model.lora_config.target_modules=${loku_target_modules}" \
             trainer.args.per_device_train_batch_size=${importance_batch_size} \
             trainer.args.gradient_accumulation_steps=1 \
             trainer.args.gradient_checkpointing=false \
@@ -20936,6 +21794,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                         model.model_args.device_map="auto" \
                                         ++model.model_args.low_cpu_mem_usage=true \
+                                        "model.lora_config.target_modules=${loku_target_modules}" \
                                         model.lora_config.r=${lora_r} \
                                         model.lora_config.lora_alpha=${lora_alpha} \
                                         model.lora_config.lora_dropout=${lora_dropout} \
@@ -20944,6 +21803,10 @@ for split in "${forget_retain_splits[@]}"; do
                                         trainer.args.num_train_epochs=${num_train_epochs} \
                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
                                         trainer.args.learning_rate=${lr} \
+                                        trainer.args.weight_decay=${loku_weight_decay} \
+                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
                                         trainer.method_args.alpha=${alpha} \
                                         trainer.method_args.gamma=${gamma} \
@@ -20974,6 +21837,7 @@ for split in "${forget_retain_splits[@]}"; do
                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                     model.model_args.device_map="auto" \
                                     ++model.model_args.low_cpu_mem_usage=true \
+                                    "model.lora_config.target_modules=${loku_target_modules}" \
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \
@@ -26206,6 +27070,8 @@ def main(cfg: DictConfig):
     template_args = model_cfg.template_args
     assert model_cfg is not None, "Invalid model yaml passed in train config."
     model, tokenizer = get_model(model_cfg)
+    if hasattr(model, "config") and model.config is not None:
+        model.config.use_cache = False
 
     # Load Dataset
     data_cfg = cfg.data
@@ -27218,6 +28084,11 @@ def _resolve_target_modules(cfg) -> List[str]:
     target_modules = list(lora_cfg.get("target_modules", []) or [])
     if not target_modules:
         raise ValueError("model.lora_config.target_modules must be non-empty.")
+    if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
+        raise ValueError(
+            "LoKU importance measurement requires `lm_head` to be excluded from "
+            "model.lora_config.target_modules."
+        )
     return target_modules
 
 
@@ -27232,6 +28103,8 @@ def _prepare_model_and_data(cfg, args: argparse.Namespace):
     template_args = model_cfg.template_args
 
     model, tokenizer = get_model(model_cfg)
+    if hasattr(model, "config") and model.config is not None:
+        model.config.use_cache = False
     device = _select_device(args)
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(device)
@@ -27557,7 +28430,7 @@ def canonicalize_weight_name(name: str) -> str:
 
 
 def _weight_matches_targets(weight_name: str, target_modules: Sequence[str]) -> bool:
-    return any(weight_name.endswith(f".{target}.weight") for target in target_modules)
+    return any(target in weight_name for target in target_modules)
 
 
 def get_lora_layer_map(
@@ -27704,9 +28577,8 @@ def apply_fila_initialization(
         device = base_weight.device
         weight_fp32 = base_weight.float()
         imp = (imp_f.float() / f_cnt) / (float(eps) + (imp_r.float() / r_cnt))
-        imp = imp.to(device=device, dtype=torch.float32)
-
         row_importance = imp.sum(dim=1).clamp_min(0.0).sqrt()
+        row_importance = row_importance.to(device=device, dtype=torch.float32)
         weighted_w = row_importance.unsqueeze(1) * weight_fp32
 
         a_weight = layer.lora_A[adapter_name].weight.data
@@ -28485,29 +29357,28 @@ def ihl_loss_from_logits(
     ignore_index: int = -100,
     alpha: float = 1.0,
 ) -> torch.Tensor:
-    """Inverted Hinge Loss (IHL) on next-token probabilities.
-
-    Minimizing this loss encourages the true-token probability to be lower than
-    the strongest alternative by a margin alpha.
-    """
+    """Inverted Hinge Loss aligned with the official LoKU helper flow."""
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
+
+    shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+    shift_labels = shift_labels.view(-1)
 
     valid_mask = shift_labels != ignore_index
     if not valid_mask.any():
         return shift_logits.new_zeros(())
 
-    probs = shift_logits.softmax(dim=-1)
-    probs = probs[valid_mask]  # [N, V]
-    targets = shift_labels[valid_mask]  # [N]
+    preds = shift_logits[valid_mask, :]
+    targets = shift_labels[valid_mask]
 
-    p_true = probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # [N]
-    probs_other = probs.clone()
-    probs_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
-    p_other = probs_other.max(dim=1).values  # [N]
-    margins = p_true - p_other
+    if not torch.all((preds >= 0) * (preds <= 1)):
+        preds = preds.softmax(dim=1)
 
-    # Inverted hinge: alpha + margin (official LoKU convention).
+    margins = preds.gather(1, targets.unsqueeze(1)).squeeze(1)
+    preds_other = preds.clone()
+    preds_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
+    margins = margins - preds_other.max(dim=1).values
+
     measures = (float(alpha) + margins).clamp_min(0.0)
     return measures.mean()
 
@@ -30686,6 +31557,11 @@ class LoKU(GradDiff):
         target_modules = list(getattr(cfg, "target_modules", []) or [])
         if not target_modules:
             raise ValueError("LoKU FILA needs non-empty model.lora_config.target_modules.")
+        if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
+            raise ValueError(
+                "LoKU requires `lm_head` to be excluded from model.lora_config.target_modules "
+                "to match the official implementation."
+            )
 
         rank = int(getattr(cfg, "r", 0))
         if rank <= 0:

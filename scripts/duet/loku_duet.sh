@@ -62,7 +62,7 @@ eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-4}"
+raw_lrs="${LRS:-5e-5,1e-4,2e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -74,13 +74,13 @@ raw_ihl_alphas="${raw_ihl_alphas//\"/}"
 raw_ihl_alphas="${raw_ihl_alphas//\'/}"
 read -r -a ihl_alphas <<< "${raw_ihl_alphas}"
 
-raw_alphas="${ALPHAS:-1.0}"
+raw_alphas="${ALPHAS:-0.5,1.0}"
 raw_alphas="${raw_alphas//,/ }"
 raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-0.5,1.0,2.0,4.0}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
@@ -101,9 +101,23 @@ targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
 force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
 force_rerun="${FORCE_RERUN:-0}"
 
-lora_rs=(${LORA_RS:-"32"})
-lora_alphas=(${LORA_ALPHAS:-"64"})
-lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+raw_lora_rs="${LORA_RS:-32}"
+raw_lora_rs="${raw_lora_rs//,/ }"
+raw_lora_rs="${raw_lora_rs//\"/}"
+raw_lora_rs="${raw_lora_rs//\'/}"
+read -r -a lora_rs <<< "${raw_lora_rs}"
+
+raw_lora_alphas="${LORA_ALPHAS:-64}"
+raw_lora_alphas="${raw_lora_alphas//,/ }"
+raw_lora_alphas="${raw_lora_alphas//\"/}"
+raw_lora_alphas="${raw_lora_alphas//\'/}"
+read -r -a lora_alphas <<< "${raw_lora_alphas}"
+
+raw_lora_dropouts="${LORA_DROPOUTS:-0.0}"
+raw_lora_dropouts="${raw_lora_dropouts//,/ }"
+raw_lora_dropouts="${raw_lora_dropouts//\"/}"
+raw_lora_dropouts="${raw_lora_dropouts//\'/}"
+read -r -a lora_dropouts <<< "${raw_lora_dropouts}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
 

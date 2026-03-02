@@ -1555,6 +1555,52 @@ index 0000000..38d6ea2
 +done
 ```
 
+## 11) LoKU Grid Search Defaults Update (2026-03-03)
+
+Updated scripts:
+- `scripts/duet/loku_duet.sh`
+- `scripts/popqa/loku_popqa.sh`
+
+Default grid-search values now match:
+
+```bash
+LRS="5e-5,1e-4,2e-4" \
+IHL_ALPHAS="1.0" \
+ALPHAS="0.5,1.0" \
+GAMMAS="0.5,1.0,2.0,4.0" \
+LORA_RS="32" \
+LORA_ALPHAS="64" \
+LORA_DROPOUTS="0.0"
+```
+
+Both scripts also now parse `LORA_RS`, `LORA_ALPHAS`, and `LORA_DROPOUTS` as comma-separated grids (same style as `LRS/ALPHAS/GAMMAS`).
+
+### DUET example
+
+```bash
+LRS="5e-5,1e-4,2e-4" \
+IHL_ALPHAS="1.0" \
+ALPHAS="0.5,1.0" \
+GAMMAS="0.5,1.0,2.0,4.0" \
+LORA_RS="32" \
+LORA_ALPHAS="64" \
+LORA_DROPOUTS="0.0" \
+bash scripts/duet/loku_duet.sh
+```
+
+### POPQA example
+
+```bash
+LRS="5e-5,1e-4,2e-4" \
+IHL_ALPHAS="1.0" \
+ALPHAS="0.5,1.0" \
+GAMMAS="0.5,1.0,2.0,4.0" \
+LORA_RS="32" \
+LORA_ALPHAS="64" \
+LORA_DROPOUTS="0.0" \
+bash scripts/popqa/loku_popqa.sh
+```
+
 ## Recent updates (2026-03-02, runbook commands for importance path + auto-delete)
 
 ```diff
