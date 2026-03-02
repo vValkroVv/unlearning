@@ -235,8 +235,12 @@ class R2D(UnlearnTrainer):
                 raise ValueError("noise_std must be >= 0")
             return float(self.noise_std)
 
-        if self.dp_epsilon is None or self.dp_delta is None:
+        if self.dp_epsilon is None and self.dp_delta is None:
             return 0.0
+        if self.dp_epsilon is None or self.dp_delta is None:
+            raise ValueError(
+                "noise_std is null but only one of dp_epsilon/dp_delta is set; set both or neither."
+            )
 
         eps = float(self.dp_epsilon)
         delta = float(self.dp_delta)
@@ -270,15 +274,17 @@ class R2D(UnlearnTrainer):
                 )
                 logger.info("[R2D] Computed paper sensitivity GS=%s using K=%s.", gs, K)
             except Exception as err:
-                logger.warning(
-                    "[R2D] Failed paper-based sensitivity computation (%s); falling back.",
-                    err,
-                )
+                raise ValueError(
+                    "R2D DP-mode requested (noise_std=null) and paper-based sensitivity "
+                    f"computation failed: {err}. Set trainer.method_args.dp_sensitivity "
+                    "or fix r2d_L/r2d_G/r2d_n/r2d_m/r2d_rewind_step/r2d_eta."
+                ) from err
 
         if gs is None:
-            gs = 1.0
-            logger.warning(
-                "[R2D] No sensitivity provided; defaulting global sensitivity to 1.0."
+            raise ValueError(
+                "R2D DP-mode requested (noise_std=null) but sensitivity is undefined. "
+                "Set trainer.method_args.dp_sensitivity or provide paper inputs: "
+                "r2d_L, r2d_G, r2d_n, r2d_m, r2d_rewind_step (and optionally r2d_eta)."
             )
 
         if self.dp_use_analytic_gaussian:
