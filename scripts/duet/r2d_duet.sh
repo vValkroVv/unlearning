@@ -18,28 +18,52 @@ parse_checkpoint_step() {
     fi
 }
 
-sum_forget_m_from_split() {
-    local split="$1"
-    local nums
-    nums=$(echo "${split}" | grep -oE 'forget[^0-9]*[0-9]+' | grep -oE '[0-9]+' || true)
-    if [[ -z "${nums}" ]]; then
-        echo ""
-        return
+declare -A R2D_SPLIT_SIZE_CACHE
+
+split_size_from_hf_dataset() {
+    local dataset_path="$1"
+    local split="$2"
+    local cache_key="${dataset_path}::${split}"
+
+    if [[ -n "${R2D_SPLIT_SIZE_CACHE[$cache_key]+x}" ]]; then
+        echo "${R2D_SPLIT_SIZE_CACHE[$cache_key]}"
+        return 0
     fi
 
-    local total=0
-    local n
-    for n in ${nums}; do
-        total=$((total + n))
-    done
-    echo "${total}"
-}
+    local size
+    if ! size=$(python - "${dataset_path}" "${split}" <<'PY'
+import sys
 
-retain_n_from_split() {
-    local split="$1"
-    local n
-    n=$(echo "${split}" | grep -oE 'retain[^0-9]*[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
-    echo "${n}"
+path = sys.argv[1]
+split = sys.argv[2]
+
+try:
+    from datasets import load_dataset
+except Exception as exc:
+    sys.stderr.write(f"failed importing datasets: {exc}\n")
+    raise SystemExit(2)
+
+try:
+    ds = load_dataset(path, split=split)
+except Exception as exc:
+    sys.stderr.write(f"failed loading dataset split {path}:{split}: {exc}\n")
+    raise SystemExit(3)
+
+rows = getattr(ds, "num_rows", None)
+if rows is None:
+    rows = len(ds)
+print(rows)
+PY
+    ); then
+        return 1
+    fi
+
+    if [[ ! "${size}" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    R2D_SPLIT_SIZE_CACHE["${cache_key}"]="${size}"
+    echo "${size}"
 }
 
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
@@ -151,6 +175,7 @@ r2d_G="${R2D_G:-null}"
 r2d_n_input="${R2D_N:-null}"
 r2d_m_input="${R2D_M:-null}"
 r2d_eta_override="${R2D_ETA:-null}"
+r2d_dataset_path="${R2D_DATASET_PATH:-SwetieePawsss/DUET}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 
 raw_max_steps="${R2D_MAX_STEPS_LIST:-${R2D_MAX_STEPS:-0}}"
@@ -195,11 +220,37 @@ for split in "${forget_retain_splits[@]}"; do
         forget_label="${forget_split}"
     fi
 
-    auto_m="$(sum_forget_m_from_split "${forget_split}")"
-    auto_retain_n="$(retain_n_from_split "${retain_split}")"
+    split_needs_counts="0"
+    if [[ "${r2d_sens}" == "null" && ( "${r2d_m_input}" == "null" || "${r2d_n_input}" == "null" ) ]]; then
+        for candidate_noise_std in "${noise_stds[@]}"; do
+            if [[ "${candidate_noise_std}" == "null" ]]; then
+                split_needs_counts="1"
+                break
+            fi
+        done
+    fi
+
+    auto_m=""
+    auto_retain_n=""
     auto_n=""
-    if [[ -n "${auto_m}" && -n "${auto_retain_n}" ]]; then
+    if [[ "${split_needs_counts}" == "1" ]]; then
+        auto_m=0
+        IFS='+' read -r -a forget_split_parts <<< "${forget_split}"
+        for forget_split_part in "${forget_split_parts[@]}"; do
+            part_m="$(split_size_from_hf_dataset "${r2d_dataset_path}" "${forget_split_part}")" || {
+                echo "[duet][R2D] ERROR: Failed to resolve size for forget split '${forget_split_part}' from dataset '${r2d_dataset_path}'. Set R2D_M explicitly."
+                exit 1
+            }
+            auto_m=$((auto_m + part_m))
+        done
+
+        auto_retain_n="$(split_size_from_hf_dataset "${r2d_dataset_path}" "${retain_split}")" || {
+            echo "[duet][R2D] ERROR: Failed to resolve size for retain split '${retain_split}' from dataset '${r2d_dataset_path}'. Set R2D_N explicitly."
+            exit 1
+        }
         auto_n=$((auto_m + auto_retain_n))
+
+        echo "[duet][R2D] Split-size lookup from ${r2d_dataset_path}: forget_m=${auto_m}, retain=${auto_retain_n}, union_n=${auto_n}"
     fi
 
     r2d_m="${r2d_m_input}"
@@ -209,6 +260,7 @@ for split in "${forget_retain_splits[@]}"; do
     fi
     if [[ "${r2d_n}" == "null" && -n "${auto_n}" ]]; then
         r2d_n="${auto_n}"
+        echo "[duet][R2D] WARNING: Auto-setting R2D_N=${r2d_n} as forget+retain union size. Override R2D_N with original pre-unlearning train size for strict R2D certification assumptions."
     fi
 
     for max_steps in "${max_steps_list[@]}"; do

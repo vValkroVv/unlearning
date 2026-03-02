@@ -5,10 +5,10 @@ Target: current working tree
 
 ```diff
 diff --git a/scripts/duet/r2d_duet.sh b/scripts/duet/r2d_duet.sh
-index 2de4604..c50a608 100755
+index 2de4604..5beea85 100755
 --- a/scripts/duet/r2d_duet.sh
 +++ b/scripts/duet/r2d_duet.sh
-@@ -9,6 +9,39 @@ source "${script_dir}/_splits.sh"
+@@ -9,6 +9,63 @@ source "${script_dir}/_splits.sh"
  export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
  echo "Master Port: $MASTER_PORT"
  
@@ -21,34 +21,58 @@ index 2de4604..c50a608 100755
 +    fi
 +}
 +
-+sum_forget_m_from_split() {
-+    local split="$1"
-+    local nums
-+    nums=$(echo "${split}" | grep -oE 'forget[^0-9]*[0-9]+' | grep -oE '[0-9]+' || true)
-+    if [[ -z "${nums}" ]]; then
-+        echo ""
-+        return
++declare -A R2D_SPLIT_SIZE_CACHE
++
++split_size_from_hf_dataset() {
++    local dataset_path="$1"
++    local split="$2"
++    local cache_key="${dataset_path}::${split}"
++
++    if [[ -n "${R2D_SPLIT_SIZE_CACHE[$cache_key]+x}" ]]; then
++        echo "${R2D_SPLIT_SIZE_CACHE[$cache_key]}"
++        return 0
 +    fi
 +
-+    local total=0
-+    local n
-+    for n in ${nums}; do
-+        total=$((total + n))
-+    done
-+    echo "${total}"
-+}
++    local size
++    if ! size=$(python - "${dataset_path}" "${split}" <<'PY'
++import sys
 +
-+retain_n_from_split() {
-+    local split="$1"
-+    local n
-+    n=$(echo "${split}" | grep -oE 'retain[^0-9]*[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
-+    echo "${n}"
++path = sys.argv[1]
++split = sys.argv[2]
++
++try:
++    from datasets import load_dataset
++except Exception as exc:
++    sys.stderr.write(f"failed importing datasets: {exc}\n")
++    raise SystemExit(2)
++
++try:
++    ds = load_dataset(path, split=split)
++except Exception as exc:
++    sys.stderr.write(f"failed loading dataset split {path}:{split}: {exc}\n")
++    raise SystemExit(3)
++
++rows = getattr(ds, "num_rows", None)
++if rows is None:
++    rows = len(ds)
++print(rows)
++PY
++    ); then
++        return 1
++    fi
++
++    if [[ ! "${size}" =~ ^[0-9]+$ ]]; then
++        return 1
++    fi
++
++    R2D_SPLIT_SIZE_CACHE["${cache_key}"]="${size}"
++    echo "${size}"
 +}
 +
  base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
  lora_model="${MODEL_CONFIG:-${base_model}-lora}"
  hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
-@@ -26,10 +59,6 @@ else
+@@ -26,10 +83,6 @@ else
      echo "[duet][R2D] Using HF base model path ${trained_model_path}"
  fi
  
@@ -59,7 +83,7 @@ index 2de4604..c50a608 100755
  rewind_model_path="${R2D_REWIND_CKPT_PATH:-${trained_model_path}}"
  rewind_subfolder="${R2D_REWIND_SUBFOLDER:-}"
  
-@@ -46,8 +75,35 @@ if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${
+@@ -46,8 +99,35 @@ if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${
      exit 1
  fi
  
@@ -95,7 +119,7 @@ index 2de4604..c50a608 100755
  
  tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${trained_model_path}}"
  
-@@ -74,7 +130,6 @@ per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
+@@ -74,7 +154,6 @@ per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
  gradient_accumulation_steps=${GRAD_ACCUM:-32}
  eval_batch_size=${EVAL_BATCH_SIZE:-8}
  num_train_epochs=${NUM_EPOCHS:-1}
@@ -103,7 +127,7 @@ index 2de4604..c50a608 100755
  gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
  
  raw_lrs="${LRS:-1e-5}"
-@@ -87,33 +142,48 @@ lora_rs=(${LORA_RS:-"32"})
+@@ -87,33 +166,49 @@ lora_rs=(${LORA_RS:-"32"})
  lora_alphas=(${LORA_ALPHAS:-"64"})
  lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
  
@@ -135,6 +159,7 @@ index 2de4604..c50a608 100755
 +r2d_n_input="${R2D_N:-null}"
 +r2d_m_input="${R2D_M:-null}"
 +r2d_eta_override="${R2D_ETA:-null}"
++r2d_dataset_path="${R2D_DATASET_PATH:-SwetieePawsss/DUET}"
  delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
  
 -if [[ "${max_steps}" == "0" ]]; then
@@ -172,7 +197,7 @@ index 2de4604..c50a608 100755
      echo "[duet][R2D] WARNING: R2D_MAX_STEPS=0, using NUM_EPOCHS instead of explicit K steps."
  fi
  
-@@ -125,119 +195,196 @@ for split in "${forget_retain_splits[@]}"; do
+@@ -125,119 +220,223 @@ for split in "${forget_retain_splits[@]}"; do
          forget_label="${forget_split}"
      fi
  
@@ -193,11 +218,14 @@ index 2de4604..c50a608 100755
 -                        echo "[duet][R2D] Skipping ${task_name}: found existing summary at ${summary_path}"
 -                        continue
 -                    fi
-+    auto_m="$(sum_forget_m_from_split "${forget_split}")"
-+    auto_retain_n="$(retain_n_from_split "${retain_split}")"
-+    auto_n=""
-+    if [[ -n "${auto_m}" && -n "${auto_retain_n}" ]]; then
-+        auto_n=$((auto_m + auto_retain_n))
++    split_needs_counts="0"
++    if [[ "${r2d_sens}" == "null" && ( "${r2d_m_input}" == "null" || "${r2d_n_input}" == "null" ) ]]; then
++        for candidate_noise_std in "${noise_stds[@]}"; do
++            if [[ "${candidate_noise_std}" == "null" ]]; then
++                split_needs_counts="1"
++                break
++            fi
++        done
 +    fi
  
 -                    echo "[duet][R2D] ${task_name}"
@@ -258,6 +286,29 @@ index 2de4604..c50a608 100755
 -                        if [[ "${max_steps}" != "0" ]]; then
 -                            train_cmd+=(trainer.args.max_steps=${max_steps})
 -                        fi
++    auto_m=""
++    auto_retain_n=""
++    auto_n=""
++    if [[ "${split_needs_counts}" == "1" ]]; then
++        auto_m=0
++        IFS='+' read -r -a forget_split_parts <<< "${forget_split}"
++        for forget_split_part in "${forget_split_parts[@]}"; do
++            part_m="$(split_size_from_hf_dataset "${r2d_dataset_path}" "${forget_split_part}")" || {
++                echo "[duet][R2D] ERROR: Failed to resolve size for forget split '${forget_split_part}' from dataset '${r2d_dataset_path}'. Set R2D_M explicitly."
++                exit 1
++            }
++            auto_m=$((auto_m + part_m))
++        done
++
++        auto_retain_n="$(split_size_from_hf_dataset "${r2d_dataset_path}" "${retain_split}")" || {
++            echo "[duet][R2D] ERROR: Failed to resolve size for retain split '${retain_split}' from dataset '${r2d_dataset_path}'. Set R2D_N explicitly."
++            exit 1
++        }
++        auto_n=$((auto_m + auto_retain_n))
++
++        echo "[duet][R2D] Split-size lookup from ${r2d_dataset_path}: forget_m=${auto_m}, retain=${auto_retain_n}, union_n=${auto_n}"
++    fi
++
 +    r2d_m="${r2d_m_input}"
 +    r2d_n="${r2d_n_input}"
 +    if [[ "${r2d_m}" == "null" && -n "${auto_m}" ]]; then
@@ -265,9 +316,9 @@ index 2de4604..c50a608 100755
 +    fi
 +    if [[ "${r2d_n}" == "null" && -n "${auto_n}" ]]; then
 +        r2d_n="${auto_n}"
++        echo "[duet][R2D] WARNING: Auto-setting R2D_N=${r2d_n} as forget+retain union size. Override R2D_N with original pre-unlearning train size for strict R2D certification assumptions."
 +    fi
- 
--                        python src/train.py "${train_cmd[@]}"
++
 +    for max_steps in "${max_steps_list[@]}"; do
 +        if [[ "${max_steps}" == "0" ]]; then
 +            k_tag="ep${num_train_epochs}"
@@ -280,7 +331,8 @@ index 2de4604..c50a608 100755
 +            if [[ "${r2d_noise_std}" == "null" ]]; then
 +                eps_candidates=("${epsilons[@]}")
 +            fi
-+
+ 
+-                        python src/train.py "${train_cmd[@]}"
 +            for r2d_eps in "${eps_candidates[@]}"; do
 +                if [[ "${r2d_noise_std}" != "null" ]]; then
 +                    sigma_tag="s${r2d_noise_std//./p}"
@@ -476,10 +528,10 @@ index 2de4604..c50a608 100755
              done
          done
 diff --git a/scripts/popqa/r2d_popqa.sh b/scripts/popqa/r2d_popqa.sh
-index 9f5c054..80df99e 100755
+index 9f5c054..94f15f8 100755
 --- a/scripts/popqa/r2d_popqa.sh
 +++ b/scripts/popqa/r2d_popqa.sh
-@@ -8,6 +8,39 @@ repo_root=$(realpath "${script_dir}/../..")
+@@ -8,6 +8,63 @@ repo_root=$(realpath "${script_dir}/../..")
  export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
  echo "Master Port: $MASTER_PORT"
  
@@ -492,34 +544,58 @@ index 9f5c054..80df99e 100755
 +    fi
 +}
 +
-+sum_forget_m_from_split() {
-+    local split="$1"
-+    local nums
-+    nums=$(echo "${split}" | grep -oE 'forget[^0-9]*[0-9]+' | grep -oE '[0-9]+' || true)
-+    if [[ -z "${nums}" ]]; then
-+        echo ""
-+        return
++declare -A R2D_SPLIT_SIZE_CACHE
++
++split_size_from_hf_dataset() {
++    local dataset_path="$1"
++    local split="$2"
++    local cache_key="${dataset_path}::${split}"
++
++    if [[ -n "${R2D_SPLIT_SIZE_CACHE[$cache_key]+x}" ]]; then
++        echo "${R2D_SPLIT_SIZE_CACHE[$cache_key]}"
++        return 0
 +    fi
 +
-+    local total=0
-+    local n
-+    for n in ${nums}; do
-+        total=$((total + n))
-+    done
-+    echo "${total}"
-+}
++    local size
++    if ! size=$(python - "${dataset_path}" "${split}" <<'PY'
++import sys
 +
-+retain_n_from_split() {
-+    local split="$1"
-+    local n
-+    n=$(echo "${split}" | grep -oE 'retain[^0-9]*[0-9]+' | head -n1 | grep -oE '[0-9]+' || true)
-+    echo "${n}"
++path = sys.argv[1]
++split = sys.argv[2]
++
++try:
++    from datasets import load_dataset
++except Exception as exc:
++    sys.stderr.write(f"failed importing datasets: {exc}\n")
++    raise SystemExit(2)
++
++try:
++    ds = load_dataset(path, split=split)
++except Exception as exc:
++    sys.stderr.write(f"failed loading dataset split {path}:{split}: {exc}\n")
++    raise SystemExit(3)
++
++rows = getattr(ds, "num_rows", None)
++if rows is None:
++    rows = len(ds)
++print(rows)
++PY
++    ); then
++        return 1
++    fi
++
++    if [[ ! "${size}" =~ ^[0-9]+$ ]]; then
++        return 1
++    fi
++
++    R2D_SPLIT_SIZE_CACHE["${cache_key}"]="${size}"
++    echo "${size}"
 +}
 +
  base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
  lora_model="${MODEL_CONFIG:-${base_model}-lora}"
  hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
-@@ -42,8 +75,35 @@ if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${
+@@ -42,8 +99,35 @@ if [[ -z "${R2D_REWIND_CKPT_PATH:-}" && -z "${R2D_REWIND_SUBFOLDER:-}" && -z "${
      exit 1
  fi
  
@@ -555,7 +631,7 @@ index 9f5c054..80df99e 100755
  
  tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${trained_model_path}}"
  if [[ "${use_sft_base}" == "1" && "${sft_subfolder}" == "llama-3.1-8b-instruct-popqa-ft" ]]; then
-@@ -85,7 +145,6 @@ per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
+@@ -85,7 +169,6 @@ per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
  gradient_accumulation_steps=${GRAD_ACCUM:-32}
  eval_batch_size=${EVAL_BATCH_SIZE:-8}
  num_train_epochs=${NUM_EPOCHS:-1}
@@ -563,7 +639,7 @@ index 9f5c054..80df99e 100755
  gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
  
  raw_lrs="${LRS:-1e-5}"
-@@ -98,33 +157,48 @@ lora_rs=(${LORA_RS:-"32"})
+@@ -98,33 +181,49 @@ lora_rs=(${LORA_RS:-"32"})
  lora_alphas=(${LORA_ALPHAS:-"64"})
  lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
  
@@ -595,6 +671,7 @@ index 9f5c054..80df99e 100755
 +r2d_n_input="${R2D_N:-null}"
 +r2d_m_input="${R2D_M:-null}"
 +r2d_eta_override="${R2D_ETA:-null}"
++r2d_dataset_path="${R2D_DATASET_PATH:-SwetieePawsss/exp_UNLamb}"
  delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
  
 -if [[ "${max_steps}" == "0" ]]; then
@@ -632,7 +709,7 @@ index 9f5c054..80df99e 100755
      echo "[popqa][R2D] WARNING: R2D_MAX_STEPS=0, using NUM_EPOCHS instead of explicit K steps."
  fi
  
-@@ -136,119 +210,196 @@ for split in "${forget_retain_splits[@]}"; do
+@@ -136,119 +235,223 @@ for split in "${forget_retain_splits[@]}"; do
          forget_label="${forget_split}"
      fi
  
@@ -653,11 +730,14 @@ index 9f5c054..80df99e 100755
 -                        echo "[popqa][R2D] Skipping ${task_name}: found existing summary at ${summary_path}"
 -                        continue
 -                    fi
-+    auto_m="$(sum_forget_m_from_split "${forget_split}")"
-+    auto_retain_n="$(retain_n_from_split "${retain_split}")"
-+    auto_n=""
-+    if [[ -n "${auto_m}" && -n "${auto_retain_n}" ]]; then
-+        auto_n=$((auto_m + auto_retain_n))
++    split_needs_counts="0"
++    if [[ "${r2d_sens}" == "null" && ( "${r2d_m_input}" == "null" || "${r2d_n_input}" == "null" ) ]]; then
++        for candidate_noise_std in "${noise_stds[@]}"; do
++            if [[ "${candidate_noise_std}" == "null" ]]; then
++                split_needs_counts="1"
++                break
++            fi
++        done
 +    fi
  
 -                    echo "[popqa][R2D] ${task_name}"
@@ -718,6 +798,29 @@ index 9f5c054..80df99e 100755
 -                        if [[ "${max_steps}" != "0" ]]; then
 -                            train_cmd+=(trainer.args.max_steps=${max_steps})
 -                        fi
++    auto_m=""
++    auto_retain_n=""
++    auto_n=""
++    if [[ "${split_needs_counts}" == "1" ]]; then
++        auto_m=0
++        IFS='+' read -r -a forget_split_parts <<< "${forget_split}"
++        for forget_split_part in "${forget_split_parts[@]}"; do
++            part_m="$(split_size_from_hf_dataset "${r2d_dataset_path}" "${forget_split_part}")" || {
++                echo "[popqa][R2D] ERROR: Failed to resolve size for forget split '${forget_split_part}' from dataset '${r2d_dataset_path}'. Set R2D_M explicitly."
++                exit 1
++            }
++            auto_m=$((auto_m + part_m))
++        done
++
++        auto_retain_n="$(split_size_from_hf_dataset "${r2d_dataset_path}" "${retain_split}")" || {
++            echo "[popqa][R2D] ERROR: Failed to resolve size for retain split '${retain_split}' from dataset '${r2d_dataset_path}'. Set R2D_N explicitly."
++            exit 1
++        }
++        auto_n=$((auto_m + auto_retain_n))
++
++        echo "[popqa][R2D] Split-size lookup from ${r2d_dataset_path}: forget_m=${auto_m}, retain=${auto_retain_n}, union_n=${auto_n}"
++    fi
++
 +    r2d_m="${r2d_m_input}"
 +    r2d_n="${r2d_n_input}"
 +    if [[ "${r2d_m}" == "null" && -n "${auto_m}" ]]; then
@@ -725,6 +828,7 @@ index 9f5c054..80df99e 100755
 +    fi
 +    if [[ "${r2d_n}" == "null" && -n "${auto_n}" ]]; then
 +        r2d_n="${auto_n}"
++        echo "[popqa][R2D] WARNING: Auto-setting R2D_N=${r2d_n} as forget+retain union size. Override R2D_N with original pre-unlearning train size for strict R2D certification assumptions."
 +    fi
  
 -                        python src/train.py "${train_cmd[@]}"
