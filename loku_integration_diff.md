@@ -1554,3 +1554,230 @@ index 0000000..38d6ea2
 +    done
 +done
 ```
+
+## Recent updates (2026-03-02)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index 7665bbf..9557ee6 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -90,7 +90,13 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
+ fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
+ run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
+ 
+-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
++loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
++loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
++loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
++loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
++loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
++
++targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
+ force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
+ force_rerun="${FORCE_RERUN:-0}"
+ 
+@@ -125,6 +131,7 @@ for split in "${forget_retain_splits[@]}"; do
+             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+             model.model_args.device_map=null \
+             ++model.model_args.low_cpu_mem_usage=true \
++            "model.lora_config.target_modules=${loku_target_modules}" \
+             trainer.args.per_device_train_batch_size=${importance_batch_size} \
+             trainer.args.gradient_accumulation_steps=1 \
+             trainer.args.gradient_checkpointing=false \
+@@ -171,6 +178,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                         model.model_args.device_map="auto" \
+                                         ++model.model_args.low_cpu_mem_usage=true \
++                                        "model.lora_config.target_modules=${loku_target_modules}" \
+                                         model.lora_config.r=${lora_r} \
+                                         model.lora_config.lora_alpha=${lora_alpha} \
+                                         model.lora_config.lora_dropout=${lora_dropout} \
+@@ -179,6 +187,10 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.num_train_epochs=${num_train_epochs} \
+                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
+                                         trainer.args.learning_rate=${lr} \
++                                        trainer.args.weight_decay=${loku_weight_decay} \
++                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
++                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+                                         trainer.method_args.gamma=${gamma} \
+@@ -209,6 +221,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                     model.model_args.device_map="auto" \
+                                     ++model.model_args.low_cpu_mem_usage=true \
++                                    "model.lora_config.target_modules=${loku_target_modules}" \
+                                     model.lora_config.r=${lora_r} \
+                                     model.lora_config.lora_alpha=${lora_alpha} \
+                                     model.lora_config.lora_dropout=${lora_dropout} \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index 38d6ea2..46998dc 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -105,7 +105,13 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
+ fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
+ run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
+ 
+-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
++loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
++loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
++loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
++loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
++loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
++
++targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
+ force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
+ force_rerun="${FORCE_RERUN:-0}"
+ 
+@@ -140,6 +146,7 @@ for split in "${forget_retain_splits[@]}"; do
+             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+             model.model_args.device_map=null \
+             ++model.model_args.low_cpu_mem_usage=true \
++            "model.lora_config.target_modules=${loku_target_modules}" \
+             trainer.args.per_device_train_batch_size=${importance_batch_size} \
+             trainer.args.gradient_accumulation_steps=1 \
+             trainer.args.gradient_checkpointing=false \
+@@ -186,6 +193,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                         model.model_args.device_map="auto" \
+                                         ++model.model_args.low_cpu_mem_usage=true \
++                                        "model.lora_config.target_modules=${loku_target_modules}" \
+                                         model.lora_config.r=${lora_r} \
+                                         model.lora_config.lora_alpha=${lora_alpha} \
+                                         model.lora_config.lora_dropout=${lora_dropout} \
+@@ -194,6 +202,10 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.num_train_epochs=${num_train_epochs} \
+                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
+                                         trainer.args.learning_rate=${lr} \
++                                        trainer.args.weight_decay=${loku_weight_decay} \
++                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
++                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+                                         trainer.method_args.gamma=${gamma} \
+@@ -224,6 +236,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
+                                     model.model_args.device_map="auto" \
+                                     ++model.model_args.low_cpu_mem_usage=true \
++                                    "model.lora_config.target_modules=${loku_target_modules}" \
+                                     model.lora_config.r=${lora_r} \
+                                     model.lora_config.lora_alpha=${lora_alpha} \
+                                     model.lora_config.lora_dropout=${lora_dropout} \
+diff --git a/src/model/fila.py b/src/model/fila.py
+index 064839d..34a3e46 100644
+--- a/src/model/fila.py
++++ b/src/model/fila.py
+@@ -19,7 +19,7 @@ def canonicalize_weight_name(name: str) -> str:
+ 
+ 
+ def _weight_matches_targets(weight_name: str, target_modules: Sequence[str]) -> bool:
+-    return any(weight_name.endswith(f".{target}.weight") for target in target_modules)
++    return any(target in weight_name for target in target_modules)
+ 
+ 
+ def get_lora_layer_map(
+diff --git a/src/tools/loku_measure_importance.py b/src/tools/loku_measure_importance.py
+index 4cb0dd7..aa8420b 100755
+--- a/src/tools/loku_measure_importance.py
++++ b/src/tools/loku_measure_importance.py
+@@ -81,6 +81,11 @@ def _resolve_target_modules(cfg) -> List[str]:
+     target_modules = list(lora_cfg.get("target_modules", []) or [])
+     if not target_modules:
+         raise ValueError("model.lora_config.target_modules must be non-empty.")
++    if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
++        raise ValueError(
++            "LoKU importance measurement requires `lm_head` to be excluded from "
++            "model.lora_config.target_modules."
++        )
+     return target_modules
+ 
+ 
+@@ -95,6 +100,8 @@ def _prepare_model_and_data(cfg, args: argparse.Namespace):
+     template_args = model_cfg.template_args
+ 
+     model, tokenizer = get_model(model_cfg)
++    if hasattr(model, "config") and model.config is not None:
++        model.config.use_cache = False
+     device = _select_device(args)
+     if getattr(model, "hf_device_map", None) is None:
+         model = model.to(device)
+diff --git a/src/train.py b/src/train.py
+index 30c9174..d1d2c73 100644
+--- a/src/train.py
++++ b/src/train.py
+@@ -19,6 +19,8 @@ def main(cfg: DictConfig):
+     template_args = model_cfg.template_args
+     assert model_cfg is not None, "Invalid model yaml passed in train config."
+     model, tokenizer = get_model(model_cfg)
++    if hasattr(model, "config") and model.config is not None:
++        model.config.use_cache = False
+ 
+     # Load Dataset
+     data_cfg = cfg.data
+diff --git a/src/trainer/unlearn/loku.py b/src/trainer/unlearn/loku.py
+index 81a02d9..b7af0a2 100644
+--- a/src/trainer/unlearn/loku.py
++++ b/src/trainer/unlearn/loku.py
+@@ -70,6 +70,11 @@ class LoKU(GradDiff):
+         target_modules = list(getattr(cfg, "target_modules", []) or [])
+         if not target_modules:
+             raise ValueError("LoKU FILA needs non-empty model.lora_config.target_modules.")
++        if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
++            raise ValueError(
++                "LoKU requires `lm_head` to be excluded from model.lora_config.target_modules "
++                "to match the official implementation."
++            )
+ 
+         rank = int(getattr(cfg, "r", 0))
+         if rank <= 0:
+diff --git a/src/trainer/utils.py b/src/trainer/utils.py
+index a74c45a..c3db135 100644
+--- a/src/trainer/utils.py
++++ b/src/trainer/utils.py
+@@ -150,29 +150,28 @@ def ihl_loss_from_logits(
+     ignore_index: int = -100,
+     alpha: float = 1.0,
+ ) -> torch.Tensor:
+-    """Inverted Hinge Loss (IHL) on next-token probabilities.
+-
+-    Minimizing this loss encourages the true-token probability to be lower than
+-    the strongest alternative by a margin alpha.
+-    """
++    """Inverted Hinge Loss aligned with the official LoKU helper flow."""
+     shift_logits = logits[..., :-1, :].contiguous()
+     shift_labels = labels[..., 1:].contiguous()
+ 
++    shift_logits = shift_logits.view(-1, shift_logits.size(-1))
++    shift_labels = shift_labels.view(-1)
++
+     valid_mask = shift_labels != ignore_index
+     if not valid_mask.any():
+         return shift_logits.new_zeros(())
+ 
+-    probs = shift_logits.softmax(dim=-1)
+-    probs = probs[valid_mask]  # [N, V]
+-    targets = shift_labels[valid_mask]  # [N]
++    preds = shift_logits[valid_mask, :]
++    targets = shift_labels[valid_mask]
++
++    if not torch.all((preds >= 0) * (preds <= 1)):
++        preds = preds.softmax(dim=1)
+ 
+-    p_true = probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # [N]
+-    probs_other = probs.clone()
+-    probs_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
+-    p_other = probs_other.max(dim=1).values  # [N]
+-    margins = p_true - p_other
++    margins = preds.gather(1, targets.unsqueeze(1)).squeeze(1)
++    preds_other = preds.clone()
++    preds_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
++    margins = margins - preds_other.max(dim=1).values
+ 
+-    # Inverted hinge: alpha + margin (official LoKU convention).
+     measures = (float(alpha) + margins).clamp_min(0.0)
+     return measures.mean()
+ 
+```

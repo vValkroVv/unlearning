@@ -81,6 +81,11 @@ def _resolve_target_modules(cfg) -> List[str]:
     target_modules = list(lora_cfg.get("target_modules", []) or [])
     if not target_modules:
         raise ValueError("model.lora_config.target_modules must be non-empty.")
+    if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
+        raise ValueError(
+            "LoKU importance measurement requires `lm_head` to be excluded from "
+            "model.lora_config.target_modules."
+        )
     return target_modules
 
 
@@ -95,6 +100,8 @@ def _prepare_model_and_data(cfg, args: argparse.Namespace):
     template_args = model_cfg.template_args
 
     model, tokenizer = get_model(model_cfg)
+    if hasattr(model, "config") and model.config is not None:
+        model.config.use_cache = False
     device = _select_device(args)
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(device)

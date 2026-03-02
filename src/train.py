@@ -19,6 +19,8 @@ def main(cfg: DictConfig):
     template_args = model_cfg.template_args
     assert model_cfg is not None, "Invalid model yaml passed in train config."
     model, tokenizer = get_model(model_cfg)
+    if hasattr(model, "config") and model.config is not None:
+        model.config.use_cache = False
 
     # Load Dataset
     data_cfg = cfg.data

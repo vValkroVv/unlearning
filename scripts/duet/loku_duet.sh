@@ -90,7 +90,13 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
 fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
 run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
 
-targets_tag="${LOKU_TARGETS_TAG:-all_lora_targets}"
+loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
+loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
+loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
+loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"
+loku_warmup_ratio="${LOKU_WARMUP_RATIO:-0.0}"
+
+targets_tag="${LOKU_TARGETS_TAG:-no_lm_head_lora_targets}"
 force_importance="${FORCE_IMPORTANCE_RECOMPUTE:-0}"
 force_rerun="${FORCE_RERUN:-0}"
 
@@ -125,6 +131,7 @@ for split in "${forget_retain_splits[@]}"; do
             model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
             model.model_args.device_map=null \
             ++model.model_args.low_cpu_mem_usage=true \
+            "model.lora_config.target_modules=${loku_target_modules}" \
             trainer.args.per_device_train_batch_size=${importance_batch_size} \
             trainer.args.gradient_accumulation_steps=1 \
             trainer.args.gradient_checkpointing=false \
@@ -171,6 +178,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                         model.model_args.device_map="auto" \
                                         ++model.model_args.low_cpu_mem_usage=true \
+                                        "model.lora_config.target_modules=${loku_target_modules}" \
                                         model.lora_config.r=${lora_r} \
                                         model.lora_config.lora_alpha=${lora_alpha} \
                                         model.lora_config.lora_dropout=${lora_dropout} \
@@ -179,6 +187,10 @@ for split in "${forget_retain_splits[@]}"; do
                                         trainer.args.num_train_epochs=${num_train_epochs} \
                                         trainer.args.gradient_checkpointing=${gradient_checkpointing} \
                                         trainer.args.learning_rate=${lr} \
+                                        trainer.args.weight_decay=${loku_weight_decay} \
+                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
                                         trainer.method_args.alpha=${alpha} \
                                         trainer.method_args.gamma=${gamma} \
@@ -209,6 +221,7 @@ for split in "${forget_retain_splits[@]}"; do
                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                     model.model_args.device_map="auto" \
                                     ++model.model_args.low_cpu_mem_usage=true \
+                                    "model.lora_config.target_modules=${loku_target_modules}" \
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \

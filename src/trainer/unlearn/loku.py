@@ -70,6 +70,11 @@ class LoKU(GradDiff):
         target_modules = list(getattr(cfg, "target_modules", []) or [])
         if not target_modules:
             raise ValueError("LoKU FILA needs non-empty model.lora_config.target_modules.")
+        if any(str(name).split(".")[-1] == "lm_head" for name in target_modules):
+            raise ValueError(
+                "LoKU requires `lm_head` to be excluded from model.lora_config.target_modules "
+                "to match the official implementation."
+            )
 
         rank = int(getattr(cfg, "r", 0))
         if rank <= 0:

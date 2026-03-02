@@ -150,29 +150,28 @@ def ihl_loss_from_logits(
     ignore_index: int = -100,
     alpha: float = 1.0,
 ) -> torch.Tensor:
-    """Inverted Hinge Loss (IHL) on next-token probabilities.
-
-    Minimizing this loss encourages the true-token probability to be lower than
-    the strongest alternative by a margin alpha.
-    """
+    """Inverted Hinge Loss aligned with the official LoKU helper flow."""
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
+
+    shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+    shift_labels = shift_labels.view(-1)
 
     valid_mask = shift_labels != ignore_index
     if not valid_mask.any():
         return shift_logits.new_zeros(())
 
-    probs = shift_logits.softmax(dim=-1)
-    probs = probs[valid_mask]  # [N, V]
-    targets = shift_labels[valid_mask]  # [N]
+    preds = shift_logits[valid_mask, :]
+    targets = shift_labels[valid_mask]
 
-    p_true = probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # [N]
-    probs_other = probs.clone()
-    probs_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
-    p_other = probs_other.max(dim=1).values  # [N]
-    margins = p_true - p_other
+    if not torch.all((preds >= 0) * (preds <= 1)):
+        preds = preds.softmax(dim=1)
 
-    # Inverted hinge: alpha + margin (official LoKU convention).
+    margins = preds.gather(1, targets.unsqueeze(1)).squeeze(1)
+    preds_other = preds.clone()
+    preds_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
+    margins = margins - preds_other.max(dim=1).values
+
     measures = (float(alpha) + margins).clamp_min(0.0)
     return measures.mean()
 

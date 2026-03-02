@@ -19,7 +19,7 @@ def canonicalize_weight_name(name: str) -> str:
 
 
 def _weight_matches_targets(weight_name: str, target_modules: Sequence[str]) -> bool:
-    return any(weight_name.endswith(f".{target}.weight") for target in target_modules)
+    return any(target in weight_name for target in target_modules)
 
 
 def get_lora_layer_map(
