@@ -1,0 +1,71 @@
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: LoKU
+  - override /data: unlearn
+  - override /data/datasets@data.forget: POPQA_QA_forget
+  - override /data/datasets@data.retain: POPQA_QA_retain
+  - override /eval: popqa
+
+forget_split: rare_forget5_sum
+retain_split: fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: forget
+  forget:
+    POPQA_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_UNLamb
+          split: ${forget_split}
+        question_key: ${question_key}
+  retain:
+    POPQA_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_UNLamb
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-4
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    ihl_alpha: 1.0
+    alpha: 1.0
+    gamma: 1.0
+    retain_loss_type: NLL
+    importance_file: null
+    fila_eps: 1e-5
+    fila_adapter_name: default
+    fila_base_subdir: base_model
+
+task_name: popqa_loku_lora

@@ -204,3 +204,45 @@ EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/npo_sam_popqa.sh
 ```
+
+## 9) LoKU - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+LRS="1e-4" \
+bash scripts/duet/loku_duet.sh
+```
+
+## 10) LoKU - UNLamb
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+LRS="1e-4" \
+bash scripts/popqa/loku_popqa.sh
+```
+
+Notes:
+- LoKU includes an extra importance-measurement stage before training, so keep `IMPORTANCE_BATCH_SIZE` conservative.
+- For smoke checks use `IMPORTANCE_MAX_STEPS` (for example `50`) before full runs.

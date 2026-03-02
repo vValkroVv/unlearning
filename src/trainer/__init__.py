@@ -21,6 +21,7 @@ from trainer.unlearn.ada_pop import AdaPop
 from trainer.unlearn.pop_dynam_b_wga import PopDynamBWGA
 from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
+from trainer.unlearn.loku import LoKU
 
 
 import logging
@@ -111,3 +112,4 @@ _register_trainer(AdaPop)
 _register_trainer(PopDynamBWGA)
 _register_trainer(FALCON)
 _register_trainer(R2D)
+_register_trainer(LoKU)

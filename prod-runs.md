@@ -183,3 +183,43 @@ GRAD_ACCUM=32 \
 EVAL_BATCH_SIZE=8 \
 bash scripts/popqa/npo_sam_popqa.sh
 ```
+
+## 9) LoKU - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+EVAL_BATCH_SIZE=8 \
+LRS="1e-4" \
+bash scripts/duet/loku_duet.sh
+```
+
+## 10) LoKU - UNLamb
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+EVAL_BATCH_SIZE=8 \
+LRS="1e-4" \
+bash scripts/popqa/loku_popqa.sh
+```
+
+Notes:
+- LoKU runs a separate importance pass before training; keep `IMPORTANCE_BATCH_SIZE` small (usually `1`) to avoid OOM.
+- If you only need a quick validation run, set `IMPORTANCE_MAX_STEPS` to a small value (for example `50`).

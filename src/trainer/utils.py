@@ -144,6 +144,39 @@ def compute_wga_loss(model, inputs, beta):
     return forget_loss, outputs
 
 
+def ihl_loss_from_logits(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    ignore_index: int = -100,
+    alpha: float = 1.0,
+) -> torch.Tensor:
+    """Inverted Hinge Loss (IHL) on next-token probabilities.
+
+    Minimizing this loss encourages the true-token probability to be lower than
+    the strongest alternative by a margin alpha.
+    """
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+
+    valid_mask = shift_labels != ignore_index
+    if not valid_mask.any():
+        return shift_logits.new_zeros(())
+
+    probs = shift_logits.softmax(dim=-1)
+    probs = probs[valid_mask]  # [N, V]
+    targets = shift_labels[valid_mask]  # [N]
+
+    p_true = probs.gather(1, targets.unsqueeze(1)).squeeze(1)  # [N]
+    probs_other = probs.clone()
+    probs_other.scatter_(1, targets.unsqueeze(1), float("-inf"))
+    p_other = probs_other.max(dim=1).values  # [N]
+    margins = p_true - p_other
+
+    # Inverted hinge: alpha + margin (official LoKU convention).
+    measures = (float(alpha) + margins).clamp_min(0.0)
+    return measures.mean()
+
+
 def beta_from_pop_sum_tensor(pop_sum: torch.Tensor) -> torch.Tensor:
     """Compute dynamic beta from a tensor of pop_sum using the clipped power-law.
 
