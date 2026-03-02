@@ -166,9 +166,8 @@ def apply_fila_initialization(
         device = base_weight.device
         weight_fp32 = base_weight.float()
         imp = (imp_f.float() / f_cnt) / (float(eps) + (imp_r.float() / r_cnt))
-        imp = imp.to(device=device, dtype=torch.float32)
-
         row_importance = imp.sum(dim=1).clamp_min(0.0).sqrt()
+        row_importance = row_importance.to(device=device, dtype=torch.float32)
         weighted_w = row_importance.unsqueeze(1) * weight_fp32
 
         a_weight = layer.lora_A[adapter_name].weight.data
