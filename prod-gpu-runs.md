@@ -246,3 +246,60 @@ bash scripts/popqa/loku_popqa.sh
 Notes:
 - LoKU includes an extra importance-measurement stage before training, so keep `IMPORTANCE_BATCH_SIZE` conservative.
 - For smoke checks use `IMPORTANCE_MAX_STEPS` (for example `50`) before full runs.
+
+## LoKU Importance Path and Auto-Delete
+
+Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
+
+- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
+- `IMPORTANCE_ROOT`: custom directory root for auto naming.
+- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
+
+### Example A: Exact file path
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+LRS="1e-4" \
+bash scripts/duet/loku_duet.sh
+```
+
+### Example B: Directory root + template placeholders
+
+Supported placeholders in `IMPORTANCE_PATH`:
+- `{base_model}`
+- `{forget_label}`
+- `{retain_split}`
+- `{targets_tag}`
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=1 \
+GRAD_ACCUM=32 \
+IMPORTANCE_BATCH_SIZE=1 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_ROOT=/data/home/vkropoti/unlearning/importance_custom \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+EVAL_BATCH_SIZE=8 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+LRS="1e-4" \
+bash scripts/popqa/loku_popqa.sh
+```

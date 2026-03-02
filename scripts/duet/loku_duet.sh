@@ -46,7 +46,8 @@ experiment="unlearn/duet/loku_lora.yaml"
 trainer="LoKU"
 
 output_root="${repo_root}/saves/unlearn/duet/loku"
-importance_root="${repo_root}/saves/importances/duet/loku"
+importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
+importance_path_template="${IMPORTANCE_PATH:-}"
 mkdir -p "${output_root}" "${importance_root}"
 
 # Match current DUET default behavior used by NPO-SAM/FALCON scripts.
@@ -104,6 +105,49 @@ lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+
+importance_cleanup_paths=()
+
+resolve_importance_path() {
+    local forget_label="$1"
+    local retain_split="$2"
+    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
+    if [[ -n "${importance_path_template}" ]]; then
+        path="${importance_path_template}"
+        path="${path//\{base_model\}/${base_model}}"
+        path="${path//\{forget_label\}/${forget_label}}"
+        path="${path//\{retain_split\}/${retain_split}}"
+        path="${path//\{targets_tag\}/${targets_tag}}"
+    fi
+    echo "${path}"
+}
+
+register_importance_cleanup_path() {
+    local path="$1"
+    local existing
+    for existing in "${importance_cleanup_paths[@]}"; do
+        if [[ "${existing}" == "${path}" ]]; then
+            return
+        fi
+    done
+    importance_cleanup_paths+=("${path}")
+}
+
+cleanup_importance_files() {
+    if [[ "${delete_importance_after_run}" != "1" ]]; then
+        return
+    fi
+    local path
+    for path in "${importance_cleanup_paths[@]}"; do
+        if [[ -f "${path}" ]]; then
+            rm -f "${path}"
+            echo "[duet][LoKU] Removed importance file ${path}"
+        fi
+    done
+}
+
+trap cleanup_importance_files EXIT
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -113,7 +157,9 @@ for split in "${forget_retain_splits[@]}"; do
         forget_label="${forget_split}"
     fi
 
-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
+    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
+    mkdir -p "$(dirname "${imp_path}")"
+    register_importance_cleanup_path "${imp_path}"
     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
         echo "[duet][LoKU] Measuring importance -> ${imp_path}"
         python src/tools/loku_measure_importance.py \
@@ -189,7 +235,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         trainer.args.learning_rate=${lr} \
                                         trainer.args.weight_decay=${loku_weight_decay} \
                                         trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
-                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
                                         trainer.args.warmup_ratio=${loku_warmup_ratio} \
                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
                                         trainer.method_args.alpha=${alpha} \

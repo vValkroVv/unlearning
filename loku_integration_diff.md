@@ -1555,6 +1555,137 @@ index 0000000..38d6ea2
 +done
 ```
 
+## Recent updates (2026-03-02, runbook commands for importance path + auto-delete)
+
+```diff
+diff --git a/prod-runs.md b/prod-runs.md
+index 2b66fd1..63a8352 100644
+--- a/prod-runs.md
++++ b/prod-runs.md
+@@ -223,3 +223,58 @@ Notes:
+ - LoKU runs a separate importance pass before training; keep `IMPORTANCE_BATCH_SIZE` small (usually `1`) to avoid OOM.
+ - If you only need a quick validation run, set `IMPORTANCE_MAX_STEPS` to a small value (for example `50`).
++
++## LoKU Importance Path and Auto-Delete
++
++Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
++
++- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
++- `IMPORTANCE_ROOT`: custom directory root for auto naming.
++- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
++
++### Example A: Exact file path
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_PATH=/workspace/unlearning/saves/importances/tmp/duet_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++LRS="1e-4" \
++bash scripts/duet/loku_duet.sh
++```
++
++### Example B: Directory root + template placeholders
++
++Supported placeholders in `IMPORTANCE_PATH`:
++- `{base_model}`
++- `{forget_label}`
++- `{retain_split}`
++- `{targets_tag}`
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_ROOT=/workspace/unlearning/saves/importances/custom \
++IMPORTANCE_PATH=/workspace/unlearning/saves/importances/custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++LRS="1e-4" \
++bash scripts/popqa/loku_popqa.sh
++```
+diff --git a/prod-gpu-runs.md b/prod-gpu-runs.md
+index d665f45..5e6c444 100644
+--- a/prod-gpu-runs.md
++++ b/prod-gpu-runs.md
+@@ -246,3 +246,60 @@ Notes:
+ - LoKU includes an extra importance-measurement stage before training, so keep `IMPORTANCE_BATCH_SIZE` conservative.
+ - For smoke checks use `IMPORTANCE_MAX_STEPS` (for example `50`) before full runs.
++
++## LoKU Importance Path and Auto-Delete
++
++Use these params with either `scripts/duet/loku_duet.sh` or `scripts/popqa/loku_popqa.sh`:
++
++- `IMPORTANCE_PATH`: exact path (or template) for saved importance file.
++- `IMPORTANCE_ROOT`: custom directory root for auto naming.
++- `DELETE_IMPORTANCE_AFTER_RUN=1`: delete measured importance file when the script exits.
++
++### Example A: Exact file path
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
++LRS="1e-4" \
++bash scripts/duet/loku_duet.sh
++```
++
++### Example B: Directory root + template placeholders
++
++Supported placeholders in `IMPORTANCE_PATH`:
++- `{base_model}`
++- `{forget_label}`
++- `{retain_split}`
++- `{targets_tag}`
++
++```bash
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=1 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
++MERGE_POPULARITY_FORGET=1 \
++PER_DEVICE_TRAIN_BS=1 \
++GRAD_ACCUM=32 \
++IMPORTANCE_BATCH_SIZE=1 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_ROOT=/data/home/vkropoti/unlearning/importance_custom \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=8 \
++DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
++LRS="1e-4" \
++bash scripts/popqa/loku_popqa.sh
++```
+```
+
 ## Recent updates (2026-03-02)
 
 ```diff
@@ -1800,4 +1931,186 @@ index 34a3e46..cac0c6e 100644
          weighted_w = row_importance.unsqueeze(1) * weight_fp32
  
          a_weight = layer.lora_A[adapter_name].weight.data
+```
+
+## Recent updates (2026-03-02, LoKU script Hydra warmup fix)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index 68a21cd..6567cae 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -189,7 +189,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.learning_rate=${lr} \
+                                         trainer.args.weight_decay=${loku_weight_decay} \
+                                         trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+-                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                         trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index ef8fe65..f832ba2 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -204,7 +204,7 @@ for split in "${forget_retain_splits[@]}"; do
+                                         trainer.args.learning_rate=${lr} \
+                                         trainer.args.weight_decay=${loku_weight_decay} \
+                                         trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
+-                                        trainer.args.warmup_epochs=${loku_warmup_epochs} \
++                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
+                                         trainer.args.warmup_ratio=${loku_warmup_ratio} \
+                                         trainer.method_args.ihl_alpha=${ihl_alpha} \
+                                         trainer.method_args.alpha=${alpha} \
+```
+
+## Recent updates (2026-03-02, configurable importance path + auto-delete)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index 6567cae..c6b8207 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -46,7 +46,8 @@ experiment="unlearn/duet/loku_lora.yaml"
+ trainer="LoKU"
+ 
+ output_root="${repo_root}/saves/unlearn/duet/loku"
+-importance_root="${repo_root}/saves/importances/duet/loku"
++importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
++importance_path_template="${IMPORTANCE_PATH:-}"
+ mkdir -p "${output_root}" "${importance_root}"
+@@ -104,7 +105,51 @@ lora_rs=(${LORA_RS:-"32"})
+ lora_alphas=(${LORA_ALPHAS:-"64"})
+ lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
++delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+ 
++importance_cleanup_paths=()
++
++resolve_importance_path() {
++    local forget_label="$1"
++    local retain_split="$2"
++    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    if [[ -n "${importance_path_template}" ]]; then
++        path="${importance_path_template}"
++        path="${path//\{base_model\}/${base_model}}"
++        path="${path//\{forget_label\}/${forget_label}}"
++        path="${path//\{retain_split\}/${retain_split}}"
++        path="${path//\{targets_tag\}/${targets_tag}}"
++    fi
++    echo "${path}"
++}
++
++register_importance_cleanup_path() {
++    local path="$1"
++    local existing
++    for existing in "${importance_cleanup_paths[@]}"; do
++        if [[ "${existing}" == "${path}" ]]; then
++            return
++        fi
++    done
++    importance_cleanup_paths+=("${path}")
++}
++
++cleanup_importance_files() {
++    if [[ "${delete_importance_after_run}" != "1" ]]; then
++        return
++    fi
++    local path
++    for path in "${importance_cleanup_paths[@]}"; do
++        if [[ -f "${path}" ]]; then
++            rm -f "${path}"
++            echo "[duet][LoKU] Removed importance file ${path}"
++        fi
++    done
++}
++
++trap cleanup_importance_files EXIT
++
+ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+@@ -116,7 +161,10 @@ for split in "${forget_retain_splits[@]}"; do
+         forget_label="${forget_split}"
+     fi
+ 
+-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
++    mkdir -p "$(dirname "${imp_path}")"
++    register_importance_cleanup_path "${imp_path}"
++
+     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
+         echo "[duet][LoKU] Measuring importance -> ${imp_path}"
+         python src/tools/loku_measure_importance.py \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index f832ba2..f35c7b4 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -52,7 +52,8 @@ experiment="unlearn/popqa/loku_lora.yaml"
+ trainer="LoKU"
+ 
+ output_root="${repo_root}/saves/unlearn/popqa/loku"
+-importance_root="${repo_root}/saves/importances/popqa/loku"
++importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/popqa/loku}"
++importance_path_template="${IMPORTANCE_PATH:-}"
+ mkdir -p "${output_root}" "${importance_root}"
+@@ -119,7 +120,51 @@ lora_rs=(${LORA_RS:-"32"})
+ lora_alphas=(${LORA_ALPHAS:-"64"})
+ lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
++delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+ 
++importance_cleanup_paths=()
++
++resolve_importance_path() {
++    local forget_label="$1"
++    local retain_split="$2"
++    local path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    if [[ -n "${importance_path_template}" ]]; then
++        path="${importance_path_template}"
++        path="${path//\{base_model\}/${base_model}}"
++        path="${path//\{forget_label\}/${forget_label}}"
++        path="${path//\{retain_split\}/${retain_split}}"
++        path="${path//\{targets_tag\}/${targets_tag}}"
++    fi
++    echo "${path}"
++}
++
++register_importance_cleanup_path() {
++    local path="$1"
++    local existing
++    for existing in "${importance_cleanup_paths[@]}"; do
++        if [[ "${existing}" == "${path}" ]]; then
++            return
++        fi
++    done
++    importance_cleanup_paths+=("${path}")
++}
++
++cleanup_importance_files() {
++    if [[ "${delete_importance_after_run}" != "1" ]]; then
++        return
++    fi
++    local path
++    for path in "${importance_cleanup_paths[@]}"; do
++        if [[ -f "${path}" ]]; then
++            rm -f "${path}"
++            echo "[popqa][LoKU] Removed importance file ${path}"
++        fi
++    done
++}
++
++trap cleanup_importance_files EXIT
++
+ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+@@ -131,7 +176,10 @@ for split in "${forget_retain_splits[@]}"; do
+         forget_label="${forget_split}"
+     fi
+ 
+-    imp_path="${importance_root}/${base_model}_${forget_label}_${retain_split}_${targets_tag}.pt"
++    imp_path=$(resolve_importance_path "${forget_label}" "${retain_split}")
++    mkdir -p "$(dirname "${imp_path}")"
++    register_importance_cleanup_path "${imp_path}"
++
+     if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
+         echo "[popqa][LoKU] Measuring importance -> ${imp_path}"
+         python src/tools/loku_measure_importance.py \
 ```
