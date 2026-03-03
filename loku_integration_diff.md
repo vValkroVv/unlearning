@@ -1555,6 +1555,55 @@ index 0000000..38d6ea2
 +done
 ```
 
+## 2026-03-03 Runbook Update (LoKU DUET command)
+
+```diff
+diff --git a/prod-gpu-runs.md b/prod-gpu-runs.md
+index 8f052f8..4f289e8 100644
+--- a/prod-gpu-runs.md
++++ b/prod-gpu-runs.md
+@@ -209,19 +209,33 @@ bash scripts/popqa/npo_sam_popqa.sh
+ ```bash
+ CUDA_DEVICE_ORDER=PCI_BUS_ID \
+-CUDA_VISIBLE_DEVICES=1 \
++CUDA_VISIBLE_DEVICES=4 \
+ USE_SFT_BASE=1 \
+ LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+ SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+ MERGE_POPULARITY_FORGET=1 \
+-PER_DEVICE_TRAIN_BS=1 \
+-GRAD_ACCUM=32 \
+-IMPORTANCE_BATCH_SIZE=1 \
++PER_DEVICE_TRAIN_BS=32 \
++GRAD_ACCUM=1 \
++IMPORTANCE_BATCH_SIZE=32 \
+ IMPORTANCE_MAX_STEPS=0 \
+-EVAL_BATCH_SIZE=8 \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=64 \
+ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+-LRS="1e-4" \
+-bash scripts/duet/loku_duet.sh
++bash scripts/duet/loku_duet.sh ; \
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=4 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
++MERGE_POPULARITY_FORGET=0 \
++PER_DEVICE_TRAIN_BS=32 \
++GRAD_ACCUM=1 \
++IMPORTANCE_BATCH_SIZE=32 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=64 \
++DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
++bash scripts/duet/loku_duet.sh
+ ```
+```
+
 ## 11) LoKU Grid Search Defaults Update (2026-03-03)
 
 Updated scripts:
@@ -2159,4 +2208,121 @@ index f832ba2..f35c7b4 100755
      if [[ ! -f "${imp_path}" || "${force_importance}" == "1" ]]; then
          echo "[popqa][LoKU] Measuring importance -> ${imp_path}"
          python src/tools/loku_measure_importance.py \
+```
+
+## 2026-03-03 Runbook Update (LoKU UNLamb command)
+
+```diff
+diff --git a/prod-gpu-runs.md b/prod-gpu-runs.md
+index 205ceac..50e3b73 100644
+--- a/prod-gpu-runs.md
++++ b/prod-gpu-runs.md
+@@ -243,18 +243,34 @@ bash scripts/duet/loku_duet.sh
+ ```bash
+ CUDA_DEVICE_ORDER=PCI_BUS_ID \
+-CUDA_VISIBLE_DEVICES=1 \
++CUDA_VISIBLE_DEVICES=5 \
+ USE_SFT_BASE=1 \
+ LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
+ SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
+ MERGE_POPULARITY_FORGET=1 \
+-PER_DEVICE_TRAIN_BS=1 \
+-GRAD_ACCUM=32 \
+-IMPORTANCE_BATCH_SIZE=1 \
++PER_DEVICE_TRAIN_BS=32 \
++GRAD_ACCUM=1 \
++IMPORTANCE_BATCH_SIZE=32 \
+ IMPORTANCE_MAX_STEPS=0 \
+-EVAL_BATCH_SIZE=8 \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/popqa_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=64 \
+ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+-LRS="1e-4" \
+-bash scripts/popqa/loku_popqa.sh
++bash scripts/popqa/loku_popqa.sh ; \
++CUDA_DEVICE_ORDER=PCI_BUS_ID \
++CUDA_VISIBLE_DEVICES=5 \
++USE_SFT_BASE=1 \
++LOCAL_SFT_BASE=SwetieePawsss/UNLamb_ft_models \
++SFT_SUBFOLDER=llama-3.1-8b-instruct-popqa-ft \
++MERGE_POPULARITY_FORGET=0 \
++PER_DEVICE_TRAIN_BS=32 \
++GRAD_ACCUM=1 \
++IMPORTANCE_BATCH_SIZE=32 \
++IMPORTANCE_MAX_STEPS=0 \
++IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/popqa_loku_imp.pt \
++DELETE_IMPORTANCE_AFTER_RUN=1 \
++EVAL_BATCH_SIZE=64 \
++DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
++bash scripts/popqa/loku_popqa.sh
+ ```
+```
+
+## 2026-03-03 LoKU Importance LoRA Alignment
+
+Updated scripts:
+- `scripts/duet/loku_duet.sh`
+- `scripts/popqa/loku_popqa.sh`
+
+Change:
+- Importance measurement now explicitly receives LoRA `r`, `lora_alpha`, and `lora_dropout`.
+- New env vars for the importance stage:
+  - `IMPORTANCE_LORA_R` (default: first value from `LORA_RS`)
+  - `IMPORTANCE_LORA_ALPHA` (default: first value from `LORA_ALPHAS`)
+  - `IMPORTANCE_LORA_DROPOUT` (default: first value from `LORA_DROPOUTS`)
+
+```diff
+diff --git a/scripts/duet/loku_duet.sh b/scripts/duet/loku_duet.sh
+index dace46e..402212d 100755
+--- a/scripts/duet/loku_duet.sh
++++ b/scripts/duet/loku_duet.sh
+@@ -118,6 +118,11 @@ raw_lora_dropouts="${raw_lora_dropouts//,/ }"
+ raw_lora_dropouts="${raw_lora_dropouts//\"/}"
+ raw_lora_dropouts="${raw_lora_dropouts//\'/}"
+ read -r -a lora_dropouts <<< "${raw_lora_dropouts}"
++
++# Keep importance LoRA config aligned with training defaults unless explicitly overridden.
++importance_lora_r="${IMPORTANCE_LORA_R:-${lora_rs[0]}}"
++importance_lora_alpha="${IMPORTANCE_LORA_ALPHA:-${lora_alphas[0]}}"
++importance_lora_dropout="${IMPORTANCE_LORA_DROPOUT:-${lora_dropouts[0]}}"
+ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+ delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+ 
+@@ -192,6 +197,9 @@ for split in "${forget_retain_splits[@]}"; do
+             model.model_args.device_map=null \
+             ++model.model_args.low_cpu_mem_usage=true \
+             "model.lora_config.target_modules=${loku_target_modules}" \
++            model.lora_config.r=${importance_lora_r} \
++            model.lora_config.lora_alpha=${importance_lora_alpha} \
++            model.lora_config.lora_dropout=${importance_lora_dropout} \
+             trainer.args.per_device_train_batch_size=${importance_batch_size} \
+             trainer.args.gradient_accumulation_steps=1 \
+             trainer.args.gradient_checkpointing=false \
+diff --git a/scripts/popqa/loku_popqa.sh b/scripts/popqa/loku_popqa.sh
+index ef4eb9a..37392a2 100755
+--- a/scripts/popqa/loku_popqa.sh
++++ b/scripts/popqa/loku_popqa.sh
+@@ -133,6 +133,11 @@ raw_lora_dropouts="${raw_lora_dropouts//,/ }"
+ raw_lora_dropouts="${raw_lora_dropouts//\"/}"
+ raw_lora_dropouts="${raw_lora_dropouts//\'/}"
+ read -r -a lora_dropouts <<< "${raw_lora_dropouts}"
++
++# Keep importance LoRA config aligned with training defaults unless explicitly overridden.
++importance_lora_r="${IMPORTANCE_LORA_R:-${lora_rs[0]}}"
++importance_lora_alpha="${IMPORTANCE_LORA_ALPHA:-${lora_alphas[0]}}"
++importance_lora_dropout="${IMPORTANCE_LORA_DROPOUT:-${lora_dropouts[0]}}"
+ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+ delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+ 
+@@ -207,6 +212,9 @@ for split in "${forget_retain_splits[@]}"; do
+             model.model_args.device_map=null \
+             ++model.model_args.low_cpu_mem_usage=true \
+             "model.lora_config.target_modules=${loku_target_modules}" \
++            model.lora_config.r=${importance_lora_r} \
++            model.lora_config.lora_alpha=${importance_lora_alpha} \
++            model.lora_config.lora_dropout=${importance_lora_dropout} \
+             trainer.args.per_device_train_batch_size=${importance_batch_size} \
+             trainer.args.gradient_accumulation_steps=1 \
+             trainer.args.gradient_checkpointing=false \
 ```

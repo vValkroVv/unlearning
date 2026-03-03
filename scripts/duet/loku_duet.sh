@@ -118,6 +118,11 @@ raw_lora_dropouts="${raw_lora_dropouts//,/ }"
 raw_lora_dropouts="${raw_lora_dropouts//\"/}"
 raw_lora_dropouts="${raw_lora_dropouts//\'/}"
 read -r -a lora_dropouts <<< "${raw_lora_dropouts}"
+
+# Keep importance LoRA config aligned with training defaults unless explicitly overridden.
+importance_lora_r="${IMPORTANCE_LORA_R:-${lora_rs[0]}}"
+importance_lora_alpha="${IMPORTANCE_LORA_ALPHA:-${lora_alphas[0]}}"
+importance_lora_dropout="${IMPORTANCE_LORA_DROPOUT:-${lora_dropouts[0]}}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
 
@@ -192,6 +197,9 @@ for split in "${forget_retain_splits[@]}"; do
             model.model_args.device_map=null \
             ++model.model_args.low_cpu_mem_usage=true \
             "model.lora_config.target_modules=${loku_target_modules}" \
+            model.lora_config.r=${importance_lora_r} \
+            model.lora_config.lora_alpha=${importance_lora_alpha} \
+            model.lora_config.lora_dropout=${importance_lora_dropout} \
             trainer.args.per_device_train_batch_size=${importance_batch_size} \
             trainer.args.gradient_accumulation_steps=1 \
             trainer.args.gradient_checkpointing=false \
