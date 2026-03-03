@@ -220,6 +220,8 @@ IMPORTANCE_BATCH_SIZE=32 \
 IMPORTANCE_MAX_STEPS=0 \
 IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
 DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
 EVAL_BATCH_SIZE=64 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh ; \
@@ -235,6 +237,8 @@ IMPORTANCE_BATCH_SIZE=32 \
 IMPORTANCE_MAX_STEPS=0 \
 IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
 DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
 EVAL_BATCH_SIZE=64 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
@@ -255,6 +259,8 @@ IMPORTANCE_BATCH_SIZE=32 \
 IMPORTANCE_MAX_STEPS=0 \
 IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/popqa_loku_imp.pt \
 DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
 EVAL_BATCH_SIZE=64 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/loku_popqa.sh ; \
@@ -270,6 +276,8 @@ IMPORTANCE_BATCH_SIZE=32 \
 IMPORTANCE_MAX_STEPS=0 \
 IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/popqa_loku_imp.pt \
 DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
 EVAL_BATCH_SIZE=64 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/popqa/loku_popqa.sh
@@ -302,6 +310,8 @@ IMPORTANCE_BATCH_SIZE=1 \
 IMPORTANCE_MAX_STEPS=0 \
 IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
 DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
 EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 LRS="1e-4" \
@@ -330,8 +340,24 @@ IMPORTANCE_MAX_STEPS=0 \
 IMPORTANCE_ROOT=/data/home/vkropoti/unlearning/importance_custom \
 IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_custom/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt \
 DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_custom/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
 EVAL_BATCH_SIZE=8 \
 DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 LRS="1e-4" \
 bash scripts/popqa/loku_popqa.sh
 ```
+
+## LoKU FILA Base Path and Auto-Delete
+
+Use these params to keep LoKU residual base checkpoints off `/home`:
+
+- `FILA_BASE_PATH`: exact path (or template) where LoKU saves FILA residual base model.
+- `FILA_BASE_ROOT`: root directory alternative; script auto-uses `${FILA_BASE_ROOT}/{task_name}`.
+- `DELETE_FILA_BASE_AFTER_EVAL=1`: remove FILA residual base directory right after eval.
+
+Supported placeholders in `FILA_BASE_PATH`:
+- `{base_model}`
+- `{forget_label}`
+- `{retain_split}`
+- `{task_name}`

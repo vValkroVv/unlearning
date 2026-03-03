@@ -3,6 +3,32 @@
 Base commit: 8f1713b14607d44d82b9b4b5b4c54e30ffc0b3c8 (before LoKU integration)
 Target: current working tree
 
+## Update (2026-03-03): External FILA Base Path + Cleanup
+
+Reason:
+- LoKU was saving FILA residual base checkpoints under `run_dir/base_model` (large files, often ~16GB for 8B), which could fill `/home`.
+
+What changed:
+- `scripts/duet/loku_duet.sh`
+- `scripts/popqa/loku_popqa.sh`
+- `prod-gpu-runs.md`
+
+New script params:
+- `FILA_BASE_PATH`: exact path/template for FILA residual base model save location.
+- `FILA_BASE_ROOT`: root fallback; script resolves to `${FILA_BASE_ROOT}/{task_name}`.
+- `DELETE_FILA_BASE_AFTER_EVAL` (default `1`): removes FILA residual base dir right after eval.
+
+`FILA_BASE_PATH` placeholders:
+- `{base_model}`
+- `{forget_label}`
+- `{retain_split}`
+- `{task_name}`
+
+Behavior:
+- Adapters + eval outputs still go to the original `saves/unlearn/...` run directory.
+- Only FILA residual base model location changes when `FILA_BASE_PATH`/`FILA_BASE_ROOT` is set.
+- Exit trap cleanup remains as fallback for interrupted runs.
+
 ```diff
 diff --git a/prod-gpu-runs.md b/prod-gpu-runs.md
 index 0b7c5f3..673e1dc 100644

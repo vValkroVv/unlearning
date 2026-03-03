@@ -48,7 +48,12 @@ trainer="LoKU"
 output_root="${repo_root}/saves/unlearn/duet/loku"
 importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
 importance_path_template="${IMPORTANCE_PATH:-}"
+fila_base_root="${FILA_BASE_ROOT:-}"
+fila_base_path_template="${FILA_BASE_PATH:-}"
 mkdir -p "${output_root}" "${importance_root}"
+if [[ -n "${fila_base_root}" ]]; then
+    mkdir -p "${fila_base_root}"
+fi
 
 # Match current DUET default behavior used by NPO-SAM/FALCON scripts.
 export MERGE_POPULARITY_FORGET=${MERGE_POPULARITY_FORGET:-1}
@@ -125,8 +130,10 @@ importance_lora_alpha="${IMPORTANCE_LORA_ALPHA:-${lora_alphas[0]}}"
 importance_lora_dropout="${IMPORTANCE_LORA_DROPOUT:-${lora_dropouts[0]}}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
+delete_fila_base_after_eval="${DELETE_FILA_BASE_AFTER_EVAL:-1}"
 
 importance_cleanup_paths=()
+fila_base_cleanup_paths=()
 
 resolve_importance_path() {
     local forget_label="$1"
@@ -142,6 +149,30 @@ resolve_importance_path() {
     echo "${path}"
 }
 
+resolve_fila_base_path() {
+    local forget_label="$1"
+    local retain_split="$2"
+    local task_name="$3"
+    local run_dir="$4"
+    local path
+
+    if [[ -n "${fila_base_path_template}" ]]; then
+        path="${fila_base_path_template}"
+        path="${path//\{base_model\}/${base_model}}"
+        path="${path//\{forget_label\}/${forget_label}}"
+        path="${path//\{retain_split\}/${retain_split}}"
+        path="${path//\{task_name\}/${task_name}}"
+    elif [[ -n "${fila_base_root}" ]]; then
+        path="${fila_base_root}/${task_name}"
+    elif [[ "${fila_base_subdir}" = /* ]]; then
+        path="${fila_base_subdir}"
+    else
+        path="${run_dir}/${fila_base_subdir}"
+    fi
+
+    echo "${path}"
+}
+
 register_importance_cleanup_path() {
     local path="$1"
     local existing
@@ -151,6 +182,17 @@ register_importance_cleanup_path() {
         fi
     done
     importance_cleanup_paths+=("${path}")
+}
+
+register_fila_base_cleanup_path() {
+    local path="$1"
+    local existing
+    for existing in "${fila_base_cleanup_paths[@]}"; do
+        if [[ "${existing}" == "${path}" ]]; then
+            return
+        fi
+    done
+    fila_base_cleanup_paths+=("${path}")
 }
 
 cleanup_importance_files() {
@@ -166,7 +208,34 @@ cleanup_importance_files() {
     done
 }
 
-trap cleanup_importance_files EXIT
+remove_fila_base_dir() {
+    local path="$1"
+    if [[ -z "${path}" || "${path}" == "/" ]]; then
+        echo "[duet][LoKU] Refusing to remove unsafe FILA base path '${path}'"
+        return
+    fi
+    if [[ -d "${path}" ]]; then
+        rm -rf "${path}"
+        echo "[duet][LoKU] Removed FILA base model dir ${path}"
+    fi
+}
+
+cleanup_fila_base_dirs() {
+    if [[ "${delete_fila_base_after_eval}" != "1" ]]; then
+        return
+    fi
+    local path
+    for path in "${fila_base_cleanup_paths[@]}"; do
+        remove_fila_base_dir "${path}"
+    done
+}
+
+cleanup_loku_artifacts() {
+    cleanup_importance_files
+    cleanup_fila_base_dirs
+}
+
+trap cleanup_loku_artifacts EXIT
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -223,18 +292,21 @@ for split in "${forget_retain_splits[@]}"; do
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
-                                base_residual_dir=${run_dir}/${fila_base_subdir}
 
                                 if [[ -f "${summary_path}" && "${force_rerun}" != "1" ]]; then
                                     echo "[duet][LoKU] Skipping ${task_name}: found existing summary at ${summary_path}"
                                     continue
                                 fi
 
+                                base_residual_dir=$(resolve_fila_base_path "${forget_label}" "${retain_split}" "${task_name}" "${run_dir}")
+                                register_fila_base_cleanup_path "${base_residual_dir}"
+
                                 echo "[duet][LoKU] ${task_name}: unlearning ${base_model_path} on ${forget_split}"
 
                                 adapter_path=${run_dir}/adapter_model.safetensors
                                 if [[ ! -f "${adapter_path}" || ! -d "${base_residual_dir}" || "${force_rerun}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
+                                    mkdir -p "$(dirname "${base_residual_dir}")"
                                     python src/train.py --config-name=unlearn.yaml \
                                         experiment=${experiment} \
                                         trainer=${trainer} \
@@ -266,7 +338,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         trainer.method_args.importance_file=${imp_path} \
                                         trainer.method_args.fila_eps=${fila_eps} \
                                         trainer.method_args.fila_adapter_name=${fila_adapter_name} \
-                                        trainer.method_args.fila_base_subdir=${fila_base_subdir} \
+                                        trainer.method_args.fila_base_subdir=${base_residual_dir} \
                                         trainer.method_args.run_fila_sanity_check=${run_fila_sanity_check} \
                                         retain_logs_path=null \
                                         "${extra_train_args[@]}" \
@@ -306,6 +378,10 @@ for split in "${forget_retain_splits[@]}"; do
                                         rm -f "${run_dir}"/*.safetensors
                                         echo "[duet][LoKU] Removed safetensors from ${run_dir}"
                                     fi
+                                fi
+
+                                if [[ "${delete_fila_base_after_eval}" == "1" ]]; then
+                                    remove_fila_base_dir "${base_residual_dir}"
                                 fi
                             done
                         done
