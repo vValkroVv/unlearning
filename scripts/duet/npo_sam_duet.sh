@@ -54,25 +54,25 @@ eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4 1e-3}"
+raw_lrs="${LRS:-1e-3}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_betas="${BETAS:-0.01 0.05 0.15}"
+raw_betas="${BETAS:-0.1 0.015}"
 raw_betas="${raw_betas//,/ }"
 raw_betas="${raw_betas//\"/}"
 raw_betas="${raw_betas//\'/}"
 read -r -a betas <<< "${raw_betas}"
 
-raw_alphas="${ALPHAS:-0.25 1.0 2.0}"
+raw_alphas="${ALPHAS:-1.0}"
 raw_alphas="${raw_alphas//,/ }"
 raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-1.0 2.25}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"

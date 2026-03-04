@@ -886,3 +886,26 @@ index 0000000..d867483
 +        total_loss = self.gamma * forget_loss_2 + self.alpha * retain_loss
 +        return total_loss.detach() * grad_scale
 ```
+
+## 2026-03-04 DUET Grid Search Defaults Update
+
+Updated script:
+- `scripts/duet/npo_sam_duet.sh`
+
+New default grid values:
+- `LRS`: `1e-5`
+- `BETAS`: `0.1 0.015`
+- `SAM_RHOS`: `0.01`
+- `ALPHAS`: `1.0`
+- `GAMMAS`: `1.0 2.25`
+
+Notes:
+- `SAM_RHOS` already matched the target (`0.01`) and was left unchanged.
+
+## 2026-03-04 DUET LR Default Update
+
+Updated script:
+- `scripts/duet/npo_sam_duet.sh`
+
+New default:
+- `LRS`: `1e-3`

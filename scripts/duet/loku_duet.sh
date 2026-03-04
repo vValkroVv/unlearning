@@ -67,7 +67,7 @@ eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-5e-5,1e-4,2e-4}"
+raw_lrs="${LRS:-1e-3}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -79,13 +79,13 @@ raw_ihl_alphas="${raw_ihl_alphas//\"/}"
 raw_ihl_alphas="${raw_ihl_alphas//\'/}"
 read -r -a ihl_alphas <<< "${raw_ihl_alphas}"
 
-raw_alphas="${ALPHAS:-0.5,1.0}"
+raw_alphas="${ALPHAS:-1.0}"
 raw_alphas="${raw_alphas//,/ }"
 raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-0.5,1.0,2.0,4.0}"
+raw_gammas="${GAMMAS:-1.0}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"

@@ -1581,6 +1581,29 @@ index 0000000..38d6ea2
 +done
 ```
 
+## 2026-03-04 DUET Grid Search Defaults Update
+
+Updated script:
+- `scripts/duet/loku_duet.sh`
+
+New default grid values:
+- `LRS`: `1e-4`
+- `IHL_ALPHAS`: `1.0`
+- `ALPHAS`: `1.0`
+- `GAMMAS`: `1.0`
+- `FILA_EPS`: `1e-5`
+
+Notes:
+- `IHL_ALPHAS` and `FILA_EPS` already matched the target values and remain unchanged.
+
+## 2026-03-04 DUET LR Default Update
+
+Updated script:
+- `scripts/duet/loku_duet.sh`
+
+New default:
+- `LRS`: `1e-3`
+
 ## 2026-03-03 Runbook Update (LoKU DUET command)
 
 ```diff
