@@ -909,3 +909,26 @@ Updated script:
 
 New default:
 - `LRS`: `1e-3`
+
+## 2026-03-05 RWKU NPOSAM Integration
+
+Added files:
+- `configs/experiment/unlearn/rwku/npo_sam_lora.yaml`
+- `scripts/rwku/npo_sam_rwku.sh`
+
+RWKU script defaults now mirror DUET NPOSAM defaults (while keeping RWKU dataset + default base Llama):
+- `BASE_MODEL`: `Llama-3.1-8B`
+- `LRS`: `1e-3`
+- `BETAS`: `0.1`
+- `ALPHAS`: `1.0`
+- `GAMMAS`: `1.0`
+- `SAM_RHOS`: `0.01`
+- `SAM_ADAPTIVES`: `false`
+- `SAM_EPS`: `1e-12`
+- `FORGET_SPLIT`: `forget_level2`
+- `RETAIN_SPLIT`: `neighbor_level2`
+- `EVAL_BATCH_SIZE`: `8` (override supported, same knob as DUET script)
+- `DELETE_MODEL_SAFETENSORS_AFTER_EVAL`: supported
+
+Notes:
+- Added optional `HF_TOKEN` -> `HUGGINGFACE_HUB_TOKEN` mapping for gated model access without hardcoding secrets.

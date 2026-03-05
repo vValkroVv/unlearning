@@ -2371,7 +2371,36 @@ index ef4eb9a..37392a2 100755
 +            model.lora_config.r=${importance_lora_r} \
 +            model.lora_config.lora_alpha=${importance_lora_alpha} \
 +            model.lora_config.lora_dropout=${importance_lora_dropout} \
-             trainer.args.per_device_train_batch_size=${importance_batch_size} \
-             trainer.args.gradient_accumulation_steps=1 \
-             trainer.args.gradient_checkpointing=false \
+            trainer.args.per_device_train_batch_size=${importance_batch_size} \
+            trainer.args.gradient_accumulation_steps=1 \
+            trainer.args.gradient_checkpointing=false \
 ```
+
+## 2026-03-05 RWKU LoKU Integration
+
+Added files:
+- `configs/experiment/unlearn/rwku/loku_lora.yaml`
+- `scripts/rwku/loku_rwku.sh`
+
+RWKU LoKU script behavior:
+- Runs LoKU importance measurement first (`src/tools/loku_measure_importance.py`).
+- Runs LoKU unlearning train loop.
+- Runs RWKU eval (`eval/rwku/default.yaml`) and writes `DUET_EVAL.json` / `DUET_SUMMARY.json`.
+- Supports FILA base path options and cleanup controls consistent with DUET/POPQA LoKU scripts.
+
+RWKU LoKU default settings (aligned with current DUET LoKU defaults where applicable):
+- `BASE_MODEL`: `Llama-3.1-8B`
+- `FORGET_SPLIT`: `forget_level2`
+- `RETAIN_SPLIT`: `neighbor_level2`
+- `LRS`: `1e-3`
+- `IHL_ALPHAS`: `1.0`
+- `ALPHAS`: `1.0`
+- `GAMMAS`: `1.0`
+- `PER_DEVICE_TRAIN_BS`: `1`
+- `GRAD_ACCUM`: `32`
+- `IMPORTANCE_BATCH_SIZE`: `1`
+- `IMPORTANCE_MAX_STEPS`: `0`
+- `EVAL_BATCH_SIZE`: `8`
+- `DELETE_MODEL_SAFETENSORS_AFTER_EVAL`: supported
+- `DELETE_IMPORTANCE_AFTER_RUN`: supported
+- `DELETE_FILA_BASE_AFTER_EVAL`: supported (default `1`)
