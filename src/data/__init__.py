@@ -1,7 +1,13 @@
 from typing import Dict, Any, Union
 from omegaconf import DictConfig
 
-from data.qa import QADataset, QAwithIdkDataset, QAwithAlternateDataset, QAAnswerIndexDataset
+from data.qa import (
+    QADataset,
+    QAwithIdkDataset,
+    QAwithAlternateDataset,
+    QAwithAlternateMetadataDataset,
+    QAAnswerIndexDataset,
+)
 from data.collators import (
     DataCollatorForSupervisedDataset,
 )
@@ -96,6 +102,7 @@ _register_data(QAwithIdkDataset)
 _register_data(PretrainingDataset)
 _register_data(CompletionDataset)
 _register_data(QAwithAlternateDataset)
+_register_data(QAwithAlternateMetadataDataset)
 _register_data(QAAnswerIndexDataset)
 
 # Register composite datasets used in unlearning

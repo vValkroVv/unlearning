@@ -221,6 +221,8 @@ def preprocess_pretraining_instance(
 
 
 def add_dataset_index(dataset):
+    if "index" in dataset.column_names:
+        return dataset
     indexing = np.arange(len(dataset))
     dataset = dataset.add_column("index", indexing)
     return dataset

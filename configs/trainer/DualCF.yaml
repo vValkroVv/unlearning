@@ -1,0 +1,27 @@
+defaults:
+  - GradDiff
+
+handler: DualCF
+
+method_args:
+  beta: 0.5
+  gamma: 1.0
+  alpha: 1.0
+  retain_loss_type: NLL
+
+  tau_d: 0.5
+  tau_a: 0.5
+  temp_d: 0.25
+  temp_a: 0.25
+
+  lambda_neg_max: 1.0
+  lambda_ret_lo: 1.0
+  lambda_ret_hi: 2.0
+  cf_weight: 1.0
+  risk_forget_scale: 0.5
+
+  normalize_cf_by_tokens: true
+  normalize_neg_by_tokens: true
+
+  disable_difficulty_route: false
+  disable_attribution_route: false

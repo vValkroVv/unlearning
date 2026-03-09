@@ -1,5 +1,6 @@
 import torch
 import transformers
+import numbers
 from typing import Dict, Sequence
 from data.utils import IGNORE_INDEX
 
@@ -35,10 +36,20 @@ class DataCollatorForSupervisedDataset(object):
         return input_ids
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        assert isinstance(instances[0], dict)
+        first_instance = instances[0]
+        if torch.is_tensor(first_instance):
+            return torch.stack(instances)
+        if isinstance(first_instance, bool):
+            return torch.tensor(instances, dtype=torch.bool)
+        if isinstance(first_instance, numbers.Integral):
+            return torch.tensor(instances, dtype=torch.long)
+        if isinstance(first_instance, numbers.Real):
+            return torch.tensor(instances, dtype=torch.float32)
+
+        assert isinstance(first_instance, dict)
         return_dct = {}
-        if "input_ids" not in instances[0]:
-            for key in instances[0].keys():
+        if "input_ids" not in first_instance:
+            for key in first_instance.keys():
                 key_instances = self.get_instances_from_key(
                     instances=instances, key=key
                 )
@@ -49,12 +60,12 @@ class DataCollatorForSupervisedDataset(object):
             attention_mask = input_ids.ne(self.tokenizer.pad_token_id)
             return_dct.update({"input_ids": input_ids})
             return_dct.update({"attention_mask": attention_mask})
-            if "labels" in instances[0]:
+            if "labels" in first_instance:
                 labels = [instance["labels"] for instance in instances]
                 labels = self._pad_tokens(labels, IGNORE_INDEX)
                 return_dct.update({"labels": labels})
             # Optional auxiliary numeric fields (e.g., pop_sum) passed through if present
-            if "pop_sum" in instances[0]:
+            if "pop_sum" in first_instance:
                 return_dct.update(
                     {
                         "pop_sum": torch.tensor(
@@ -64,7 +75,7 @@ class DataCollatorForSupervisedDataset(object):
                     }
                 )
             if self.index:
-                if self.index in instances[0]:
+                if self.index in first_instance:
                     return_dct.update(
                         {
                             self.index: torch.tensor(

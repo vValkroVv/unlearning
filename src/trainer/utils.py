@@ -59,6 +59,40 @@ def compute_batch_nll(model, inputs):
     return loss, outputs
 
 
+def _token_counts_from_labels(labels: torch.Tensor) -> torch.Tensor:
+    # Shift because compute_batch_nll predicts labels[..., 1:].
+    counts = (labels[..., 1:] != -100).sum(dim=-1)
+    return counts.clamp_min(1)
+
+
+def compute_nll_per_sample(model, inputs, normalize_by_tokens: bool = True):
+    loss_sum, outputs = compute_batch_nll(model, inputs)
+    if normalize_by_tokens:
+        counts = _token_counts_from_labels(inputs["labels"]).to(loss_sum.device)
+        loss_sum = loss_sum / counts
+    return loss_sum, outputs
+
+
+def compute_npo_per_sample(
+    model,
+    ref_model,
+    lose_inputs,
+    beta: float = 1.0,
+    normalize_by_tokens: bool = True,
+):
+    lose_loss, lose_outputs = compute_nll_per_sample(
+        model, lose_inputs, normalize_by_tokens=normalize_by_tokens
+    )
+    with torch.no_grad():
+        lose_ref_loss, _ = compute_nll_per_sample(
+            ref_model, lose_inputs, normalize_by_tokens=normalize_by_tokens
+        )
+
+    lose_log_ratio = -(lose_loss - lose_ref_loss)
+    loss = -2.0 / beta * F.logsigmoid(beta * (-lose_log_ratio))
+    return loss, lose_outputs
+
+
 def compute_dpo_loss(model, ref_model, win_inputs=None, lose_inputs=None, beta=1.0):
     if win_inputs is None and lose_inputs is None:
         raise ValueError("Both win_inputs and lose_inputs can't be None")

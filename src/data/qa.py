@@ -140,6 +140,38 @@ class QAwithAlternateDataset(QADataset):
         return return_item if self.return_original else return_item["alternate"]
 
 
+class QAwithAlternateMetadataDataset(QAwithAlternateDataset):
+    def __init__(self, metadata_keys=None, *args, **kwargs):
+        self.metadata_keys = list(metadata_keys or [])
+        super().__init__(*args, **kwargs)
+        if self.metadata_keys and not self.return_original:
+            raise ValueError(
+                "QAwithAlternateMetadataDataset requires return_original=True when "
+                "metadata_keys are requested."
+            )
+
+    def _coerce_metadata_value(self, key, value):
+        if hasattr(value, "item"):
+            value = value.item()
+        if key == "index":
+            return int(value)
+        return float(value)
+
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        if not self.metadata_keys:
+            return item
+
+        row = self.data[idx]
+        for key in self.metadata_keys:
+            if key not in row:
+                raise KeyError(
+                    f"Metadata key `{key}` is missing from dataset row {idx}."
+                )
+            item[key] = self._coerce_metadata_value(key=key, value=row[key])
+        return item
+
+
 class QAAnswerIndexDataset(QADataset):
     def __init__(self, answer_index=0, *args, **kwargs):
         self.answer_index = int(answer_index)
