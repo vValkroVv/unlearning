@@ -165,6 +165,10 @@ Operational update:
 - experiment configs now default to local JSON artifact mode with
   - `cf_dataset_path=json`
   - `cf_dataset_split=train`
+- in local JSON mode, actual DualCF forget training is controlled by
+  `cf_dataset_path`, `cf_dataset_data_files`, and especially `cf_dataset_split`;
+  `forget_split` remains the benchmark/eval identity and does not shrink the
+  training artifact by itself
 - launcher scripts now fail fast if:
   - `CF_DATASET_PATH` still uses a placeholder path
   - local JSON mode is selected without `CF_DATASET_DATA_FILES`
@@ -178,9 +182,12 @@ Operational update:
 - RWKU local JSON mode defaults to `cf_dataset_name=null` and
   `cf_dataset_split=train`
 - the GPU validation playbook now lives in `plan-test-dual.md`, including:
-  - full-file JSONL integrity scanning via environment variables
+  - explicit split-matched artifact preparation for DUET rare / popular / merged
+  - stronger artifact validation and provenance requirements
+  - corrected direct smoke and small-run commands that slice `cf_dataset_split`
+    in local JSON mode
   - a 1B DUET launcher smoke command with `USE_SFT_BASE=0`
-  - an explicit train-then-eval DUET small-run procedure
+  - DUET-first, RWKU-second execution order for the main campaign
 
 This supports the intended ablations without additional trainer classes:
 
@@ -218,6 +225,12 @@ Builds `attribution_score` from a proxy retain bank by:
 - clipping negatives to zero,
 - min-max normalizing the positive risk signal.
 
+Operational constraint:
+
+- artifact preparation remains an offline stage and should not be moved into
+  `DualCF.compute_loss()`, because attribution scoring itself requires extra
+  backward passes over a retain bank
+
 ## Smoke-test command
 
 ```bash
@@ -226,8 +239,11 @@ python src/train.py --config-name=unlearn.yaml \
   trainer=DualCF \
   task_name=duet_dualcf_smoke \
   model=Llama-3.2-1B-Instruct-lora \
-  "forget_split='city_forget_rare_5[:2]'" \
-  "retain_split='city_fast_retain_500[:2]'" \
+  forget_split=city_forget_rare_5 \
+  retain_split=city_fast_retain_500 \
+  cf_dataset_path=json \
+  cf_dataset_data_files=/tmp/duet_rare_dualcf.jsonl \
+  "cf_dataset_split=train[:2]" \
   trainer.args.per_device_train_batch_size=1 \
   trainer.args.gradient_accumulation_steps=1 \
   trainer.args.num_train_epochs=1 \
