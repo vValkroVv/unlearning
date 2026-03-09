@@ -197,6 +197,117 @@ This supports the intended ablations without additional trainer classes:
 
 Uniform counterfactual remains available through the existing `DPO` trainer.
 
+## Verification-driven fixes (2026-03-09)
+
+After running the DUET and RWKU smoke/functional checks from
+`plan-test-dual.md`, the following repo-fit fixes were added.
+
+### Hugging Face auth propagation
+
+Changed files:
+
+- `src/model/__init__.py`
+- `src/model/lora.py`
+- `src/data/utils.py`
+- `src/tools/dual_cf_artifact_utils.py`
+
+Fix:
+
+- shared model/tokenizer/dataset loaders now forward `HF_TOKEN` /
+  `HUGGINGFACE_HUB_TOKEN` / `HF_HUB_TOKEN` into gated Hugging Face loads
+
+Why:
+
+- artifact tools and train/eval runs against gated Meta Llama checkpoints were
+  failing until auth was passed explicitly
+
+### Model override compatibility
+
+Changed files:
+
+- `configs/experiment/unlearn/duet/dual_cf_lora.yaml`
+- `configs/experiment/unlearn/popqa/dual_cf_lora.yaml`
+- `configs/experiment/unlearn/rwku/dual_cf_lora.yaml`
+
+Fix:
+
+- removed hardcoded 8B `model.model_args.pretrained_model_name_or_path` entries
+
+Why:
+
+- CLI model overrides like `model=Llama-3.2-1B-Instruct-lora` were still
+  loading the 8B base model, which broke the documented 1B smoke path
+
+### Local JSON split quoting in launchers
+
+Changed files:
+
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/popqa/dual_cf_popqa.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+
+Fix:
+
+- launcher train commands now pass
+  `"cf_dataset_split='${cf_dataset_split}'"`
+
+Why:
+
+- Hydra treats bracket slices like `train[:2]` as grammar unless the value is
+  quoted as a string
+
+### Offline artifact tool device placement
+
+Changed file:
+
+- `src/tools/dual_cf_artifact_utils.py`
+
+Fix:
+
+- `load_model_bundle()` now clears inherited `model_args.device_map` before
+  loading artifact-tool models
+
+Why:
+
+- attribution scoring with LoRA configs inherited `device_map=auto`, but the
+  offline tools manage their own device placement and otherwise hit CPU/GPU
+  mismatch errors
+
+### Counterfactual generation semantics
+
+Changed file:
+
+- `src/tools/make_counterfactuals.py`
+
+Fix:
+
+- generator mode now prompts explicitly for a short incorrect alternative answer
+- the true answer is included in the prompt
+- a stricter retry prompt is used if the first generation still matches the
+  true answer
+
+Why:
+
+- RWKU validation exposed rows where `alternate == answer`, showing that the
+  previous generator flow was effectively asking the model the original QA task
+  instead of requesting a counterfactual
+
+### Artifact validation helper
+
+Added file:
+
+- `src/tools/validate_dual_cf_artifact.py`
+
+Purpose:
+
+- reusable JSONL validation for:
+  - required keys
+  - duplicate indices
+  - empty question/answer/alternate fields
+  - non-finite score values
+  - `alternate == answer`
+  - difficulty/attribution range reporting
+
 ## Offline tooling
 
 ### `src/tools/make_counterfactuals.py`

@@ -22,10 +22,6 @@ cf_dataset_name: null
 cf_dataset_split: train
 cf_dataset_data_files: null
 
-model:
-  model_args:
-    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B
-
 data:
   anchor: forget
   forget:

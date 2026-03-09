@@ -10,6 +10,19 @@ IGNORE_INDEX = -100  # TODO put in common constants
 logger = logging.getLogger("data")
 
 
+def _hf_auth_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    if "token" in kwargs and kwargs["token"] not in (None, "", "null", "None"):
+        return {}
+    token = (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        or os.environ.get("HF_HUB_TOKEN")
+    )
+    if not token:
+        return {}
+    return {"token": token}
+
+
 def load_hf_dataset(path, **kwargs):
     """Wrapper around datasets.load_dataset with sane download defaults.
 
@@ -37,6 +50,7 @@ def load_hf_dataset(path, **kwargs):
         cache_dir = os.environ.get("HF_DATASETS_CACHE") or os.environ.get("HF_CACHE")
         if cache_dir:
             kwargs["cache_dir"] = cache_dir
+    kwargs.update(_hf_auth_kwargs(kwargs))
     return datasets.load_dataset(path, **kwargs)
 
 

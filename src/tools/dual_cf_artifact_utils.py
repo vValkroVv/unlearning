@@ -26,6 +26,14 @@ def _normalize_optional_arg(value: Optional[str]):
     return value
 
 
+def _hf_token():
+    return (
+        os.environ.get("HF_TOKEN")
+        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+        or os.environ.get("HF_HUB_TOKEN")
+    )
+
+
 def load_dataset_split(
     path: str,
     split: str,
@@ -40,6 +48,9 @@ def load_dataset_split(
         kwargs["name"] = name
     if data_files is not None:
         kwargs["data_files"] = data_files
+    token = _hf_token()
+    if token and "token" not in kwargs:
+        kwargs["token"] = token
 
     dataset = datasets.load_dataset(path, **kwargs)
     dataset = add_dataset_index(dataset)
@@ -106,6 +117,12 @@ def load_model_bundle(
     tokenizer_path: Optional[str] = None,
 ):
     model_cfg = OmegaConf.load(model_cfg_path)
+    # Offline artifact tools manage their own device placement, so avoid
+    # inheriting training-time model sharding configs like `device_map=auto`.
+    if model_cfg.get("model_args", None) is not None:
+        with open_dict(model_cfg):
+            if model_cfg.model_args.get("device_map", None) is not None:
+                model_cfg.model_args.device_map = None
     if model_path:
         with open_dict(model_cfg):
             model_cfg.model_args.pretrained_model_name_or_path = model_path

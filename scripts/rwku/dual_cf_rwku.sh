@@ -234,7 +234,7 @@ for lr in "${lrs[@]}"; do
                                                                                         retain_split=${retain_split} \
                                                                                         cf_dataset_path=${cf_dataset_path} \
                                                                                         cf_dataset_name=${cf_dataset_name} \
-                                                                                        cf_dataset_split=${cf_dataset_split} \
+                                                                                        "cf_dataset_split='${cf_dataset_split}'" \
                                                                                         cf_dataset_data_files=${cf_dataset_data_files} \
                                                                                         model.model_args.pretrained_model_name_or_path=${base_model_path} \
                                                                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \

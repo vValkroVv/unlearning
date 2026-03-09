@@ -83,36 +83,62 @@ def build_generator(args):
         model = model.to(device)
     model.eval()
 
-    def generate_alternate(question: str) -> str:
-        prompt_item = preprocess_chat_instance(
-            tokenizer=tokenizer,
-            template_config=template_args,
-            prompt_msgs=[question],
-            response_msgs=[""],
-            max_length=args.max_length,
-            predict_with_generate=True,
-        )
-        input_ids = prompt_item["input_ids"].unsqueeze(0)
-        attention_mask = prompt_item["attention_mask"].unsqueeze(0)
-        target_device = input_ids.device
-        if getattr(model, "hf_device_map", None) is None:
-            target_device = torch.device(device)
-            input_ids = input_ids.to(target_device)
-            attention_mask = attention_mask.to(target_device)
-        with torch.inference_mode():
-            outputs = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                do_sample=args.temperature > 0.0,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                max_new_tokens=args.max_new_tokens,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
+    def generate_alternate(question: str, answer: str) -> str:
+        prompt_variants = [
+            (
+                "Question: {question}\n"
+                "True answer: {answer}\n"
+                "Write one short plausible but incorrect alternative answer. "
+                "Output only the alternative answer."
+            ),
+            (
+                "Provide a short counterfactual answer to the question below.\n"
+                "It must be different from the true answer.\n"
+                "Question: {question}\n"
+                "True answer: {answer}\n"
+                "Output only the counterfactual answer."
+            ),
+        ]
+
+        def normalize(text: str) -> str:
+            return " ".join(str(text).strip().lower().split())
+
+        answer_norm = normalize(answer)
+        last_text = ""
+        for prompt_template in prompt_variants:
+            cf_prompt = prompt_template.format(question=question, answer=answer)
+            prompt_item = preprocess_chat_instance(
+                tokenizer=tokenizer,
+                template_config=template_args,
+                prompt_msgs=[cf_prompt],
+                response_msgs=[""],
+                max_length=args.max_length,
+                predict_with_generate=True,
             )
-        generated = outputs[0, input_ids.shape[-1] :]
-        text = tokenizer.decode(generated, skip_special_tokens=True).strip()
-        return text
+            input_ids = prompt_item["input_ids"].unsqueeze(0)
+            attention_mask = prompt_item["attention_mask"].unsqueeze(0)
+            target_device = input_ids.device
+            if getattr(model, "hf_device_map", None) is None:
+                target_device = torch.device(device)
+                input_ids = input_ids.to(target_device)
+                attention_mask = attention_mask.to(target_device)
+            with torch.inference_mode():
+                outputs = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    do_sample=args.temperature > 0.0,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    max_new_tokens=args.max_new_tokens,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=tokenizer.eos_token_id,
+                )
+            generated = outputs[0, input_ids.shape[-1] :]
+            text = tokenizer.decode(generated, skip_special_tokens=True).strip()
+            last_text = text
+            if text and normalize(text) != answer_norm:
+                return text
+        return last_text
 
     return generate_alternate
 
@@ -161,7 +187,10 @@ def main():
                 )
             alternate = mapping[join_value]
         else:
-            alternate = generate_alternate(str(row[args.question_key]))
+            alternate = generate_alternate(
+                str(row[args.question_key]),
+                str(answer),
+            )
 
         updated = dict(row)
         updated["answer"] = answer

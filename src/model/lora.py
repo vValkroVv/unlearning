@@ -10,6 +10,28 @@ hf_home = os.getenv("HF_HOME", default=None)
 
 logger = logging.getLogger(__name__)
 
+
+def _hf_auth_kwargs(config_like=None):
+    """Pass the active HF token through to gated model/tokenizer loads."""
+    token = (
+        os.getenv("HF_TOKEN")
+        or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        or os.getenv("HF_HUB_TOKEN")
+    )
+    if not token:
+        return {}
+
+    auth_kwargs = {}
+    if config_like is not None:
+        try:
+            if config_like.get("token", None) is not None:
+                return {}
+        except Exception:
+            pass
+    auth_kwargs["token"] = token
+    return auth_kwargs
+
+
 def _normalize_lora_config(lora_config: Optional[DictConfig]) -> DictConfig:
     if lora_config:
         lora_params = dict(lora_config)
@@ -153,7 +175,9 @@ class LoRAModelForCausalLM:
         # Load the base model
         logger.info(f"Loading base model from {pretrained_model_name_or_path}")
         base_model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path, **kwargs
+            pretrained_model_name_or_path,
+            **kwargs,
+            **_hf_auth_kwargs(),
         )
 
         # Create LoRA configuration with converted parameters
@@ -235,6 +259,7 @@ def get_lora_model(model_cfg: DictConfig):
                 pretrained_model_name_or_path=base_model_path,
                 torch_dtype=torch_dtype,
                 **kwargs,
+                **_hf_auth_kwargs(kwargs),
             )
             model = PeftModel.from_pretrained(base_model, adapter_path)
         elif has_adapter_weights and base_model_path is not None:
@@ -248,6 +273,7 @@ def get_lora_model(model_cfg: DictConfig):
                 pretrained_model_name_or_path=base_model_path,
                 torch_dtype=torch_dtype,
                 **kwargs,
+                **_hf_auth_kwargs(kwargs),
             )
             peft_config = LoraConfig(
                 target_modules=lora_params["target_modules"],
@@ -311,7 +337,11 @@ def get_dtype(model_args):
 def get_tokenizer(tokenizer_args):
     """Load tokenizer from tokenizer arguments."""
     try:
-        tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args, cache_dir=hf_home)
+        tokenizer = AutoTokenizer.from_pretrained(
+            **tokenizer_args,
+            cache_dir=hf_home,
+            **_hf_auth_kwargs(tokenizer_args),
+        )
     except Exception as e:
         error_message = (
             f"{'--' * 40}\n"

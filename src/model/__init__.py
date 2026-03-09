@@ -18,6 +18,27 @@ def _register_model(model_class):
     MODEL_REGISTRY[model_class.__name__] = model_class
 
 
+def _hf_auth_kwargs(config_like=None):
+    """Pass the active HF token through to gated model/tokenizer loads."""
+    token = (
+        os.getenv("HF_TOKEN")
+        or os.getenv("HUGGINGFACE_HUB_TOKEN")
+        or os.getenv("HF_HUB_TOKEN")
+    )
+    if not token:
+        return {}
+
+    auth_kwargs = {}
+    if config_like is not None:
+        try:
+            if config_like.get("token", None) is not None:
+                return {}
+        except Exception:
+            pass
+    auth_kwargs["token"] = token
+    return auth_kwargs
+
+
 def get_dtype(model_args):
     with open_dict(model_args):
         torch_dtype = model_args.pop("torch_dtype", None)
@@ -63,6 +84,7 @@ def get_model(model_cfg: DictConfig):
             torch_dtype=torch_dtype,
             **model_args,
             cache_dir=hf_home,
+            **_hf_auth_kwargs(model_args),
         )
     except Exception as e:
         logger.warning(f"Model {model_path} requested with {model_cfg.model_args}")
@@ -88,7 +110,11 @@ def _add_or_replace_eos_token(tokenizer, eos_token: str) -> None:
 
 def get_tokenizer(tokenizer_cfg: DictConfig):
     try:
-        tokenizer = AutoTokenizer.from_pretrained(**tokenizer_cfg, cache_dir=hf_home)
+        tokenizer = AutoTokenizer.from_pretrained(
+            **tokenizer_cfg,
+            cache_dir=hf_home,
+            **_hf_auth_kwargs(tokenizer_cfg),
+        )
     except Exception as e:
         error_message = (
             f"{'--' * 40}\n"
