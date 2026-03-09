@@ -11,6 +11,7 @@ from typing import Dict, Iterable, Tuple
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
@@ -33,6 +34,8 @@ def parse_args():
     parser.add_argument("--model-cfg", required=True)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--tokenizer-path", default=None)
+    parser.add_argument("--model-subfolder", default=None)
+    parser.add_argument("--tokenizer-subfolder", default=None)
     parser.add_argument("--forget-dataset-path", required=True)
     parser.add_argument("--forget-split", required=True)
     parser.add_argument("--forget-dataset-name", default=None)
@@ -52,6 +55,7 @@ def parse_args():
     parser.add_argument("--retain-batch-size", type=int, default=1)
     parser.add_argument("--retain-max-steps", type=int, default=64)
     parser.add_argument("--forget-max-examples", type=int, default=0)
+    parser.add_argument("--forget-max-steps", type=int, default=0)
     parser.add_argument("--device", default=None)
     parser.add_argument("--lora-only", action="store_true")
     parser.add_argument("--alignment", choices=("dot", "cosine"), default="dot")
@@ -91,7 +95,18 @@ def accumulate_retain_gradient(
         for name, param in selected_params
     }
     steps = 0
-    for batch in dataloader:
+    total_steps = None
+    if hasattr(dataloader, "__len__"):
+        total_steps = len(dataloader)
+        if max_steps > 0:
+            total_steps = min(total_steps, max_steps)
+    retain_iter = tqdm(
+        dataloader,
+        total=total_steps,
+        desc="retain_grad",
+        dynamic_ncols=True,
+    )
+    for batch in retain_iter:
         if max_steps > 0 and steps >= max_steps:
             break
         model.zero_grad(set_to_none=True)
@@ -115,11 +130,18 @@ def accumulate_retain_gradient(
 def main():
     args = parse_args()
     retain_question_key = args.retain_question_key or args.question_key
+    forget_limit = 0
+    if int(args.forget_max_steps) > 0:
+        forget_limit = int(args.forget_max_steps)
+    elif int(args.forget_max_examples) > 0:
+        forget_limit = int(args.forget_max_examples)
 
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
         tokenizer_path=args.tokenizer_path,
+        model_subfolder=args.model_subfolder,
+        tokenizer_subfolder=args.tokenizer_subfolder,
     )
     device = select_device(args.device)
     move_to_device = getattr(model, "hf_device_map", None) is None
@@ -158,13 +180,13 @@ def main():
             split=args.forget_split,
             name=args.forget_dataset_name,
             data_files=args.forget_data_files,
-            max_examples=args.forget_max_examples,
+            max_examples=forget_limit,
         )
     ]
-    if args.forget_max_examples and args.forget_max_examples > 0:
+    if forget_limit > 0:
         forget_dataset = torch.utils.data.Subset(
             forget_dataset,
-            range(min(int(args.forget_max_examples), len(forget_dataset))),
+            range(min(forget_limit, len(forget_dataset))),
         )
 
     collator = DataCollatorForSupervisedDataset(tokenizer, index="index")
@@ -195,7 +217,13 @@ def main():
     )
 
     grad_by_index: Dict[int, Dict[str, float]] = {}
-    for batch in forget_loader:
+    forget_iter = tqdm(
+        forget_loader,
+        total=len(forget_loader),
+        desc="forget_grad",
+        dynamic_ncols=True,
+    )
+    for batch in forget_iter:
         model.zero_grad(set_to_none=True)
         outputs = model(**to_model_inputs(batch, device=device, move_to_device=move_to_device))
         outputs.loss.backward()

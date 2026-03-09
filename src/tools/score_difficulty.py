@@ -43,6 +43,8 @@ def parse_args():
     parser.add_argument("--model-cfg", default=None)
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--tokenizer-path", default=None)
+    parser.add_argument("--model-subfolder", default=None)
+    parser.add_argument("--tokenizer-subfolder", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--max-length", type=int, default=512)
@@ -83,6 +85,8 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
         tokenizer_path=args.tokenizer_path,
+        model_subfolder=args.model_subfolder,
+        tokenizer_subfolder=args.tokenizer_subfolder,
     )
     device = select_device(args.device)
     if getattr(model, "hf_device_map", None) is None:

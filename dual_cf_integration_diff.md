@@ -292,6 +292,47 @@ Why:
   previous generator flow was effectively asking the model the original QA task
   instead of requesting a counterfactual
 
+### Offline model subfolder overrides
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `src/tools/make_counterfactuals.py`
+- `src/tools/score_difficulty.py`
+- `src/tools/score_attribution.py`
+
+Fix:
+
+- offline artifact tools now accept `--model-subfolder` and
+  `--tokenizer-subfolder`
+- `load_model_bundle()` forwards those values into the shared model/tokenizer
+  config before loading
+
+Why:
+
+- the DUET SFT weights are published inside the `SwetieePawsss/DUET_ft_models`
+  repo under a subfolder, so artifact preparation previously had no clean way
+  to address that layout without first resolving a local snapshot path
+
+### Attribution progress visibility and quick caps
+
+Changed file:
+
+- `src/tools/score_attribution.py`
+
+Fix:
+
+- added `tqdm` progress bars for both retain-gradient accumulation and
+  forget-gradient scoring
+- added `--forget-max-steps` as a symmetric quick cap alongside
+  `--retain-max-steps`
+
+Why:
+
+- merged 8B attribution runs were otherwise opaque during execution
+- a retain-only cap was not enough for fast verification runs when the user
+  wanted a bounded forget-side pass as well
+
 ### Artifact validation helper
 
 Added file:

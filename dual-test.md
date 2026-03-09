@@ -754,7 +754,212 @@ python src/tools/validate_dual_cf_artifact.py \
 
 Both commands succeeded.
 
-## 13. Current status
+## 13. Merged DUET capped artifact and run
+
+The user requested the merged DUET path, with:
+
+1. the usual Meta Llama checkpoint for `make_counterfactuals.py`
+2. the `SwetieePawsss` DUET SFT checkpoint for the later scoring/training steps
+3. `CUDA_VISIBLE_DEVICES=0`
+4. `PER_DEVICE_TRAIN_BS=8`
+5. `GRAD_ACCUM=4`
+6. `EVAL_BATCH_SIZE=32`
+7. a quick forget-side cap matching `--retain-max-steps 64`
+
+### 13.1 Tooling fixes applied before rerun
+
+Changed:
+
+1. `src/tools/dual_cf_artifact_utils.py`
+2. `src/tools/make_counterfactuals.py`
+3. `src/tools/score_difficulty.py`
+4. `src/tools/score_attribution.py`
+
+Fixes:
+
+1. added `--model-subfolder` / `--tokenizer-subfolder` support for offline
+   artifact tools
+2. added `tqdm` progress bars to `score_attribution.py`
+3. added `--forget-max-steps` to `score_attribution.py`
+
+Reason:
+
+1. the Hub repo `SwetieePawsss/DUET_ft_models` is a repo with subfolders, not a
+   direct model id per subfolder
+2. the previous merged attribution run had no visible progress
+3. quick bounded verification needed the same cap on the forget side
+
+### 13.2 Resolved local SFT checkpoint path
+
+Resolved and used:
+
+1. `/workspace/unlearning/.hf_home/models--SwetieePawsss--DUET_ft_models/snapshots/e1264db87e3b1ca297a62fe27e150af63a7fb628/llama-3.1-8b-instruct-tripunlamb-ft`
+
+This was used for:
+
+1. `score_difficulty.py`
+2. `score_attribution.py`
+3. merged DUET training/eval via `scripts/duet/dual_cf_duet.sh`
+
+### 13.3 Rebuilt merged counterfactuals with Meta Llama
+
+Command:
+
+```bash
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/DUET \
+  --split 'city_forget_rare_5+city_forget_popular_5' \
+  --max-examples 64 \
+  --output-path /workspace/unlearning/artifacts/dualcf/duet_merged_step1.jsonl \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg configs/model/Llama-3.1-8B-Instruct.yaml \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --tokenizer-path meta-llama/Llama-3.1-8B-Instruct \
+  --max-new-tokens 32
+```
+
+Result:
+
+1. succeeded
+2. output file created: `/workspace/unlearning/artifacts/dualcf/duet_merged_step1.jsonl`
+3. rows generated: `64`
+4. verified `alternate != answer` for all 64 rows
+5. runtime about `4m`
+
+### 13.4 Recomputed merged difficulty scores
+
+Command:
+
+```bash
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files /workspace/unlearning/artifacts/dualcf/duet_merged_step1.jsonl \
+  --output-path /workspace/unlearning/artifacts/dualcf/duet_merged_step2.jsonl \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg configs/model/Llama-3.1-8B-Instruct.yaml \
+  --model-path /workspace/unlearning/.hf_home/models--SwetieePawsss--DUET_ft_models/snapshots/e1264db87e3b1ca297a62fe27e150af63a7fb628/llama-3.1-8b-instruct-tripunlamb-ft \
+  --tokenizer-path /workspace/unlearning/.hf_home/models--SwetieePawsss--DUET_ft_models/snapshots/e1264db87e3b1ca297a62fe27e150af63a7fb628/llama-3.1-8b-instruct-tripunlamb-ft \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --batch-size 2
+```
+
+Result:
+
+1. succeeded
+2. output file created: `/workspace/unlearning/artifacts/dualcf/duet_merged_step2.jsonl`
+3. runtime about `26s`
+
+### 13.5 Recomputed merged attribution scores with quick caps
+
+Command:
+
+```bash
+python src/tools/score_attribution.py \
+  --model-cfg configs/model/Llama-3.1-8B-Instruct-lora.yaml \
+  --model-path /workspace/unlearning/.hf_home/models--SwetieePawsss--DUET_ft_models/snapshots/e1264db87e3b1ca297a62fe27e150af63a7fb628/llama-3.1-8b-instruct-tripunlamb-ft \
+  --tokenizer-path /workspace/unlearning/.hf_home/models--SwetieePawsss--DUET_ft_models/snapshots/e1264db87e3b1ca297a62fe27e150af63a7fb628/llama-3.1-8b-instruct-tripunlamb-ft \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files /workspace/unlearning/artifacts/dualcf/duet_merged_step2.jsonl \
+  --retain-dataset-path SwetieePawsss/DUET \
+  --retain-split city_fast_retain_500 \
+  --output-path /workspace/unlearning/artifacts/dualcf/duet_merged_dualcf.jsonl \
+  --question-key question \
+  --retain-max-steps 64 \
+  --forget-max-steps 64 \
+  --lora-only
+```
+
+Result:
+
+1. succeeded
+2. output file created: `/workspace/unlearning/artifacts/dualcf/duet_merged_dualcf.jsonl`
+3. rows written: `64`
+4. runtime about `29m`
+5. progress bars were visible for both retain and forget loops
+
+### 13.6 Validated final merged artifact
+
+Command:
+
+```bash
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path /workspace/unlearning/artifacts/dualcf/duet_merged_dualcf.jsonl \
+  --question-key question
+```
+
+Result:
+
+1. succeeded
+2. `rows=64`
+3. `duplicate_indices=[]`
+4. `bad_rows_count=0`
+5. `difficulty_score` range: `(0.2558945005528649, 0.9698702646920063)`
+6. `attribution_score` range: `(0.0, 1.0)`
+
+### 13.7 Merged DUET training/eval run
+
+Command:
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=0 \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=/workspace/unlearning/.hf_home/models--SwetieePawsss--DUET_ft_models/snapshots/e1264db87e3b1ca297a62fe27e150af63a7fb628/llama-3.1-8b-instruct-tripunlamb-ft \
+SFT_SUBFOLDER='' \
+MERGE_POPULARITY_FORGET=1 \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/workspace/unlearning/artifacts/dualcf/duet_merged_dualcf.jsonl \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=8 \
+GRAD_ACCUM=4 \
+EVAL_BATCH_SIZE=32 \
+GRADIENT_CHECKPOINTING=true \
+BETAS=0.5 \
+ALPHAS=1.0 \
+GAMMAS=1.0 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+LORA_RS=32 \
+LORA_ALPHAS=64 \
+LORA_DROPOUTS=0.0 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+FORCE_RERUN=1 \
+bash scripts/duet/dual_cf_duet.sh
+```
+
+Result:
+
+1. succeeded
+2. training runtime about `49s`
+3. evaluation completed and summary written to:
+   `/workspace/unlearning/saves/unlearn/duet/dual_cf/duet_Llama-3.1-8B-Instruct_city_forget_5_dual_cf_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p5_alpha1p0_gamma1p0_td0p5_ta0p5_sd0p25_sa0p25_ln1p0_rlo1p0_rhi2p0_cf1p0_rf0p5_dOn_aOn/evals/DUET_SUMMARY.json`
+4. final metrics:
+   - `forget_qa_rouge=0.9380705394190871`
+   - `holdout_qa_rouge=0.9615`
+5. launcher cleanup removed the run-directory safetensors after eval as requested
+
+Interpretation:
+
+1. the merged end-to-end path is functioning with the new DualCF plumbing
+2. this capped 64-row artifact is a quick verification run, not a strong
+   unlearning result
+3. the high forget-side ROUGE is expected from the tiny capped artifact and
+   should not be treated as the final method quality
+
+## 14. Current status
 
 Completed:
 
@@ -771,8 +976,11 @@ Completed:
 11. RWKU artifact build
 12. RWKU 1-step smoke
 13. reusable artifact validator
+14. merged DUET capped artifact rebuild
+15. merged DUET capped train/eval run on GPU 0
+16. documentation update of verification-driven tooling changes
 
 Pending:
 
-1. full DUET artifact preparation for rare/popular/merged
-2. update `dual_cf_integration_diff.md` with verification-driven changes
+1. full uncapped DUET merged artifact preparation
+2. rare-only and popular-only full artifact/runs if we want the full campaign

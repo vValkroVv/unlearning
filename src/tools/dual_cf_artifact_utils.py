@@ -115,6 +115,8 @@ def load_model_bundle(
     model_cfg_path: str,
     model_path: Optional[str] = None,
     tokenizer_path: Optional[str] = None,
+    model_subfolder: Optional[str] = None,
+    tokenizer_subfolder: Optional[str] = None,
 ):
     model_cfg = OmegaConf.load(model_cfg_path)
     # Offline artifact tools manage their own device placement, so avoid
@@ -131,6 +133,17 @@ def load_model_bundle(
     if tokenizer_path:
         with open_dict(model_cfg):
             model_cfg.tokenizer_args.pretrained_model_name_or_path = tokenizer_path
+    if model_subfolder not in (None, "", "null", "None"):
+        with open_dict(model_cfg):
+            model_cfg.model_args.subfolder = model_subfolder
+    tokenizer_subfolder = (
+        model_subfolder
+        if tokenizer_subfolder in (None, "", "null", "None")
+        else tokenizer_subfolder
+    )
+    if tokenizer_subfolder not in (None, "", "null", "None"):
+        with open_dict(model_cfg):
+            model_cfg.tokenizer_args.subfolder = tokenizer_subfolder
     model, tokenizer = get_model(model_cfg)
     if hasattr(model, "config") and model.config is not None:
         model.config.use_cache = False
