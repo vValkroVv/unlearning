@@ -8,7 +8,7 @@ repo_root=$(realpath "${script_dir}/../..")
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
-base_model="${BASE_MODEL:-Llama-3.1-8B}"
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
 
@@ -25,9 +25,10 @@ retain_split="neighbor_level2"
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
-num_train_epochs=${NUM_EPOCHS:-5}
+eval_batch_size=${EVAL_BATCH_SIZE:-8}
+num_train_epochs=${NUM_EPOCHS:-2}
 
-raw_lrs="${LRS:-1e-5 5e-5 1e-4 5e-4}"
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -54,6 +55,7 @@ read -r -a gammas <<< "${raw_gammas}"
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -126,11 +128,19 @@ for lr in "${lrs[@]}"; do
                                 model.lora_config.r=${lora_r} \
                                 model.lora_config.lora_alpha=${lora_alpha} \
                                 model.lora_config.lora_dropout=${lora_dropout} \
+                                eval.duet.batch_size=${eval_batch_size} \
                                 eval.duet.overwrite=true \
                                 paths.output_dir=${eval_dir} \
                                 retain_logs_path=null \
                             )
                             python src/eval.py "${eval_cmd[@]}"
+
+                            if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                                if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                                    rm -f "${run_dir}"/*.safetensors
+                                    echo "[rwku][NPO] Removed safetensors from ${run_dir}"
+                                fi
+                            fi
                         done
                     done
                 done

@@ -64,10 +64,10 @@ gradient_accumulation_steps=${GRAD_ACCUM:-32}
 importance_batch_size=${IMPORTANCE_BATCH_SIZE:-1}
 importance_max_steps=${IMPORTANCE_MAX_STEPS:-0}
 eval_batch_size=${EVAL_BATCH_SIZE:-8}
-num_train_epochs=${NUM_EPOCHS:-5}
+num_train_epochs=${NUM_EPOCHS:-2}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 
-raw_lrs="${LRS:-1e-3}"
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -96,7 +96,7 @@ fila_adapter_name="${FILA_ADAPTER_NAME:-default}"
 fila_base_subdir="${FILA_BASE_SUBDIR:-base_model}"
 run_fila_sanity_check="${RUN_FILA_SANITY_CHECK:-true}"
 
-loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]}"
+loku_target_modules="${LOKU_TARGET_MODULES:-[q_proj,k_proj,v_proj,o_proj]}"
 loku_weight_decay="${LOKU_WEIGHT_DECAY:-0.01}"
 loku_lr_scheduler_type="${LOKU_LR_SCHEDULER_TYPE:-linear}"
 loku_warmup_epochs="${LOKU_WARMUP_EPOCHS:-1.0}"

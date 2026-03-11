@@ -2404,3 +2404,30 @@ RWKU LoKU default settings (aligned with current DUET LoKU defaults where applic
 - `DELETE_MODEL_SAFETENSORS_AFTER_EVAL`: supported
 - `DELETE_IMPORTANCE_AFTER_RUN`: supported
 - `DELETE_FILA_BASE_AFTER_EVAL`: supported (default `1`)
+
+## 2026-03-12 Current Production Baseline Update
+
+Updated files:
+- `configs/experiment/unlearn/duet/loku_lora.yaml`
+- `configs/experiment/unlearn/rwku/loku_lora.yaml`
+- `scripts/duet/loku_duet.sh`
+- `scripts/rwku/loku_rwku.sh`
+- `configs/model/Llama-3.1-8B-Instruct-lora.yaml`
+- `prod-gpu-runs-new.md`
+
+What changed:
+- Active LoKU runs now default to `NUM_EPOCHS=2`.
+- Active LoKU scripts now default to `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`.
+- `GRADIENT_CHECKPOINTING` remains default `false` in both DUET and RWKU LoKU scripts/configs.
+- Default LoRA target modules were reduced to attention-only adapters: `q_proj`, `k_proj`, `v_proj`, `o_proj`.
+- RWKU LoKU moved to `Llama-3.1-8B-Instruct` for the current production run stack.
+
+## 2026-03-12 Qwen/Gemma LoRA Alignment
+
+Updated files:
+- `configs/model/Qwen2.5-7B-Instruct-lora.yaml`
+- `configs/model/gemma-7b-it-lora.yaml`
+
+What changed:
+- Qwen2.5-7B-Instruct and gemma-7b-it LoRA configs were aligned with the active attention-only adapter policy used by current LoKU runs.
+- Default target modules are now `q_proj`, `k_proj`, `v_proj`, `o_proj`.

@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - override /model: Llama-3.1-8B-lora
+  - override /model: Llama-3.1-8B-Instruct-lora
   - override /trainer: NPOSAM
   - override /data: unlearn
   - override /data/datasets@data.forget: RWKU_QA_forget
@@ -16,7 +16,7 @@ question_key: query
 
 model:
   model_args:
-    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
 
 data:
   anchor: forget
@@ -49,7 +49,7 @@ trainer:
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 32
     learning_rate: 1e-5
-    num_train_epochs: 5
+    num_train_epochs: 2
     lr_scheduler_type: constant
     warmup_ratio: 0.1
     logging_steps: 10
