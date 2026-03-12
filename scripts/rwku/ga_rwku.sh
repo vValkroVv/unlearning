@@ -11,6 +11,7 @@ echo "Master Port: $MASTER_PORT"
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${base_model_path}}"
 
 echo "[rwku][GA] Using Hugging Face base checkpoint ${base_model_path}"
 
@@ -69,6 +70,7 @@ for lr in "${lrs[@]}"; do
                         forget_split=${forget_split} \
                         retain_split=${retain_split} \
                         model.model_args.pretrained_model_name_or_path=${base_model_path} \
+                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                         model.model_args.device_map="auto" \
                         model.model_args.low_cpu_mem_usage=true \
                         model.lora_config.r=${lora_r} \
@@ -95,6 +97,7 @@ for lr in "${lrs[@]}"; do
                     task_name=${task_name} \
                     model.model_args.pretrained_model_name_or_path=${run_dir} \
                     model.model_args.base_model_name_or_path=${base_model_path} \
+                    model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                     model.model_args.device_map="auto" \
                     model.model_args.low_cpu_mem_usage=true \
                     model.lora_config.r=${lora_r} \

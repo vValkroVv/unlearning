@@ -74,11 +74,11 @@ export HF_DATASETS_OFFLINE=1
 
 ## Llama
 
-### 1) GA - DUET
+### 1) GA - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -95,11 +95,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
-### 2) NPO - DUET
+### 2) NPO - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -116,11 +116,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
-### 3) NPO-SAM - DUET
+### 3) NPO-SAM - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -137,11 +137,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
-### 4) LoKU - DUET
+### 4) LoKU - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -172,6 +172,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -189,6 +190,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -206,6 +208,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -223,6 +226,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -240,11 +244,11 @@ bash scripts/rwku/loku_rwku.sh
 
 ## Qwen
 
-### 1) GA - DUET
+### 1) GA - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -261,11 +265,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
-### 2) NPO - DUET
+### 2) NPO - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -282,11 +286,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
-### 3) NPO-SAM - DUET
+### 3) NPO-SAM - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -303,11 +307,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
-### 4) LoKU - DUET
+### 4) LoKU - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -330,14 +334,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU
+### 5) GA - RWKU (error)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -355,6 +360,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -372,6 +378,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -389,6 +396,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -504,6 +512,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -521,6 +530,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -538,6 +548,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -555,6 +566,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
