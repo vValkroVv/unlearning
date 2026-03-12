@@ -31,14 +31,6 @@ should_keep_file() {
     base_name="$(basename "${rel_path}")"
     dir_name="$(dirname "${rel_path}")"
 
-    if [[ "${rel_path}" == unlearn/duet/* ]]; then
-        return 0
-    fi
-
-    if [[ "${rel_path}" == */loku/* ]]; then
-        return 0
-    fi
-
     if [[ "${base_name}" == *_SUMMARY.json || "${base_name}" == *_EVAL.json ]]; then
         return 0
     fi
