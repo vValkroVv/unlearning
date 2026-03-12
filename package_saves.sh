@@ -23,19 +23,37 @@ mkdir -p "${clean_dir}"
 copied_files=0
 skipped_files=0
 
-while IFS= read -r -d '' src_file; do
-    rel_path="${src_file#${src_dir}/}"
-    base_name="$(basename "${src_file}")"
-    dir_name="$(dirname "${src_file}")"
+should_keep_file() {
+    local rel_path="$1"
+    local base_name
+    local dir_name
 
-    keep=0
-    if [[ "${base_name}" == *_SUMMARY.json ]]; then
-        keep=1
-    elif [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
-        keep=1
+    base_name="$(basename "${rel_path}")"
+    dir_name="$(dirname "${rel_path}")"
+
+    if [[ "${rel_path}" == unlearn/duet/* ]]; then
+        return 0
     fi
 
-    if [[ "${keep}" -eq 0 ]]; then
+    if [[ "${rel_path}" == */loku/* ]]; then
+        return 0
+    fi
+
+    if [[ "${base_name}" == *_SUMMARY.json || "${base_name}" == *_EVAL.json ]]; then
+        return 0
+    fi
+
+    if [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#${src_dir}/}"
+
+    if ! should_keep_file "${rel_path}"; then
         skipped_files=$((skipped_files + 1))
         continue
     fi

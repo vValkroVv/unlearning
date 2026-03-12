@@ -334,7 +334,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU (error)
+### 5) GA - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
@@ -352,11 +352,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/ga_rwku.sh
 ```
 
-### 6) NPO - RWKU
+### 6) NPO - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -370,11 +370,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_rwku.sh
 ```
 
-### 7) NPO-SAM - RWKU
+### 7) NPO-SAM - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -388,7 +388,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_sam_rwku.sh
 ```
 
-### 8) LoKU - RWKU
+### 8) LoKU - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
@@ -414,11 +414,11 @@ bash scripts/rwku/loku_rwku.sh
 
 ## Gemma
 
-### 1) GA - DUET
+### 1) GA - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -435,11 +435,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
-### 2) NPO - DUET
+### 2) NPO - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -456,11 +456,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
-### 3) NPO-SAM - DUET
+### 3) NPO-SAM - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -477,11 +477,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
-### 4) LoKU - DUET
+### 4) LoKU - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -504,11 +504,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU
+### 5) GA - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -522,7 +522,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/ga_rwku.sh
 ```
 
-### 6) NPO - RWKU
+### 6) NPO - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
@@ -540,11 +540,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_rwku.sh
 ```
 
-### 7) NPO-SAM - RWKU
+### 7) NPO-SAM - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -558,11 +558,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_sam_rwku.sh
 ```
 
-### 8) LoKU - RWKU
+### 8) LoKU - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
