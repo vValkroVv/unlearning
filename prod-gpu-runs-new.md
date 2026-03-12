@@ -164,11 +164,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU
+### 5) GA - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -182,11 +182,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/ga_rwku.sh
 ```
 
-### 6) NPO - RWKU
+### 6) NPO - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -200,11 +200,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_rwku.sh
 ```
 
-### 7) NPO-SAM - RWKU
+### 7) NPO-SAM - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -218,7 +218,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_sam_rwku.sh
 ```
 
-### 8) LoKU - RWKU
+### 8) LoKU - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
