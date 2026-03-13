@@ -29,6 +29,9 @@ ignore-tree-and-content:
   - "*.arrow"
   - "*.json"
   - "*.jsonl"
+  - "ep2"
+  - "ep2_dual"
+  - "ep5"
 
 
 

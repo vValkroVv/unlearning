@@ -259,6 +259,7 @@ Directory Structure:
 ├── LICENSE
 ├── loku_integration_diff.md
 ├── Makefile
+│   ├── metrics-new/dual-phase1-reference.md
 │   ├── metrics-new/duet-rwku-metric-tables.md
 ├── MU.yml
 ├── npo_integration_diff.md
@@ -269,6 +270,7 @@ Directory Structure:
 ├── prod-gpu-runs-new-5ep.md
 ├── prod-gpu-runs-new.md
 ├── prod-gpu-runs.md
+├── prod-run-dual-gpu.md
 ├── prod-runs.md
 ├── r2d_integration_diff.md
 ├── README.md
@@ -12348,6 +12350,729 @@ prefix: /mnt/extremessd10tb/borisiuk/miniconda3/envs/MU
 
 </content>
 
+<content full_path="prod-run-dual-gpu.md">
+# Production DualCF GPU Runs (Offline Server, DUET merged + RWKU)
+
+This runbook is for the `DualCF` method only.
+
+It includes:
+
+- merged `DUET` artifact generation for `Llama`, `Qwen`, `Gemma`
+- `RWKU` artifact generation for `Llama`, `Qwen`, `Gemma`
+- final training launches for all six runs
+
+Common production rules used below:
+
+- `PER_DEVICE_TRAIN_BS=16`
+- `GRAD_ACCUM=2`
+- `NUM_EPOCHS=2`
+- `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`
+- `EVAL_BATCH_SIZE=64`
+- `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
+- current production LoRA adapters use only `q_proj`, `k_proj`, `v_proj`, `o_proj`
+- `DUET` in this file is merged only via `MERGE_POPULARITY_FORGET=1`
+- full-artifact attribution scoring is explicit via `--retain-max-steps 0` and `--forget-max-steps 0`
+- for H100 80GB artifact prep in this file:
+  `score_difficulty.py --batch-size 32`
+  and `score_attribution.py --retain-batch-size 4`
+- attribution scoring is forced to production LoRA shape to match training:
+  `--lora-r 32 --lora-alpha 64 --lora-dropout 0.0`
+
+## Current Local Structure
+
+Expected layout inside `/data/home/vkropoti/unlearning`:
+
+```text
+SwetieePawsss/
+  DUET/
+    data/*.parquet
+  exp_r/
+    data/*.parquet
+  DUET_ft_models/
+    llama-3.1-8b-instruct-tripunlamb-ft/
+    qwen2.5-7b-instruct-tripunlamb-ft/
+    gemma-7b-it-tripunlamb-ft/
+models/
+  BASE/
+    Llama-3.1-8B-Instruct/
+    Qwen2.5-7B-Instruct/
+    gemma-7b-it/
+artifacts/
+  dualcf/
+    duet/
+    rwku/
+```
+
+## One-time path wiring
+
+If your code is in `/home/vkropoti/diploma/open-unlearning` but datasets/models are in
+`/data/home/vkropoti/unlearning/SwetieePawsss`, create this symlink once:
+
+```bash
+ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss /home/vkropoti/diploma/open-unlearning/SwetieePawsss
+```
+
+## Common setup
+
+```bash
+cd /home/vkropoti/diploma/open-unlearning
+source /data/home/vkropoti/unlearning-venv/bin/activate
+
+export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
+export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
+export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR"
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+```
+
+## DUET merged artifacts
+
+Use merged forget only for `DUET` in this file:
+
+- `city_forget_rare_5+city_forget_popular_5` for counterfactual generation
+- `city_fast_retain_500` for attribution retain bank
+
+Always run validation before training.
+
+### Llama - DUET merged artifact
+
+```bash
+export CUDA_VISIBLE_DEVICES=5
+
+ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/duet
+mkdir -p "$ART_ROOT"
+
+MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
+SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
+ART_PREFIX="$ART_ROOT/duet_llama_merged"
+
+## done
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/DUET \
+  --split 'city_forget_rare_5+city_forget_popular_5' \
+  --output-path "${ART_PREFIX}_step1.jsonl" \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --max-new-tokens 32
+
+## done
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files "${ART_PREFIX}_step1.jsonl" \
+  --output-path "${ART_PREFIX}_step2.jsonl" \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$SFT_MODEL_PATH" \
+  --tokenizer-path "$SFT_MODEL_PATH" \
+  --model-subfolder "$SFT_SUBFOLDER" \
+  --tokenizer-subfolder "$SFT_SUBFOLDER" \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --w-mrd 0.0 \
+  --w-stage 0.0 \
+  --batch-size 32
+
+## done
+python src/tools/score_attribution.py \
+  --model-cfg "$LORA_MODEL_CFG" \
+  --model-path "$SFT_MODEL_PATH" \
+  --tokenizer-path "$SFT_MODEL_PATH" \
+  --model-subfolder "$SFT_SUBFOLDER" \
+  --tokenizer-subfolder "$SFT_SUBFOLDER" \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
+  --retain-dataset-path SwetieePawsss/DUET \
+  --retain-split city_fast_retain_500 \
+  --output-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key question \
+  --retain-batch-size 4 \
+  --retain-max-steps 0 \
+  --forget-max-steps 0 \
+  --lora-r 32 \
+  --lora-alpha 64 \
+  --lora-dropout 0.0 \
+  --lora-only
+
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key question
+```
+
+### Qwen - DUET merged artifact
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+
+ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/duet
+mkdir -p "$ART_ROOT"
+
+MODEL_CFG=configs/model/Qwen2.5-7B-Instruct.yaml
+LORA_MODEL_CFG=configs/model/Qwen2.5-7B-Instruct-lora.yaml
+BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct
+SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
+SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft
+ART_PREFIX="$ART_ROOT/duet_qwen_merged"
+
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/DUET \
+  --split 'city_forget_rare_5+city_forget_popular_5' \
+  --output-path "${ART_PREFIX}_step1.jsonl" \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --max-new-tokens 32
+
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files "${ART_PREFIX}_step1.jsonl" \
+  --output-path "${ART_PREFIX}_step2.jsonl" \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$SFT_MODEL_PATH" \
+  --tokenizer-path "$SFT_MODEL_PATH" \
+  --model-subfolder "$SFT_SUBFOLDER" \
+  --tokenizer-subfolder "$SFT_SUBFOLDER" \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --w-mrd 0.0 \
+  --w-stage 0.0 \
+  --batch-size 32
+
+python src/tools/score_attribution.py \
+  --model-cfg "$LORA_MODEL_CFG" \
+  --model-path "$SFT_MODEL_PATH" \
+  --tokenizer-path "$SFT_MODEL_PATH" \
+  --model-subfolder "$SFT_SUBFOLDER" \
+  --tokenizer-subfolder "$SFT_SUBFOLDER" \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
+  --retain-dataset-path SwetieePawsss/DUET \
+  --retain-split city_fast_retain_500 \
+  --output-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key question \
+  --retain-batch-size 4 \
+  --retain-max-steps 0 \
+  --forget-max-steps 0 \
+  --lora-r 32 \
+  --lora-alpha 64 \
+  --lora-dropout 0.0 \
+  --lora-only
+
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key question
+```
+
+### Gemma - DUET merged artifact
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+
+ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/duet
+mkdir -p "$ART_ROOT"
+
+MODEL_CFG=configs/model/gemma-7b-it.yaml
+LORA_MODEL_CFG=configs/model/gemma-7b-it-lora.yaml
+BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it
+SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
+SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft
+ART_PREFIX="$ART_ROOT/duet_gemma_merged"
+
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/DUET \
+  --split 'city_forget_rare_5+city_forget_popular_5' \
+  --output-path "${ART_PREFIX}_step1.jsonl" \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --max-new-tokens 32
+
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files "${ART_PREFIX}_step1.jsonl" \
+  --output-path "${ART_PREFIX}_step2.jsonl" \
+  --question-key question \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$SFT_MODEL_PATH" \
+  --tokenizer-path "$SFT_MODEL_PATH" \
+  --model-subfolder "$SFT_SUBFOLDER" \
+  --tokenizer-subfolder "$SFT_SUBFOLDER" \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --w-mrd 0.0 \
+  --w-stage 0.0 \
+  --batch-size 32
+
+python src/tools/score_attribution.py \
+  --model-cfg "$LORA_MODEL_CFG" \
+  --model-path "$SFT_MODEL_PATH" \
+  --tokenizer-path "$SFT_MODEL_PATH" \
+  --model-subfolder "$SFT_SUBFOLDER" \
+  --tokenizer-subfolder "$SFT_SUBFOLDER" \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
+  --retain-dataset-path SwetieePawsss/DUET \
+  --retain-split city_fast_retain_500 \
+  --output-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key question \
+  --retain-batch-size 4 \
+  --retain-max-steps 0 \
+  --forget-max-steps 0 \
+  --lora-r 32 \
+  --lora-alpha 64 \
+  --lora-dropout 0.0 \
+  --lora-only
+
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key question
+```
+
+## RWKU artifacts
+
+Use the benchmark forget/retain banks directly:
+
+- forget: `forget_level2`
+- retain: `neighbor_level2`
+
+### Llama - RWKU artifact
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+
+ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku
+mkdir -p "$ART_ROOT"
+
+MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
+ART_PREFIX="$ART_ROOT/rwku_llama"
+
+##done
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/exp_r \
+  --dataset-name forget_level2 \
+  --split test \
+  --output-path "${ART_PREFIX}_step1.jsonl" \
+  --question-key query \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --max-new-tokens 32
+
+##done
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files "${ART_PREFIX}_step1.jsonl" \
+  --output-path "${ART_PREFIX}_step2.jsonl" \
+  --question-key query \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --w-mrd 0.0 \
+  --w-stage 0.0 \
+  --batch-size 32
+
+##done
+python src/tools/score_attribution.py \
+  --model-cfg "$LORA_MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
+  --retain-dataset-path SwetieePawsss/exp_r \
+  --retain-dataset-name neighbor_level2 \
+  --retain-split test \
+  --output-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key query \
+  --retain-question-key query \
+  --retain-batch-size 4 \
+  --retain-max-steps 0 \
+  --forget-max-steps 0 \
+  --lora-r 32 \
+  --lora-alpha 64 \
+  --lora-dropout 0.0 \
+  --lora-only
+
+##done
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key query
+```
+
+### Qwen - RWKU artifact
+
+```bash
+export CUDA_VISIBLE_DEVICES=2
+
+ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku
+mkdir -p "$ART_ROOT"
+
+MODEL_CFG=configs/model/Qwen2.5-7B-Instruct.yaml
+LORA_MODEL_CFG=configs/model/Qwen2.5-7B-Instruct-lora.yaml
+BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct
+ART_PREFIX="$ART_ROOT/rwku_qwen"
+
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/exp_r \
+  --dataset-name forget_level2 \
+  --split test \
+  --output-path "${ART_PREFIX}_step1.jsonl" \
+  --question-key query \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --max-new-tokens 32
+
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files "${ART_PREFIX}_step1.jsonl" \
+  --output-path "${ART_PREFIX}_step2.jsonl" \
+  --question-key query \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --w-mrd 0.0 \
+  --w-stage 0.0 \
+  --batch-size 32
+
+python src/tools/score_attribution.py \
+  --model-cfg "$LORA_MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
+  --retain-dataset-path SwetieePawsss/exp_r \
+  --retain-dataset-name neighbor_level2 \
+  --retain-split test \
+  --output-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key query \
+  --retain-question-key query \
+  --retain-batch-size 4 \
+  --retain-max-steps 0 \
+  --forget-max-steps 0 \
+  --lora-r 32 \
+  --lora-alpha 64 \
+  --lora-dropout 0.0 \
+  --lora-only
+
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key query
+```
+
+### Gemma - RWKU artifact
+
+```bash
+export CUDA_VISIBLE_DEVICES=5
+
+ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku
+mkdir -p "$ART_ROOT"
+
+MODEL_CFG=configs/model/gemma-7b-it.yaml
+LORA_MODEL_CFG=configs/model/gemma-7b-it-lora.yaml
+BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it
+ART_PREFIX="$ART_ROOT/rwku_gemma"
+
+python src/tools/make_counterfactuals.py \
+  --dataset-path SwetieePawsss/exp_r \
+  --dataset-name forget_level2 \
+  --split test \
+  --output-path "${ART_PREFIX}_step1.jsonl" \
+  --question-key query \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --max-new-tokens 32
+
+python src/tools/score_difficulty.py \
+  --dataset-path json \
+  --split train \
+  --data-files "${ART_PREFIX}_step1.jsonl" \
+  --output-path "${ART_PREFIX}_step2.jsonl" \
+  --question-key query \
+  --answer-key answer \
+  --model-cfg "$MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --popularity-column pop_sum \
+  --w-pop 1.0 \
+  --w-conf 1.0 \
+  --w-mrd 0.0 \
+  --w-stage 0.0 \
+  --batch-size 32
+
+python src/tools/score_attribution.py \
+  --model-cfg "$LORA_MODEL_CFG" \
+  --model-path "$BASE_MODEL_PATH" \
+  --tokenizer-path "$BASE_MODEL_PATH" \
+  --forget-dataset-path json \
+  --forget-split train \
+  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
+  --retain-dataset-path SwetieePawsss/exp_r \
+  --retain-dataset-name neighbor_level2 \
+  --retain-split test \
+  --output-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key query \
+  --retain-question-key query \
+  --retain-batch-size 4 \
+  --retain-max-steps 0 \
+  --forget-max-steps 0 \
+  --lora-r 32 \
+  --lora-alpha 64 \
+  --lora-dropout 0.0 \
+  --lora-only
+
+python src/tools/validate_dual_cf_artifact.py \
+  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
+  --question-key query
+```
+
+## Training launches
+
+These launches assume the validated artifacts above already exist.
+
+### Llama - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/duet_llama_merged_dualcf.jsonl \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=2 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+BETAS=0.5 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/dual_cf_duet.sh
+```
+
+### Qwen - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/duet_qwen_merged_dualcf.jsonl \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=2 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+BETAS=0.5 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/dual_cf_duet.sh
+```
+
+### Gemma - DUET
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/duet_gemma_merged_dualcf.jsonl \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=2 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+BETAS=0.5 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/dual_cf_duet.sh
+```
+
+### Llama - RWKU
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/rwku_llama_dualcf.jsonl \
+CF_DATASET_NAME=null \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=2 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+BETAS=0.5 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/dual_cf_rwku.sh
+```
+
+### Qwen - RWKU
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=2 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/rwku_qwen_dualcf.jsonl \
+CF_DATASET_NAME=null \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=2 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+BETAS=0.5 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/dual_cf_rwku.sh
+```
+
+### Gemma - RWKU
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+CF_DATASET_PATH=json \
+CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/rwku_gemma_dualcf.jsonl \
+CF_DATASET_NAME=null \
+CF_DATASET_SPLIT=train \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=2 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+BETAS=0.5 \
+TAU_DS=0.5 \
+TAU_AS=0.5 \
+TEMP_DS=0.25 \
+TEMP_AS=0.25 \
+LAMBDA_NEG_MAXS=1.0 \
+LAMBDA_RET_LOS=1.0 \
+LAMBDA_RET_HIS=2.0 \
+CF_WEIGHTS=1.0 \
+RISK_FORGET_SCALES=0.5 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/dual_cf_rwku.sh
+```
+
+</content>
+
 <content full_path="dual_cf_integration_diff.md">
 # DualCF Integration Diff
 
@@ -12401,6 +13126,16 @@ with:
 - `scripts/duet/dual_cf_duet.sh`
 - `scripts/popqa/dual_cf_popqa.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
+
+### Documentation / runbooks
+
+- `prod-run-dual-gpu.md`
+
+### End-to-end runner scripts
+
+- `dual-scripts-run/run_llama_dual_cf_e2e.sh`
+- `dual-scripts-run/run_qwen_dual_cf_e2e.sh`
+- `dual-scripts-run/run_gemma_dual_cf_e2e.sh`
 
 ### Offline artifact tools
 
@@ -12692,13 +13427,104 @@ Added file:
 
 Purpose:
 
-- reusable JSONL validation for:
-  - required keys
-  - duplicate indices
-  - empty question/answer/alternate fields
-  - non-finite score values
-  - `alternate == answer`
-  - difficulty/attribution range reporting
+- reusable JSONL validation for required keys
+- duplicate indices
+- empty question / answer / alternate fields
+- non-finite score values
+- `alternate == answer`
+- difficulty / attribution range reporting
+
+## Production alignment (2026-03-13)
+
+Changed files:
+
+- `configs/experiment/unlearn/rwku/dual_cf_lora.yaml`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- RWKU DualCF now defaults to the current production instruct stack:
+  `Llama-3.1-8B-Instruct` and `Llama-3.1-8B-Instruct-lora`
+- DUET and RWKU DualCF launchers now default to the same production surface as
+  the other active methods: `PER_DEVICE_TRAIN_BS=16`, `GRAD_ACCUM=2`,
+  `NUM_EPOCHS=2`, `EVAL_BATCH_SIZE=64`, and
+  `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`
+- Added `prod-run-dual-gpu.md` with merged-only `DUET` artifact generation,
+  `RWKU` artifact generation, mandatory `validate_dual_cf_artifact.py` before
+  training, and six ready-to-run training launches
+- The new runbook keeps full attribution scoring explicit via
+  `--retain-max-steps 0` and `--forget-max-steps 0`
+
+## Artifact observability (2026-03-13)
+
+Changed files:
+
+- `src/tools/make_counterfactuals.py`
+- `src/tools/score_difficulty.py`
+- `src/tools/score_attribution.py`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- added explicit stage prints for dataset loading, model loading, scoring mode,
+  output path, and final score ranges
+- added `tqdm` progress bars to `make_counterfactuals.py` and
+  `score_difficulty.py`; `score_attribution.py` now also reports the final
+  write stage in addition to retain / forget gradient progress
+- per-row failures now raise with row position / index context so it is easier
+  to identify the broken sample or stage when an artifact build fails
+- updated the production DualCF artifact runbook for H100 80GB usage:
+  `score_difficulty.py --batch-size 32` and
+  `score_attribution.py --retain-batch-size 4`
+
+## Artifact LoRA parity (2026-03-13)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `src/tools/score_attribution.py`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- `score_attribution.py` now accepts explicit LoRA overrides:
+  `--lora-r`, `--lora-alpha`, `--lora-dropout`
+- the shared offline model loader now applies those overrides before building
+  the temporary LoRA model used for attribution scoring
+- the production DualCF runbook now pins attribution scoring to the same LoRA
+  shape as the previous production runs:
+  `r=32`, `alpha=64`, `dropout=0.0`
+
+## End-to-end wrappers (2026-03-13)
+
+Changed files:
+
+- `dual-scripts-run/run_llama_dual_cf_e2e.sh`
+- `dual-scripts-run/run_qwen_dual_cf_e2e.sh`
+- `dual-scripts-run/run_gemma_dual_cf_e2e.sh`
+
+Updates:
+
+- added three model-specific wrapper scripts that execute the full DualCF flow
+  for each family:
+  merged DUET artifact build, DUET validation, DUET training, RWKU artifact
+  build, RWKU validation, and RWKU training
+- each wrapper accepts GPU and epoch parameters either as positional args or as
+  env vars:
+  `bash .../run_llama_dual_cf_e2e.sh 4 2` or
+  `CUDA_VISIBLE_DEVICES=4 NUM_EPOCHS=2 bash .../run_llama_dual_cf_e2e.sh`
+- wrappers reuse the same production defaults as `prod-run-dual-gpu.md` and
+  keep artifact LoRA parity with training via `r=32`, `alpha=64`,
+  `dropout=0.0`
+- wrappers now also support hardware-specific batch profiles:
+  `H100` and `L40S`
+- current built-in estimates are:
+  - `H100`: train batch `16`, grad accum `2`, eval batch `64`,
+    difficulty batch `32`, attribution retain batch `4`
+  - `L40S`: train batch `8`, grad accum `4`, eval batch `32`,
+    difficulty batch `16`, attribution retain batch `2`
 
 ## Offline tooling
 
@@ -14570,18 +15396,86 @@ simple_evaluate_args:
 
 </content>
 
+<content full_path="metrics-new/dual-phase1-reference.md">
+# DualCF Phase1 Reference
+
+This file defines the current DualCF baseline used in
+`metrics-new/duet-rwku-metric-tables.md`.
+
+All rows named `DualCF (Phase1)` refer to this implementation state.
+
+Metrics source:
+
+- `metrics-new/ep2_dual/saves-dual-cos-sim`
+
+## Algorithm summary
+
+- DualCF builds forget-side artifacts with `question`, original `answer`, and a
+  counterfactual `alternate` answer.
+- The forget artifact is enriched with two routing signals:
+  - `difficulty_score`
+  - `attribution_score`
+- Training uses three practical components:
+  - cross-entropy on the counterfactual answer
+  - NPO-style pressure on the original forget answer
+  - retain loss on a retain batch
+- In the current phase:
+  - higher `difficulty_score` increases negative pressure on the original answer
+  - higher `attribution_score` reduces destructive forget pressure and increases
+    retain-side weight
+- The current production-shaped reference uses:
+  - merged DUET `city_forget_5`
+  - RWKU `forget_level2`
+  - `2` training epochs
+  - LoRA parity between attribution scoring and training:
+    `r=32`, `alpha=64`, `dropout=0.0`
+
+## Phase1 commit chain
+
+1. `7c4200f` (2026-03-09) `Add DualCF unlearning integration`
+   Initial trainer, dataset/collator plumbing, configs, launch scripts, and
+   offline artifact tools.
+2. `7d1822c` (2026-03-09) `docs: tighten DualCF test and artifact plan`
+   Tightened the validation plan and artifact/test expectations.
+3. `e23a7c9` (2026-03-09) `Fix DualCF verification issues and document testing`
+   Added verification-driven fixes and documented the corrected testing flow.
+4. `3b51ed4` (2026-03-09) `Add DualCF merged verification outputs and docs`
+   Added merged DUET verification outputs and related documentation.
+5. `e4382dd` (2026-03-14) `Update DualCF tooling and metrics`
+   Production-aligned tooling, runbook updates, artifact observability, LoRA
+   parity, and the current metric-table state.
+
+## Comparison rule
+
+- Treat `DualCF (Phase1)` as the frozen baseline.
+- Future Dual variants should use explicit row names such as
+  `DualCF (Phase2)` so the tables remain directly comparable.
+
+</content>
+
 <content full_path="metrics-new/duet-rwku-metric-tables.md">
 # DUET and RWKU Metric Tables
 
-Numbers come from `DUET_SUMMARY.json` under `metrics-new/saves-clean/unlearn/.../evals/`.
+Sources:
+- `2ep`: `metrics-new/ep2/saves-clean-2ep-cos-sim/unlearn`
+- `2ep dual phase1`: `metrics-new/ep2_dual/saves-dual-cos-sim/unlearn`
+- `5ep`: `metrics-new/ep5/saves-clean-5ep-cos-sim/unlearn`
 
-Color key: <span style="color:#c62828"><strong>F</strong></span> = `forget_qa_rouge`, <span style="color:#1565c0"><strong>H</strong></span> = `holdout_qa_rouge`.
+Metric files:
+- `ROUGE`: `DUET_SUMMARY.json` with `forget_qa_rouge` and `holdout_qa_rouge`
+- `COS_SIM`: `COS_SIM_EVAL.json` with `forget_qa_cos_sim.agg_value` and `holdout_qa_cos_sim.agg_value`
+
+Color key: <span style="color:#c62828"><strong>F</strong></span> = forget metric, <span style="color:#1565c0"><strong>H</strong></span> = holdout metric.
 
 Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma1p0`; `npo_sam` uses `beta0p1_alpha1p0_gamma1p0_rho0p01_adF`; DUET uses merged `city_forget_5`.
 
-## DUET
+Phase note: current DualCF rows are labeled `DualCF (Phase1)`; see `metrics-new/dual-phase1-reference.md`.
 
-### Llama-3.1-8B-Instruct
+## ROUGE
+
+### 2 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -14589,8 +15483,9 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.9363</span><br><span style="color:#1565c0">H 0.9608</span> | <span style="color:#c62828">F 0.9372</span><br><span style="color:#1565c0">H 0.9690</span> | <span style="color:#c62828">F 0.9136</span><br><span style="color:#1565c0">H 0.9650</span> | <span style="color:#c62828">F 0.8675</span><br><span style="color:#1565c0">H 0.9843</span> | <span style="color:#c62828">F 0.8339</span><br><span style="color:#1565c0">H 0.9953</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.9407</span><br><span style="color:#1565c0">H 0.9625</span> | <span style="color:#c62828">F 0.9409</span><br><span style="color:#1565c0">H 0.9620</span> | <span style="color:#c62828">F 0.9242</span><br><span style="color:#1565c0">H 0.9623</span> | <span style="color:#c62828">F 0.8404</span><br><span style="color:#1565c0">H 0.9775</span> | <span style="color:#c62828">F 0.6842</span><br><span style="color:#1565c0">H 0.9698</span> |
 | LoKU | <span style="color:#c62828">F 0.8994</span><br><span style="color:#1565c0">H 0.9657</span> | <span style="color:#c62828">F 0.2319</span><br><span style="color:#1565c0">H 0.9393</span> | <span style="color:#c62828">F 0.2736</span><br><span style="color:#1565c0">H 0.9440</span> | <span style="color:#c62828">F 0.0621</span><br><span style="color:#1565c0">H 0.9440</span> | <span style="color:#c62828">F 0.0809</span><br><span style="color:#1565c0">H 0.9490</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.9283</span><br><span style="color:#1565c0">H 0.9555</span> | <span style="color:#c62828">F 0.7325</span><br><span style="color:#1565c0">H 0.9103</span> | <span style="color:#c62828">F 0.3052</span><br><span style="color:#1565c0">H 0.8900</span> | <span style="color:#c62828">F 0.1725</span><br><span style="color:#1565c0">H 0.9478</span> | <span style="color:#c62828">F 0.1537</span><br><span style="color:#1565c0">H 0.9677</span> |
 
-### Qwen2.5-7B-Instruct
+#### DUET / Qwen2.5-7B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -14598,8 +15493,9 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.8811</span><br><span style="color:#1565c0">H 0.8308</span> | <span style="color:#c62828">F 0.8729</span><br><span style="color:#1565c0">H 0.8365</span> | <span style="color:#c62828">F 0.8563</span><br><span style="color:#1565c0">H 0.8315</span> | <span style="color:#c62828">F 0.8003</span><br><span style="color:#1565c0">H 0.8780</span> | <span style="color:#c62828">F 0.6959</span><br><span style="color:#1565c0">H 0.9102</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.8852</span><br><span style="color:#1565c0">H 0.8305</span> | <span style="color:#c62828">F 0.8627</span><br><span style="color:#1565c0">H 0.8425</span> | <span style="color:#c62828">F 0.8387</span><br><span style="color:#1565c0">H 0.8385</span> | <span style="color:#c62828">F 0.5907</span><br><span style="color:#1565c0">H 0.8619</span> | <span style="color:#c62828">F 0.2107</span><br><span style="color:#1565c0">H 0.7688</span> |
 | LoKU | <span style="color:#c62828">F 0.8674</span><br><span style="color:#1565c0">H 0.8507</span> | <span style="color:#c62828">F 0.7829</span><br><span style="color:#1565c0">H 0.8595</span> | <span style="color:#c62828">F 0.7163</span><br><span style="color:#1565c0">H 0.8820</span> | <span style="color:#c62828">F 0.1855</span><br><span style="color:#1565c0">H 0.8953</span> | <span style="color:#c62828">F 0.0738</span><br><span style="color:#1565c0">H 0.9122</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.8852</span><br><span style="color:#1565c0">H 0.8380</span> | <span style="color:#c62828">F 0.8563</span><br><span style="color:#1565c0">H 0.8338</span> | <span style="color:#c62828">F 0.7407</span><br><span style="color:#1565c0">H 0.8025</span> | <span style="color:#c62828">F 0.1788</span><br><span style="color:#1565c0">H 0.8213</span> | <span style="color:#c62828">F 0.1715</span><br><span style="color:#1565c0">H 0.8803</span> |
 
-### gemma-7b-it
+#### DUET / gemma-7b-it
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -14607,10 +15503,9 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.8840</span><br><span style="color:#1565c0">H 0.9147</span> | <span style="color:#c62828">F 0.8747</span><br><span style="color:#1565c0">H 0.9292</span> | <span style="color:#c62828">F 0.8628</span><br><span style="color:#1565c0">H 0.9204</span> | <span style="color:#c62828">F 0.8071</span><br><span style="color:#1565c0">H 0.8520</span> | <span style="color:#c62828">F 0.7018</span><br><span style="color:#1565c0">H 0.9081</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.8769</span><br><span style="color:#1565c0">H 0.9087</span> | <span style="color:#c62828">F 0.8847</span><br><span style="color:#1565c0">H 0.9338</span> | <span style="color:#c62828">F 0.8599</span><br><span style="color:#1565c0">H 0.9313</span> | <span style="color:#c62828">F 0.6956</span><br><span style="color:#1565c0">H 0.8373</span> | <span style="color:#c62828">F 0.5389</span><br><span style="color:#1565c0">H 0.7770</span> |
 | LoKU | <span style="color:#c62828">F 0.8217</span><br><span style="color:#1565c0">H 0.9343</span> | <span style="color:#c62828">F 0.1323</span><br><span style="color:#1565c0">H 0.8758</span> | <span style="color:#c62828">F 0.1031</span><br><span style="color:#1565c0">H 0.9165</span> | <span style="color:#c62828">F 0.1234</span><br><span style="color:#1565c0">H 0.9112</span> | <span style="color:#c62828">F 0.0805</span><br><span style="color:#1565c0">H 0.9017</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.9108</span><br><span style="color:#1565c0">H 0.9318</span> | <span style="color:#c62828">F 0.7814</span><br><span style="color:#1565c0">H 0.9098</span> | <span style="color:#c62828">F 0.5920</span><br><span style="color:#1565c0">H 0.8746</span> | <span style="color:#c62828">F 0.4317</span><br><span style="color:#1565c0">H 0.9373</span> | <span style="color:#c62828">F 0.5070</span><br><span style="color:#1565c0">H 0.9265</span> |
 
-## RWKU
-
-### Llama-3.1-8B-Instruct
+#### RWKU / Llama-3.1-8B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -14618,8 +15513,9 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.7580</span><br><span style="color:#1565c0">H 0.8314</span> | <span style="color:#c62828">F 0.7556</span><br><span style="color:#1565c0">H 0.8373</span> | <span style="color:#c62828">F 0.7512</span><br><span style="color:#1565c0">H 0.8487</span> | <span style="color:#c62828">F 0.6838</span><br><span style="color:#1565c0">H 0.8940</span> | <span style="color:#c62828">F 0.6318</span><br><span style="color:#1565c0">H 0.9086</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.7850</span><br><span style="color:#1565c0">H 0.8545</span> | <span style="color:#c62828">F 0.8331</span><br><span style="color:#1565c0">H 0.8915</span> | <span style="color:#c62828">F 0.8750</span><br><span style="color:#1565c0">H 0.8849</span> | <span style="color:#c62828">F 0.6815</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.5286</span><br><span style="color:#1565c0">H 0.8851</span> |
 | LoKU | <span style="color:#c62828">F 0.6633</span><br><span style="color:#1565c0">H 0.8084</span> | <span style="color:#c62828">F 0.5064</span><br><span style="color:#1565c0">H 0.8548</span> | <span style="color:#c62828">F 0.1185</span><br><span style="color:#1565c0">H 0.7976</span> | <span style="color:#c62828">F 0.0689</span><br><span style="color:#1565c0">H 0.8995</span> | <span style="color:#c62828">F 0.0389</span><br><span style="color:#1565c0">H 0.8806</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.7124</span><br><span style="color:#1565c0">H 0.7838</span> | <span style="color:#c62828">F 0.5503</span><br><span style="color:#1565c0">H 0.7331</span> | <span style="color:#c62828">F 0.4750</span><br><span style="color:#1565c0">H 0.7374</span> | <span style="color:#c62828">F 0.2683</span><br><span style="color:#1565c0">H 0.8466</span> | <span style="color:#c62828">F 0.2221</span><br><span style="color:#1565c0">H 0.8931</span> |
 
-### Qwen2.5-7B-Instruct
+#### RWKU / Qwen2.5-7B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -14627,8 +15523,9 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.4266</span><br><span style="color:#1565c0">H 0.4806</span> | <span style="color:#c62828">F 0.4162</span><br><span style="color:#1565c0">H 0.4823</span> | <span style="color:#c62828">F 0.4105</span><br><span style="color:#1565c0">H 0.4920</span> | <span style="color:#c62828">F 0.3739</span><br><span style="color:#1565c0">H 0.5639</span> | <span style="color:#c62828">F 0.3458</span><br><span style="color:#1565c0">H 0.6479</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.4266</span><br><span style="color:#1565c0">H 0.4778</span> | <span style="color:#c62828">F 0.4109</span><br><span style="color:#1565c0">H 0.4767</span> | <span style="color:#c62828">F 0.4006</span><br><span style="color:#1565c0">H 0.4781</span> | <span style="color:#c62828">F 0.3797</span><br><span style="color:#1565c0">H 0.5384</span> | <span style="color:#c62828">F 0.2977</span><br><span style="color:#1565c0">H 0.5962</span> |
 | LoKU | <span style="color:#c62828">F 0.4611</span><br><span style="color:#1565c0">H 0.5337</span> | <span style="color:#c62828">F 0.4606</span><br><span style="color:#1565c0">H 0.5914</span> | <span style="color:#c62828">F 0.4274</span><br><span style="color:#1565c0">H 0.6426</span> | <span style="color:#c62828">F 0.3398</span><br><span style="color:#1565c0">H 0.7433</span> | <span style="color:#c62828">F 0.0302</span><br><span style="color:#1565c0">H 0.7528</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.4295</span><br><span style="color:#1565c0">H 0.4817</span> | <span style="color:#c62828">F 0.4115</span><br><span style="color:#1565c0">H 0.4864</span> | <span style="color:#c62828">F 0.3773</span><br><span style="color:#1565c0">H 0.4976</span> | <span style="color:#c62828">F 0.2520</span><br><span style="color:#1565c0">H 0.6441</span> | <span style="color:#c62828">F 0.2097</span><br><span style="color:#1565c0">H 0.7361</span> |
 
-### gemma-7b-it
+#### RWKU / gemma-7b-it
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -14636,6 +15533,183 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.4930</span><br><span style="color:#1565c0">H 0.5278</span> | <span style="color:#c62828">F 0.4825</span><br><span style="color:#1565c0">H 0.5339</span> | <span style="color:#c62828">F 0.4744</span><br><span style="color:#1565c0">H 0.5442</span> | <span style="color:#c62828">F 0.4159</span><br><span style="color:#1565c0">H 0.6159</span> | <span style="color:#c62828">F 0.2992</span><br><span style="color:#1565c0">H 0.6345</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.4973</span><br><span style="color:#1565c0">H 0.5378</span> | <span style="color:#c62828">F 0.4134</span><br><span style="color:#1565c0">H 0.5066</span> | <span style="color:#c62828">F 0.3406</span><br><span style="color:#1565c0">H 0.4810</span> | <span style="color:#c62828">F 0.3134</span><br><span style="color:#1565c0">H 0.5718</span> | <span style="color:#c62828">F 0.2712</span><br><span style="color:#1565c0">H 0.6441</span> |
 | LoKU | <span style="color:#c62828">F 0.3149</span><br><span style="color:#1565c0">H 0.4535</span> | <span style="color:#c62828">F 0.3614</span><br><span style="color:#1565c0">H 0.7042</span> | <span style="color:#c62828">F 0.2127</span><br><span style="color:#1565c0">H 0.7381</span> | <span style="color:#c62828">F 0.0519</span><br><span style="color:#1565c0">H 0.8286</span> | <span style="color:#c62828">F 0.0200</span><br><span style="color:#1565c0">H 0.8371</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.4783</span><br><span style="color:#1565c0">H 0.5112</span> | <span style="color:#c62828">F 0.4101</span><br><span style="color:#1565c0">H 0.5350</span> | <span style="color:#c62828">F 0.3971</span><br><span style="color:#1565c0">H 0.5637</span> | <span style="color:#c62828">F 0.3734</span><br><span style="color:#1565c0">H 0.7109</span> | <span style="color:#c62828">F 0.3633</span><br><span style="color:#1565c0">H 0.7792</span> |
+
+### 5 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.9415</span><br><span style="color:#1565c0">H 0.9660</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.9360</span><br><span style="color:#1565c0">H 0.9670</span> | <span style="color:#c62828">F 0.8919</span><br><span style="color:#1565c0">H 0.9745</span> | <span style="color:#c62828">F 0.8719</span><br><span style="color:#1565c0">H 0.9833</span> | <span style="color:#c62828">F 0.8015</span><br><span style="color:#1565c0">H 0.9990</span> | <span style="color:#c62828">F 0.7887</span><br><span style="color:#1565c0">H 0.9980</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.9404</span><br><span style="color:#1565c0">H 0.9637</span> | <span style="color:#c62828">F 0.8988</span><br><span style="color:#1565c0">H 0.9617</span> | <span style="color:#c62828">F 0.8642</span><br><span style="color:#1565c0">H 0.9658</span> | <span style="color:#c62828">F 0.7315</span><br><span style="color:#1565c0">H 0.9840</span> | <span style="color:#c62828">F 0.4844</span><br><span style="color:#1565c0">H 0.9897</span> |
+| LoKU | <span style="color:#c62828">F 0.5758</span><br><span style="color:#1565c0">H 0.9517</span> | <span style="color:#c62828">F 0.1439</span><br><span style="color:#1565c0">H 0.9582</span> | <span style="color:#c62828">F 0.1474</span><br><span style="color:#1565c0">H 0.9830</span> | <span style="color:#c62828">F 0.0503</span><br><span style="color:#1565c0">H 0.9940</span> | <span style="color:#c62828">F 0.0382</span><br><span style="color:#1565c0">H 0.9927</span> |
+
+#### DUET / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8798</span><br><span style="color:#1565c0">H 0.8275</span> | <span style="color:#c62828">F 0.7922</span><br><span style="color:#1565c0">H 0.8060</span> | <span style="color:#c62828">F 0.5439</span><br><span style="color:#1565c0">H 0.4217</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.8820</span><br><span style="color:#1565c0">H 0.8315</span> | <span style="color:#c62828">F 0.8535</span><br><span style="color:#1565c0">H 0.8442</span> | <span style="color:#c62828">F 0.8319</span><br><span style="color:#1565c0">H 0.8455</span> | <span style="color:#c62828">F 0.7741</span><br><span style="color:#1565c0">H 0.9597</span> | <span style="color:#c62828">F 0.4946</span><br><span style="color:#1565c0">H 0.9827</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8762</span><br><span style="color:#1565c0">H 0.8355</span> | <span style="color:#c62828">F 0.8248</span><br><span style="color:#1565c0">H 0.8365</span> | <span style="color:#c62828">F 0.7767</span><br><span style="color:#1565c0">H 0.8363</span> | <span style="color:#c62828">F 0.1960</span><br><span style="color:#1565c0">H 0.8780</span> | <span style="color:#c62828">F 0.1347</span><br><span style="color:#1565c0">H 0.8803</span> |
+| LoKU | <span style="color:#c62828">F 0.8257</span><br><span style="color:#1565c0">H 0.8567</span> | <span style="color:#c62828">F 0.2679</span><br><span style="color:#1565c0">H 0.8815</span> | <span style="color:#c62828">F 0.2447</span><br><span style="color:#1565c0">H 0.8940</span> | <span style="color:#c62828">F 0.1345</span><br><span style="color:#1565c0">H 0.9813</span> | <span style="color:#c62828">F 0.0615</span><br><span style="color:#1565c0">H 0.9980</span> |
+
+#### DUET / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8329</span><br><span style="color:#1565c0">H 0.8964</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.8732</span><br><span style="color:#1565c0">H 0.9177</span> | <span style="color:#c62828">F 0.8431</span><br><span style="color:#1565c0">H 0.9118</span> | <span style="color:#c62828">F 0.8133</span><br><span style="color:#1565c0">H 0.8986</span> | <span style="color:#c62828">F 0.7175</span><br><span style="color:#1565c0">H 0.9695</span> | <span style="color:#c62828">F 0.5617</span><br><span style="color:#1565c0">H 0.9690</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8793</span><br><span style="color:#1565c0">H 0.9169</span> | <span style="color:#c62828">F 0.8485</span><br><span style="color:#1565c0">H 0.9185</span> | <span style="color:#c62828">F 0.7750</span><br><span style="color:#1565c0">H 0.8958</span> | <span style="color:#c62828">F 0.6749</span><br><span style="color:#1565c0">H 0.9600</span> | <span style="color:#c62828">F 0.6708</span><br><span style="color:#1565c0">H 0.9843</span> |
+| LoKU | <span style="color:#c62828">F 0.2646</span><br><span style="color:#1565c0">H 0.6942</span> | <span style="color:#c62828">F 0.0691</span><br><span style="color:#1565c0">H 0.9743</span> | <span style="color:#c62828">F 0.0498</span><br><span style="color:#1565c0">H 0.9920</span> | <span style="color:#c62828">F 0.0424</span><br><span style="color:#1565c0">H 0.9963</span> | <span style="color:#c62828">F 0.0156</span><br><span style="color:#1565c0">H 0.9900</span> |
+
+#### RWKU / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.0068</span><br><span style="color:#1565c0">H 0.0042</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0008</span><br><span style="color:#1565c0">H 0.0001</span> | <span style="color:#c62828">F 0.0030</span><br><span style="color:#1565c0">H 0.0009</span> | <span style="color:#c62828">F 0.0022</span><br><span style="color:#1565c0">H 0.0009</span> |
+| NPO | <span style="color:#c62828">F 0.7606</span><br><span style="color:#1565c0">H 0.8375</span> | <span style="color:#c62828">F 0.7444</span><br><span style="color:#1565c0">H 0.8428</span> | <span style="color:#c62828">F 0.7522</span><br><span style="color:#1565c0">H 0.8797</span> | <span style="color:#c62828">F 0.6147</span><br><span style="color:#1565c0">H 0.9515</span> | <span style="color:#c62828">F 0.5909</span><br><span style="color:#1565c0">H 0.9644</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8036</span><br><span style="color:#1565c0">H 0.8651</span> | <span style="color:#c62828">F 0.8464</span><br><span style="color:#1565c0">H 0.8635</span> | <span style="color:#c62828">F 0.8508</span><br><span style="color:#1565c0">H 0.8769</span> | <span style="color:#c62828">F 0.2811</span><br><span style="color:#1565c0">H 0.9259</span> | <span style="color:#c62828">F 0.0911</span><br><span style="color:#1565c0">H 0.9331</span> |
+| LoKU | <span style="color:#c62828">F 0.6610</span><br><span style="color:#1565c0">H 0.8477</span> | <span style="color:#c62828">F 0.3578</span><br><span style="color:#1565c0">H 0.9008</span> | <span style="color:#c62828">F 0.0307</span><br><span style="color:#1565c0">H 0.9374</span> | <span style="color:#c62828">F 0.0388</span><br><span style="color:#1565c0">H 0.9713</span> | <span style="color:#c62828">F 0.0186</span><br><span style="color:#1565c0">H 0.9708</span> |
+
+#### RWKU / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.4813</span><br><span style="color:#1565c0">H 0.5121</span> | <span style="color:#c62828">F 0.0014</span><br><span style="color:#1565c0">H 0.0005</span> | <span style="color:#c62828">F 0.0015</span><br><span style="color:#1565c0">H 0.0004</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0008</span><br><span style="color:#1565c0">H 0.0001</span> |
+| NPO | <span style="color:#c62828">F 0.4199</span><br><span style="color:#1565c0">H 0.4765</span> | <span style="color:#c62828">F 0.3954</span><br><span style="color:#1565c0">H 0.4958</span> | <span style="color:#c62828">F 0.3861</span><br><span style="color:#1565c0">H 0.5217</span> | <span style="color:#c62828">F 0.2969</span><br><span style="color:#1565c0">H 0.7174</span> | <span style="color:#c62828">F 0.2656</span><br><span style="color:#1565c0">H 0.7869</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.4235</span><br><span style="color:#1565c0">H 0.4814</span> | <span style="color:#c62828">F 0.3984</span><br><span style="color:#1565c0">H 0.4770</span> | <span style="color:#c62828">F 0.3936</span><br><span style="color:#1565c0">H 0.4989</span> | <span style="color:#c62828">F 0.3104</span><br><span style="color:#1565c0">H 0.6542</span> | <span style="color:#c62828">F 0.2482</span><br><span style="color:#1565c0">H 0.7510</span> |
+| LoKU | <span style="color:#c62828">F 0.4622</span><br><span style="color:#1565c0">H 0.5803</span> | <span style="color:#c62828">F 0.3977</span><br><span style="color:#1565c0">H 0.6698</span> | <span style="color:#c62828">F 0.2941</span><br><span style="color:#1565c0">H 0.7353</span> | <span style="color:#c62828">F 0.0286</span><br><span style="color:#1565c0">H 0.8965</span> | <span style="color:#c62828">F 0.0113</span><br><span style="color:#1565c0">H 0.9215</span> |
+
+#### RWKU / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.1065</span><br><span style="color:#1565c0">H 0.0570</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.4916</span><br><span style="color:#1565c0">H 0.5271</span> | <span style="color:#c62828">F 0.4628</span><br><span style="color:#1565c0">H 0.5292</span> | <span style="color:#c62828">F 0.4363</span><br><span style="color:#1565c0">H 0.5581</span> | <span style="color:#c62828">F 0.3436</span><br><span style="color:#1565c0">H 0.6747</span> | <span style="color:#c62828">F 0.2151</span><br><span style="color:#1565c0">H 0.7358</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.4658</span><br><span style="color:#1565c0">H 0.5118</span> | <span style="color:#c62828">F 0.3373</span><br><span style="color:#1565c0">H 0.4545</span> | <span style="color:#c62828">F 0.3306</span><br><span style="color:#1565c0">H 0.5315</span> | <span style="color:#c62828">F 0.2568</span><br><span style="color:#1565c0">H 0.7303</span> | <span style="color:#c62828">F 0.2062</span><br><span style="color:#1565c0">H 0.8278</span> |
+| LoKU | <span style="color:#c62828">F 0.3984</span><br><span style="color:#1565c0">H 0.6377</span> | <span style="color:#c62828">F 0.0529</span><br><span style="color:#1565c0">H 0.7963</span> | <span style="color:#c62828">F 0.0225</span><br><span style="color:#1565c0">H 0.8686</span> | <span style="color:#c62828">F 0.0356</span><br><span style="color:#1565c0">H 0.9495</span> | <span style="color:#c62828">F 0.0088</span><br><span style="color:#1565c0">H 0.9482</span> |
+
+## COS_SIM
+
+### 2 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8446</span><br><span style="color:#1565c0">H 0.8666</span> | <span style="color:#c62828">F 0.6230</span><br><span style="color:#1565c0">H 0.5900</span> | <span style="color:#c62828">F 0.5855</span><br><span style="color:#1565c0">H 0.5374</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> |
+| NPO | <span style="color:#c62828">F 0.8445</span><br><span style="color:#1565c0">H 0.8654</span> | <span style="color:#c62828">F 0.8239</span><br><span style="color:#1565c0">H 0.8766</span> | <span style="color:#c62828">F 0.7970</span><br><span style="color:#1565c0">H 0.9343</span> | <span style="color:#c62828">F 0.6360</span><br><span style="color:#1565c0">H 0.9778</span> | <span style="color:#c62828">F 0.6512</span><br><span style="color:#1565c0">H 0.9907</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8441</span><br><span style="color:#1565c0">H 0.8648</span> | <span style="color:#c62828">F 0.7119</span><br><span style="color:#1565c0">H 0.7662</span> | <span style="color:#c62828">F 0.6703</span><br><span style="color:#1565c0">H 0.8706</span> | <span style="color:#c62828">F 0.6635</span><br><span style="color:#1565c0">H 0.9651</span> | <span style="color:#c62828">F 0.5736</span><br><span style="color:#1565c0">H 0.9549</span> |
+| LoKU | <span style="color:#c62828">F 0.8871</span><br><span style="color:#1565c0">H 0.9722</span> | <span style="color:#c62828">F 0.5868</span><br><span style="color:#1565c0">H 0.9622</span> | <span style="color:#c62828">F 0.5540</span><br><span style="color:#1565c0">H 0.9575</span> | <span style="color:#c62828">F 0.4865</span><br><span style="color:#1565c0">H 0.9675</span> | <span style="color:#c62828">F 0.4981</span><br><span style="color:#1565c0">H 0.9701</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.8919</span><br><span style="color:#1565c0">H 0.9142</span> | <span style="color:#c62828">F 0.8808</span><br><span style="color:#1565c0">H 0.9490</span> | <span style="color:#c62828">F 0.6795</span><br><span style="color:#1565c0">H 0.9380</span> | <span style="color:#c62828">F 0.5896</span><br><span style="color:#1565c0">H 0.9676</span> | <span style="color:#c62828">F 0.5753</span><br><span style="color:#1565c0">H 0.9792</span> |
+
+#### DUET / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8997</span><br><span style="color:#1565c0">H 0.8756</span> | <span style="color:#c62828">F 0.8519</span><br><span style="color:#1565c0">H 0.8466</span> | <span style="color:#c62828">F 0.7790</span><br><span style="color:#1565c0">H 0.7051</span> | <span style="color:#c62828">F 0.0593</span><br><span style="color:#1565c0">H 0.0922</span> | <span style="color:#c62828">F 0.0583</span><br><span style="color:#1565c0">H 0.0917</span> |
+| NPO | <span style="color:#c62828">F 0.8961</span><br><span style="color:#1565c0">H 0.8734</span> | <span style="color:#c62828">F 0.8737</span><br><span style="color:#1565c0">H 0.8735</span> | <span style="color:#c62828">F 0.8684</span><br><span style="color:#1565c0">H 0.8826</span> | <span style="color:#c62828">F 0.8251</span><br><span style="color:#1565c0">H 0.9172</span> | <span style="color:#c62828">F 0.7783</span><br><span style="color:#1565c0">H 0.9379</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8987</span><br><span style="color:#1565c0">H 0.8752</span> | <span style="color:#c62828">F 0.8453</span><br><span style="color:#1565c0">H 0.8487</span> | <span style="color:#c62828">F 0.8361</span><br><span style="color:#1565c0">H 0.8640</span> | <span style="color:#c62828">F 0.7395</span><br><span style="color:#1565c0">H 0.9101</span> | <span style="color:#c62828">F 0.5614</span><br><span style="color:#1565c0">H 0.8425</span> |
+| LoKU | <span style="color:#c62828">F 0.9102</span><br><span style="color:#1565c0">H 0.9037</span> | <span style="color:#c62828">F 0.8673</span><br><span style="color:#1565c0">H 0.9174</span> | <span style="color:#c62828">F 0.8086</span><br><span style="color:#1565c0">H 0.9270</span> | <span style="color:#c62828">F 0.5687</span><br><span style="color:#1565c0">H 0.9389</span> | <span style="color:#c62828">F 0.5050</span><br><span style="color:#1565c0">H 0.9498</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.9083</span><br><span style="color:#1565c0">H 0.8838</span> | <span style="color:#c62828">F 0.9145</span><br><span style="color:#1565c0">H 0.8978</span> | <span style="color:#c62828">F 0.8689</span><br><span style="color:#1565c0">H 0.8852</span> | <span style="color:#c62828">F 0.6031</span><br><span style="color:#1565c0">H 0.8945</span> | <span style="color:#c62828">F 0.5869</span><br><span style="color:#1565c0">H 0.9284</span> |
+
+#### DUET / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.5821</span><br><span style="color:#1565c0">H 0.5518</span> | <span style="color:#c62828">F 0.5476</span><br><span style="color:#1565c0">H 0.4944</span> | <span style="color:#c62828">F 0.1204</span><br><span style="color:#1565c0">H 0.0985</span> | <span style="color:#c62828">F 0.0676</span><br><span style="color:#1565c0">H 0.1006</span> | <span style="color:#c62828">F 0.0681</span><br><span style="color:#1565c0">H 0.1030</span> |
+| NPO | <span style="color:#c62828">F 0.5993</span><br><span style="color:#1565c0">H 0.5668</span> | <span style="color:#c62828">F 0.5860</span><br><span style="color:#1565c0">H 0.5717</span> | <span style="color:#c62828">F 0.5784</span><br><span style="color:#1565c0">H 0.5707</span> | <span style="color:#c62828">F 0.5531</span><br><span style="color:#1565c0">H 0.5980</span> | <span style="color:#c62828">F 0.4783</span><br><span style="color:#1565c0">H 0.7598</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.5857</span><br><span style="color:#1565c0">H 0.5574</span> | <span style="color:#c62828">F 0.5832</span><br><span style="color:#1565c0">H 0.5664</span> | <span style="color:#c62828">F 0.5664</span><br><span style="color:#1565c0">H 0.5775</span> | <span style="color:#c62828">F 0.5128</span><br><span style="color:#1565c0">H 0.6417</span> | <span style="color:#c62828">F 0.4907</span><br><span style="color:#1565c0">H 0.7256</span> |
+| LoKU | <span style="color:#c62828">F 0.6582</span><br><span style="color:#1565c0">H 0.7002</span> | <span style="color:#c62828">F 0.4874</span><br><span style="color:#1565c0">H 0.9237</span> | <span style="color:#c62828">F 0.4715</span><br><span style="color:#1565c0">H 0.9559</span> | <span style="color:#c62828">F 0.5453</span><br><span style="color:#1565c0">H 0.9490</span> | <span style="color:#c62828">F 0.5206</span><br><span style="color:#1565c0">H 0.9468</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.6175</span><br><span style="color:#1565c0">H 0.5709</span> | <span style="color:#c62828">F 0.6480</span><br><span style="color:#1565c0">H 0.7348</span> | <span style="color:#c62828">F 0.5707</span><br><span style="color:#1565c0">H 0.8423</span> | <span style="color:#c62828">F 0.4984</span><br><span style="color:#1565c0">H 0.9426</span> | <span style="color:#c62828">F 0.5160</span><br><span style="color:#1565c0">H 0.9226</span> |
+
+#### RWKU / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.5974</span><br><span style="color:#1565c0">H 0.6196</span> | <span style="color:#c62828">F 0.1151</span><br><span style="color:#1565c0">H 0.1311</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> | <span style="color:#c62828">F 0.0826</span><br><span style="color:#1565c0">H 0.0841</span> | <span style="color:#c62828">F 0.0631</span><br><span style="color:#1565c0">H 0.0669</span> |
+| NPO | <span style="color:#c62828">F 0.7735</span><br><span style="color:#1565c0">H 0.8229</span> | <span style="color:#c62828">F 0.7497</span><br><span style="color:#1565c0">H 0.8265</span> | <span style="color:#c62828">F 0.7394</span><br><span style="color:#1565c0">H 0.8389</span> | <span style="color:#c62828">F 0.6603</span><br><span style="color:#1565c0">H 0.9010</span> | <span style="color:#c62828">F 0.5535</span><br><span style="color:#1565c0">H 0.9194</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.7199</span><br><span style="color:#1565c0">H 0.7513</span> | <span style="color:#c62828">F 0.4963</span><br><span style="color:#1565c0">H 0.6197</span> | <span style="color:#c62828">F 0.4430</span><br><span style="color:#1565c0">H 0.6826</span> | <span style="color:#c62828">F 0.3330</span><br><span style="color:#1565c0">H 0.8029</span> | <span style="color:#c62828">F 0.2995</span><br><span style="color:#1565c0">H 0.8822</span> |
+| LoKU | <span style="color:#c62828">F 0.7768</span><br><span style="color:#1565c0">H 0.8769</span> | <span style="color:#c62828">F 0.6610</span><br><span style="color:#1565c0">H 0.9026</span> | <span style="color:#c62828">F 0.2738</span><br><span style="color:#1565c0">H 0.8552</span> | <span style="color:#c62828">F 0.1919</span><br><span style="color:#1565c0">H 0.9296</span> | <span style="color:#c62828">F 0.1676</span><br><span style="color:#1565c0">H 0.9159</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.8006</span><br><span style="color:#1565c0">H 0.8563</span> | <span style="color:#c62828">F 0.6920</span><br><span style="color:#1565c0">H 0.8284</span> | <span style="color:#c62828">F 0.6452</span><br><span style="color:#1565c0">H 0.8322</span> | <span style="color:#c62828">F 0.5046</span><br><span style="color:#1565c0">H 0.9018</span> | <span style="color:#c62828">F 0.4725</span><br><span style="color:#1565c0">H 0.9328</span> |
+
+#### RWKU / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.6111</span><br><span style="color:#1565c0">H 0.6651</span> | <span style="color:#c62828">F 0.3397</span><br><span style="color:#1565c0">H 0.3482</span> | <span style="color:#c62828">F 0.0830</span><br><span style="color:#1565c0">H 0.0982</span> | <span style="color:#c62828">F 0.0874</span><br><span style="color:#1565c0">H 0.0808</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> |
+| NPO | <span style="color:#c62828">F 0.6103</span><br><span style="color:#1565c0">H 0.6648</span> | <span style="color:#c62828">F 0.6017</span><br><span style="color:#1565c0">H 0.6656</span> | <span style="color:#c62828">F 0.5978</span><br><span style="color:#1565c0">H 0.6723</span> | <span style="color:#c62828">F 0.5753</span><br><span style="color:#1565c0">H 0.7209</span> | <span style="color:#c62828">F 0.5621</span><br><span style="color:#1565c0">H 0.7761</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.6117</span><br><span style="color:#1565c0">H 0.6640</span> | <span style="color:#c62828">F 0.6018</span><br><span style="color:#1565c0">H 0.6644</span> | <span style="color:#c62828">F 0.5942</span><br><span style="color:#1565c0">H 0.6640</span> | <span style="color:#c62828">F 0.5821</span><br><span style="color:#1565c0">H 0.7068</span> | <span style="color:#c62828">F 0.5055</span><br><span style="color:#1565c0">H 0.7444</span> |
+| LoKU | <span style="color:#c62828">F 0.6390</span><br><span style="color:#1565c0">H 0.7002</span> | <span style="color:#c62828">F 0.6439</span><br><span style="color:#1565c0">H 0.7441</span> | <span style="color:#c62828">F 0.6126</span><br><span style="color:#1565c0">H 0.7748</span> | <span style="color:#c62828">F 0.3124</span><br><span style="color:#1565c0">H 0.8100</span> | <span style="color:#c62828">F 0.4846</span><br><span style="color:#1565c0">H 0.8632</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.6226</span><br><span style="color:#1565c0">H 0.6735</span> | <span style="color:#c62828">F 0.6064</span><br><span style="color:#1565c0">H 0.6791</span> | <span style="color:#c62828">F 0.5821</span><br><span style="color:#1565c0">H 0.6841</span> | <span style="color:#c62828">F 0.5050</span><br><span style="color:#1565c0">H 0.7737</span> | <span style="color:#c62828">F 0.4842</span><br><span style="color:#1565c0">H 0.8371</span> |
+
+#### RWKU / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.3232</span><br><span style="color:#1565c0">H 0.3261</span> | <span style="color:#c62828">F 0.0423</span><br><span style="color:#1565c0">H 0.0438</span> | <span style="color:#c62828">F 0.0820</span><br><span style="color:#1565c0">H 0.0830</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.3629</span><br><span style="color:#1565c0">H 0.3762</span> | <span style="color:#c62828">F 0.3481</span><br><span style="color:#1565c0">H 0.3821</span> | <span style="color:#c62828">F 0.3467</span><br><span style="color:#1565c0">H 0.3962</span> | <span style="color:#c62828">F 0.2930</span><br><span style="color:#1565c0">H 0.5915</span> | <span style="color:#c62828">F 0.2110</span><br><span style="color:#1565c0">H 0.6327</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.3418</span><br><span style="color:#1565c0">H 0.3624</span> | <span style="color:#c62828">F 0.2899</span><br><span style="color:#1565c0">H 0.3504</span> | <span style="color:#c62828">F 0.2596</span><br><span style="color:#1565c0">H 0.3561</span> | <span style="color:#c62828">F 0.2329</span><br><span style="color:#1565c0">H 0.5829</span> | <span style="color:#c62828">F 0.1950</span><br><span style="color:#1565c0">H 0.6508</span> |
+| LoKU | <span style="color:#c62828">F 0.5096</span><br><span style="color:#1565c0">H 0.6373</span> | <span style="color:#c62828">F 0.5756</span><br><span style="color:#1565c0">H 0.8188</span> | <span style="color:#c62828">F 0.4526</span><br><span style="color:#1565c0">H 0.8357</span> | <span style="color:#c62828">F 0.2558</span><br><span style="color:#1565c0">H 0.8882</span> | <span style="color:#c62828">F 0.5129</span><br><span style="color:#1565c0">H 0.9161</span> |
+| DualCF (Phase1) | <span style="color:#c62828">F 0.3969</span><br><span style="color:#1565c0">H 0.4094</span> | <span style="color:#c62828">F 0.3744</span><br><span style="color:#1565c0">H 0.5794</span> | <span style="color:#c62828">F 0.3585</span><br><span style="color:#1565c0">H 0.6374</span> | <span style="color:#c62828">F 0.3664</span><br><span style="color:#1565c0">H 0.8035</span> | <span style="color:#c62828">F 0.3629</span><br><span style="color:#1565c0">H 0.8535</span> |
+
+### 5 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.7273</span><br><span style="color:#1565c0">H 0.8168</span> | <span style="color:#c62828">F 0.0962</span><br><span style="color:#1565c0">H 0.0778</span> | <span style="color:#c62828">F 0.0956</span><br><span style="color:#1565c0">H 0.0775</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> |
+| NPO | <span style="color:#c62828">F 0.8384</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.8100</span><br><span style="color:#1565c0">H 0.9453</span> | <span style="color:#c62828">F 0.8004</span><br><span style="color:#1565c0">H 0.9724</span> | <span style="color:#c62828">F 0.5966</span><br><span style="color:#1565c0">H 0.9967</span> | <span style="color:#c62828">F 0.6230</span><br><span style="color:#1565c0">H 0.9942</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8016</span><br><span style="color:#1565c0">H 0.8437</span> | <span style="color:#c62828">F 0.6559</span><br><span style="color:#1565c0">H 0.9096</span> | <span style="color:#c62828">F 0.6625</span><br><span style="color:#1565c0">H 0.9472</span> | <span style="color:#c62828">F 0.6223</span><br><span style="color:#1565c0">H 0.9850</span> | <span style="color:#c62828">F 0.5048</span><br><span style="color:#1565c0">H 0.9678</span> |
+| LoKU | <span style="color:#c62828">F 0.7064</span><br><span style="color:#1565c0">H 0.9657</span> | <span style="color:#c62828">F 0.5022</span><br><span style="color:#1565c0">H 0.9753</span> | <span style="color:#c62828">F 0.5134</span><br><span style="color:#1565c0">H 0.9902</span> | <span style="color:#c62828">F 0.4543</span><br><span style="color:#1565c0">H 0.9959</span> | <span style="color:#c62828">F 0.4093</span><br><span style="color:#1565c0">H 0.9949</span> |
+
+#### DUET / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8843</span><br><span style="color:#1565c0">H 0.8629</span> | <span style="color:#c62828">F 0.5433</span><br><span style="color:#1565c0">H 0.5086</span> | <span style="color:#c62828">F 0.4611</span><br><span style="color:#1565c0">H 0.3946</span> | <span style="color:#c62828">F 0.0583</span><br><span style="color:#1565c0">H 0.0917</span> | <span style="color:#c62828">F 0.0583</span><br><span style="color:#1565c0">H 0.0917</span> |
+| NPO | <span style="color:#c62828">F 0.8818</span><br><span style="color:#1565c0">H 0.8690</span> | <span style="color:#c62828">F 0.8620</span><br><span style="color:#1565c0">H 0.8888</span> | <span style="color:#c62828">F 0.8565</span><br><span style="color:#1565c0">H 0.8967</span> | <span style="color:#c62828">F 0.6423</span><br><span style="color:#1565c0">H 0.9645</span> | <span style="color:#c62828">F 0.5863</span><br><span style="color:#1565c0">H 0.9881</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8801</span><br><span style="color:#1565c0">H 0.8670</span> | <span style="color:#c62828">F 0.8285</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.8180</span><br><span style="color:#1565c0">H 0.8815</span> | <span style="color:#c62828">F 0.4643</span><br><span style="color:#1565c0">H 0.9012</span> | <span style="color:#c62828">F 0.5085</span><br><span style="color:#1565c0">H 0.9195</span> |
+| LoKU | <span style="color:#c62828">F 0.8864</span><br><span style="color:#1565c0">H 0.9118</span> | <span style="color:#c62828">F 0.6101</span><br><span style="color:#1565c0">H 0.9268</span> | <span style="color:#c62828">F 0.6002</span><br><span style="color:#1565c0">H 0.9396</span> | <span style="color:#c62828">F 0.5314</span><br><span style="color:#1565c0">H 0.9861</span> | <span style="color:#c62828">F 0.4343</span><br><span style="color:#1565c0">H 0.9947</span> |
+
+#### DUET / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.5166</span><br><span style="color:#1565c0">H 0.5072</span> | <span style="color:#c62828">F 0.0605</span><br><span style="color:#1565c0">H 0.0747</span> | <span style="color:#c62828">F 0.0506</span><br><span style="color:#1565c0">H 0.0770</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0671</span><br><span style="color:#1565c0">H 0.1026</span> |
+| NPO | <span style="color:#c62828">F 0.5920</span><br><span style="color:#1565c0">H 0.5740</span> | <span style="color:#c62828">F 0.5709</span><br><span style="color:#1565c0">H 0.5691</span> | <span style="color:#c62828">F 0.5581</span><br><span style="color:#1565c0">H 0.5787</span> | <span style="color:#c62828">F 0.5081</span><br><span style="color:#1565c0">H 0.9692</span> | <span style="color:#c62828">F 0.4671</span><br><span style="color:#1565c0">H 0.9760</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.5849</span><br><span style="color:#1565c0">H 0.5601</span> | <span style="color:#c62828">F 0.5554</span><br><span style="color:#1565c0">H 0.5804</span> | <span style="color:#c62828">F 0.5295</span><br><span style="color:#1565c0">H 0.6163</span> | <span style="color:#c62828">F 0.5221</span><br><span style="color:#1565c0">H 0.9394</span> | <span style="color:#c62828">F 0.4799</span><br><span style="color:#1565c0">H 0.9857</span> |
+| LoKU | <span style="color:#c62828">F 0.4984</span><br><span style="color:#1565c0">H 0.7961</span> | <span style="color:#c62828">F 0.4472</span><br><span style="color:#1565c0">H 0.9866</span> | <span style="color:#c62828">F 0.3161</span><br><span style="color:#1565c0">H 0.9946</span> | <span style="color:#c62828">F 0.4393</span><br><span style="color:#1565c0">H 0.9980</span> | <span style="color:#c62828">F 0.3408</span><br><span style="color:#1565c0">H 0.9948</span> |
+
+#### RWKU / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.0922</span><br><span style="color:#1565c0">H 0.0895</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> | <span style="color:#c62828">F 0.0826</span><br><span style="color:#1565c0">H 0.0841</span> | <span style="color:#c62828">F 0.0631</span><br><span style="color:#1565c0">H 0.0669</span> |
+| NPO | <span style="color:#c62828">F 0.7544</span><br><span style="color:#1565c0">H 0.8116</span> | <span style="color:#c62828">F 0.7404</span><br><span style="color:#1565c0">H 0.8543</span> | <span style="color:#c62828">F 0.6250</span><br><span style="color:#1565c0">H 0.8668</span> | <span style="color:#c62828">F 0.5528</span><br><span style="color:#1565c0">H 0.9518</span> | <span style="color:#c62828">F 0.4742</span><br><span style="color:#1565c0">H 0.9700</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.6414</span><br><span style="color:#1565c0">H 0.7185</span> | <span style="color:#c62828">F 0.4359</span><br><span style="color:#1565c0">H 0.7175</span> | <span style="color:#c62828">F 0.3973</span><br><span style="color:#1565c0">H 0.7354</span> | <span style="color:#c62828">F 0.2024</span><br><span style="color:#1565c0">H 0.9288</span> | <span style="color:#c62828">F 0.1907</span><br><span style="color:#1565c0">H 0.9227</span> |
+| LoKU | <span style="color:#c62828">F 0.7645</span><br><span style="color:#1565c0">H 0.8960</span> | <span style="color:#c62828">F 0.5471</span><br><span style="color:#1565c0">H 0.9323</span> | <span style="color:#c62828">F 0.1817</span><br><span style="color:#1565c0">H 0.9547</span> | <span style="color:#c62828">F 0.1641</span><br><span style="color:#1565c0">H 0.9802</span> | <span style="color:#c62828">F 0.0876</span><br><span style="color:#1565c0">H 0.9791</span> |
+
+#### RWKU / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.4172</span><br><span style="color:#1565c0">H 0.4494</span> | <span style="color:#c62828">F 0.1270</span><br><span style="color:#1565c0">H 0.1171</span> | <span style="color:#c62828">F 0.0752</span><br><span style="color:#1565c0">H 0.0866</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> |
+| NPO | <span style="color:#c62828">F 0.6041</span><br><span style="color:#1565c0">H 0.6603</span> | <span style="color:#c62828">F 0.5935</span><br><span style="color:#1565c0">H 0.6771</span> | <span style="color:#c62828">F 0.5877</span><br><span style="color:#1565c0">H 0.6933</span> | <span style="color:#c62828">F 0.5239</span><br><span style="color:#1565c0">H 0.8177</span> | <span style="color:#c62828">F 0.4926</span><br><span style="color:#1565c0">H 0.8620</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.6083</span><br><span style="color:#1565c0">H 0.6652</span> | <span style="color:#c62828">F 0.5948</span><br><span style="color:#1565c0">H 0.6672</span> | <span style="color:#c62828">F 0.5910</span><br><span style="color:#1565c0">H 0.6797</span> | <span style="color:#c62828">F 0.5246</span><br><span style="color:#1565c0">H 0.7753</span> | <span style="color:#c62828">F 0.4088</span><br><span style="color:#1565c0">H 0.8362</span> |
+| LoKU | <span style="color:#c62828">F 0.6428</span><br><span style="color:#1565c0">H 0.7366</span> | <span style="color:#c62828">F 0.5766</span><br><span style="color:#1565c0">H 0.7866</span> | <span style="color:#c62828">F 0.4178</span><br><span style="color:#1565c0">H 0.8142</span> | <span style="color:#c62828">F 0.1654</span><br><span style="color:#1565c0">H 0.9337</span> | <span style="color:#c62828">F 0.5174</span><br><span style="color:#1565c0">H 0.9587</span> |
+
+#### RWKU / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.2244</span><br><span style="color:#1565c0">H 0.2172</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.3547</span><br><span style="color:#1565c0">H 0.3785</span> | <span style="color:#c62828">F 0.3455</span><br><span style="color:#1565c0">H 0.4049</span> | <span style="color:#c62828">F 0.3286</span><br><span style="color:#1565c0">H 0.5545</span> | <span style="color:#c62828">F 0.2675</span><br><span style="color:#1565c0">H 0.7537</span> | <span style="color:#c62828">F 0.1710</span><br><span style="color:#1565c0">H 0.8001</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.3165</span><br><span style="color:#1565c0">H 0.3528</span> | <span style="color:#c62828">F 0.2609</span><br><span style="color:#1565c0">H 0.3901</span> | <span style="color:#c62828">F 0.2587</span><br><span style="color:#1565c0">H 0.5437</span> | <span style="color:#c62828">F 0.2080</span><br><span style="color:#1565c0">H 0.7901</span> | <span style="color:#c62828">F 0.1721</span><br><span style="color:#1565c0">H 0.8691</span> |
+| LoKU | <span style="color:#c62828">F 0.5938</span><br><span style="color:#1565c0">H 0.7719</span> | <span style="color:#c62828">F 0.4795</span><br><span style="color:#1565c0">H 0.8890</span> | <span style="color:#c62828">F 0.5079</span><br><span style="color:#1565c0">H 0.9289</span> | <span style="color:#c62828">F 0.2422</span><br><span style="color:#1565c0">H 0.9687</span> | <span style="color:#c62828">F 0.4835</span><br><span style="color:#1565c0">H 0.9745</span> |
 
 </content>
 
@@ -17091,7 +18165,7 @@ task_name: popqa_loku_lora
 # @package _global_
 
 defaults:
-  - override /model: Llama-3.1-8B-lora
+  - override /model: Llama-3.1-8B-Instruct-lora
   - override /trainer: DualCF
   - override /data: unlearn
   - override /data/datasets@data.forget: RWKU_QA_forget_dual_cf
@@ -22774,10 +23848,10 @@ if [[ -n "${FORGET_SPLIT_OVERRIDE:-}" && -n "${RETAIN_SPLIT_OVERRIDE:-}" ]]; the
     )
 fi
 
-per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
-gradient_accumulation_steps=${GRAD_ACCUM:-32}
-eval_batch_size=${EVAL_BATCH_SIZE:-8}
-num_train_epochs=${NUM_EPOCHS:-5}
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-16}
+gradient_accumulation_steps=${GRAD_ACCUM:-2}
+eval_batch_size=${EVAL_BATCH_SIZE:-64}
+num_train_epochs=${NUM_EPOCHS:-2}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 
@@ -22793,7 +23867,7 @@ if [[ "${cf_dataset_path}" == "json" ]] && is_nullish "${cf_dataset_data_files}"
     exit 1
 fi
 
-raw_lrs="${LRS:-1e-5}"
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -29023,7 +30097,7 @@ is_nullish() {
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
-base_model="${BASE_MODEL:-Llama-3.1-8B}"
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
 tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${base_model_path}}"
@@ -29061,14 +30135,14 @@ else
     cf_dataset_split="${CF_DATASET_SPLIT:-test}"
 fi
 
-per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
-gradient_accumulation_steps=${GRAD_ACCUM:-32}
-eval_batch_size=${EVAL_BATCH_SIZE:-8}
-num_train_epochs=${NUM_EPOCHS:-5}
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-16}
+gradient_accumulation_steps=${GRAD_ACCUM:-2}
+eval_batch_size=${EVAL_BATCH_SIZE:-64}
+num_train_epochs=${NUM_EPOCHS:-2}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 
-raw_lrs="${LRS:-1e-5}"
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
@@ -34494,6 +35568,7 @@ from pathlib import Path
 from typing import Dict
 
 import torch
+from tqdm.auto import tqdm
 
 SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
@@ -34507,6 +35582,14 @@ from tools.dual_cf_artifact_utils import (
     save_jsonl,
     select_device,
 )
+
+
+def log(message: str) -> None:
+    print(f"[make_counterfactuals] {message}", flush=True)
+
+
+def normalize_text(value: str) -> str:
+    return " ".join(str(value).strip().lower().split())
 
 
 def parse_args():
@@ -34553,6 +35636,11 @@ def load_mapping(path: str, key_field: str, alternate_field: str) -> Dict[str, s
 
 
 def build_generator(args):
+    log(
+        "Loading generator model "
+        f"cfg={args.model_cfg} model_path={args.model_path or '<cfg-default>'} "
+        f"tokenizer_path={args.tokenizer_path or '<model-path>'}"
+    )
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
@@ -34564,6 +35652,7 @@ def build_generator(args):
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(device)
     model.eval()
+    log(f"Generator model ready on device={device}")
 
     def generate_alternate(question: str, answer: str) -> str:
         prompt_variants = [
@@ -34627,6 +35716,12 @@ def build_generator(args):
 
 def main():
     args = parse_args()
+    log(
+        "Starting with "
+        f"dataset_path={args.dataset_path} split={args.split} "
+        f"dataset_name={args.dataset_name} data_files={args.data_files} "
+        f"output_path={args.output_path}"
+    )
     dataset = load_dataset_split(
         path=args.dataset_path,
         split=args.split,
@@ -34634,18 +35729,31 @@ def main():
         data_files=args.data_files,
         max_examples=args.max_examples,
     )
+    dataset_size = len(dataset) if hasattr(dataset, "__len__") else None
+    if dataset_size is not None:
+        log(f"Loaded {dataset_size} source rows")
 
     mapping = None
     generate_alternate = None
     if args.alternate_column:
-        pass
+        log(f"Using alternate column `{args.alternate_column}` from the dataset")
     elif args.alternate_jsonl:
+        log(
+            "Loading alternates from JSONL "
+            f"path={args.alternate_jsonl} key={args.mapping_key} "
+            f"alternate_key={args.mapping_alternate_key}"
+        )
         mapping = load_mapping(
             path=args.alternate_jsonl,
             key_field=args.mapping_key,
             alternate_field=args.mapping_alternate_key,
         )
+        log(f"Loaded {len(mapping)} alternate mappings")
     elif args.model_cfg:
+        log(
+            "Generating alternates with model "
+            f"max_new_tokens={args.max_new_tokens} temperature={args.temperature} top_p={args.top_p}"
+        )
         generate_alternate = build_generator(args)
     else:
         raise ValueError(
@@ -34653,33 +35761,58 @@ def main():
         )
 
     rows = []
-    for row in dataset:
-        answer = resolve_answer(
-            row=row,
-            answer_key=args.answer_key,
-            answer_index=args.answer_index,
-        )
-        if args.alternate_column:
-            alternate = row[args.alternate_column]
-        elif mapping is not None:
-            join_value = str(row[args.mapping_key])
-            if join_value not in mapping:
-                raise KeyError(
-                    f"No alternate found for {args.mapping_key}={join_value} in mapping."
-                )
-            alternate = mapping[join_value]
-        else:
-            alternate = generate_alternate(
-                str(row[args.question_key]),
-                str(answer),
+    empty_alternate_count = 0
+    same_as_answer_count = 0
+    row_iter = tqdm(
+        dataset,
+        total=dataset_size,
+        desc="counterfactual_rows",
+        dynamic_ncols=True,
+    )
+    for row_no, row in enumerate(row_iter, start=1):
+        row_index = row.get("index", "<missing>")
+        try:
+            answer = resolve_answer(
+                row=row,
+                answer_key=args.answer_key,
+                answer_index=args.answer_index,
             )
+            if args.alternate_column:
+                alternate = row[args.alternate_column]
+            elif mapping is not None:
+                join_value = str(row[args.mapping_key])
+                if join_value not in mapping:
+                    raise KeyError(
+                        f"No alternate found for {args.mapping_key}={join_value} in mapping."
+                    )
+                alternate = mapping[join_value]
+            else:
+                alternate = generate_alternate(
+                    str(row[args.question_key]),
+                    str(answer),
+                )
 
-        updated = dict(row)
-        updated["answer"] = answer
-        updated["alternate"] = str(alternate).strip()
-        rows.append(updated)
+            updated = dict(row)
+            updated["answer"] = answer
+            updated["alternate"] = str(alternate).strip()
+            if not updated["alternate"]:
+                empty_alternate_count += 1
+            if normalize_text(updated["alternate"]) == normalize_text(answer):
+                same_as_answer_count += 1
+            rows.append(updated)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed processing row_no={row_no} index={row_index} "
+                f"question_key={args.question_key}"
+            ) from exc
 
+    log(f"Saving {len(rows)} rows to {args.output_path}")
     save_jsonl(rows, args.output_path)
+    log(
+        "Done. "
+        f"rows={len(rows)} empty_alternates={empty_alternate_count} "
+        f"same_as_answer_after_normalization={same_as_answer_count}"
+    )
 
 
 if __name__ == "__main__":
@@ -34807,6 +35940,9 @@ def load_model_bundle(
     tokenizer_path: Optional[str] = None,
     model_subfolder: Optional[str] = None,
     tokenizer_subfolder: Optional[str] = None,
+    lora_r: Optional[int] = None,
+    lora_alpha: Optional[int] = None,
+    lora_dropout: Optional[float] = None,
 ):
     model_cfg = OmegaConf.load(model_cfg_path)
     # Offline artifact tools manage their own device placement, so avoid
@@ -34834,6 +35970,14 @@ def load_model_bundle(
     if tokenizer_subfolder not in (None, "", "null", "None"):
         with open_dict(model_cfg):
             model_cfg.tokenizer_args.subfolder = tokenizer_subfolder
+    if model_cfg.get("lora_config", None) is not None:
+        with open_dict(model_cfg):
+            if lora_r is not None:
+                model_cfg.lora_config.r = int(lora_r)
+            if lora_alpha is not None:
+                model_cfg.lora_config.lora_alpha = int(lora_alpha)
+            if lora_dropout is not None:
+                model_cfg.lora_config.lora_dropout = float(lora_dropout)
     model, tokenizer = get_model(model_cfg)
     if hasattr(model, "config") and model.config is not None:
         model.config.use_cache = False
@@ -34907,6 +36051,10 @@ from tools.dual_cf_artifact_utils import (
 )
 
 
+def log(message: str) -> None:
+    print(f"[score_attribution] {message}", flush=True)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Score DualCF attribution artifacts.")
     parser.add_argument("--model-cfg", required=True)
@@ -34937,6 +36085,9 @@ def parse_args():
     parser.add_argument("--device", default=None)
     parser.add_argument("--lora-only", action="store_true")
     parser.add_argument("--alignment", choices=("dot", "cosine"), default="dot")
+    parser.add_argument("--lora-r", type=int, default=None)
+    parser.add_argument("--lora-alpha", type=int, default=None)
+    parser.add_argument("--lora-dropout", type=float, default=None)
     return parser.parse_args()
 
 
@@ -34994,6 +36145,7 @@ def accumulate_retain_gradient(
             if param.grad is not None:
                 retain_grad[name] += param.grad.detach().float().cpu()
         steps += 1
+        retain_iter.set_postfix(steps=steps)
 
     if steps <= 0:
         raise ValueError("Retain gradient accumulation saw zero steps.")
@@ -35002,11 +36154,17 @@ def accumulate_retain_gradient(
     retain_norm = math.sqrt(
         sum(float((grad * grad).sum().item()) for grad in retain_grad.values())
     )
-    return retain_grad, retain_norm
+    return retain_grad, retain_norm, steps
 
 
 def main():
     args = parse_args()
+    log(
+        "Starting with "
+        f"forget_dataset={args.forget_dataset_path}:{args.forget_dataset_name}:{args.forget_split} "
+        f"retain_dataset={args.retain_dataset_path}:{args.retain_dataset_name}:{args.retain_split} "
+        f"output_path={args.output_path}"
+    )
     retain_question_key = args.retain_question_key or args.question_key
     forget_limit = 0
     if int(args.forget_max_steps) > 0:
@@ -35014,18 +36172,29 @@ def main():
     elif int(args.forget_max_examples) > 0:
         forget_limit = int(args.forget_max_examples)
 
+    log(
+        "Loading attribution model "
+        f"cfg={args.model_cfg} model_path={args.model_path or '<cfg-default>'} "
+        f"tokenizer_path={args.tokenizer_path or '<model-path>'} "
+        f"lora_only={args.lora_only} alignment={args.alignment} "
+        f"lora_r={args.lora_r} lora_alpha={args.lora_alpha} lora_dropout={args.lora_dropout}"
+    )
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
         tokenizer_path=args.tokenizer_path,
         model_subfolder=args.model_subfolder,
         tokenizer_subfolder=args.tokenizer_subfolder,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
     )
     device = select_device(args.device)
     move_to_device = getattr(model, "hf_device_map", None) is None
     if move_to_device:
         model = model.to(device)
     model.eval()
+    log(f"Model ready on device={device}")
 
     forget_dataset = build_qa_dataset(
         dataset_path=args.forget_dataset_path,
@@ -35066,6 +36235,13 @@ def main():
             forget_dataset,
             range(min(forget_limit, len(forget_dataset))),
         )
+    log(
+        "Prepared datasets with "
+        f"forget_rows={len(forget_rows)} "
+        f"retain_rows={len(retain_dataset) if hasattr(retain_dataset, '__len__') else 'unknown'} "
+        f"retain_batch_size={max(1, int(args.retain_batch_size))} "
+        f"forget_batch_size=1"
+    )
 
     collator = DataCollatorForSupervisedDataset(tokenizer, index="index")
     retain_loader = DataLoader(
@@ -35084,14 +36260,23 @@ def main():
     selected_params = list(iter_selected_params(model, lora_only=args.lora_only))
     if not selected_params:
         raise ValueError("No trainable parameters matched the requested attribution setup.")
+    log(
+        "Selected trainable params "
+        f"count={len(selected_params)} sample={[name for name, _ in selected_params[:5]]}"
+    )
 
-    retain_grad, retain_norm = accumulate_retain_gradient(
+    log("Accumulating retain gradients")
+    retain_grad, retain_norm, retain_steps = accumulate_retain_gradient(
         model=model,
         dataloader=retain_loader,
         selected_params=selected_params,
         device=device,
         move_to_device=move_to_device,
         max_steps=int(args.retain_max_steps),
+    )
+    log(
+        "Retain gradient accumulation finished "
+        f"steps={retain_steps} retain_norm={retain_norm:.6f}"
     )
 
     grad_by_index: Dict[int, Dict[str, float]] = {}
@@ -35101,50 +36286,70 @@ def main():
         desc="forget_grad",
         dynamic_ncols=True,
     )
+    log("Scoring forget examples against retain gradient reference")
     for batch in forget_iter:
-        model.zero_grad(set_to_none=True)
-        outputs = model(**to_model_inputs(batch, device=device, move_to_device=move_to_device))
-        outputs.loss.backward()
+        row_index = int(batch["index"][0].item())
+        try:
+            model.zero_grad(set_to_none=True)
+            outputs = model(**to_model_inputs(batch, device=device, move_to_device=move_to_device))
+            outputs.loss.backward()
 
-        dot_value = 0.0
-        forget_norm_sq = 0.0
-        for name, param in selected_params:
-            if param.grad is None:
-                continue
-            forget_grad = param.grad.detach().float().cpu()
-            retain_component = retain_grad[name]
-            dot_value += float((forget_grad * retain_component).sum().item())
-            forget_norm_sq += float((forget_grad * forget_grad).sum().item())
+            dot_value = 0.0
+            forget_norm_sq = 0.0
+            for name, param in selected_params:
+                if param.grad is None:
+                    continue
+                forget_grad = param.grad.detach().float().cpu()
+                retain_component = retain_grad[name]
+                dot_value += float((forget_grad * retain_component).sum().item())
+                forget_norm_sq += float((forget_grad * forget_grad).sum().item())
 
-        forget_norm = math.sqrt(forget_norm_sq)
-        cosine_value = dot_value / max(forget_norm * max(retain_norm, 1e-12), 1e-12)
-        score_value = cosine_value if args.alignment == "cosine" else dot_value
-        grad_by_index[int(batch["index"][0].item())] = {
-            "grad_align": dot_value,
-            "grad_align_cosine": cosine_value,
-            "risk_raw": max(0.0, score_value),
-        }
+            forget_norm = math.sqrt(forget_norm_sq)
+            cosine_value = dot_value / max(forget_norm * max(retain_norm, 1e-12), 1e-12)
+            score_value = cosine_value if args.alignment == "cosine" else dot_value
+            grad_by_index[row_index] = {
+                "grad_align": dot_value,
+                "grad_align_cosine": cosine_value,
+                "risk_raw": max(0.0, score_value),
+            }
+        except Exception as exc:
+            raise RuntimeError(f"Failed attribution scoring for forget index={row_index}") from exc
 
     risk_norm = normalize_minmax(
         [grad_by_index[int(row["index"])]["risk_raw"] for row in forget_rows]
     )
 
     output_rows = []
-    for norm_score, row in zip(risk_norm, forget_rows):
+    output_iter = tqdm(
+        zip(risk_norm, forget_rows),
+        total=len(forget_rows),
+        desc="write_scores",
+        dynamic_ncols=True,
+    )
+    for norm_score, row in output_iter:
         row_index = int(row["index"])
-        answer = resolve_answer(
-            row=row,
-            answer_key=args.forget_answer_key,
-            answer_index=args.forget_answer_index,
-        )
-        updated = dict(row)
-        updated["answer"] = answer
-        updated["grad_align"] = grad_by_index[row_index]["grad_align"]
-        updated["grad_align_cosine"] = grad_by_index[row_index]["grad_align_cosine"]
-        updated["attribution_score"] = norm_score
-        output_rows.append(updated)
+        try:
+            answer = resolve_answer(
+                row=row,
+                answer_key=args.forget_answer_key,
+                answer_index=args.forget_answer_index,
+            )
+            updated = dict(row)
+            updated["answer"] = answer
+            updated["grad_align"] = grad_by_index[row_index]["grad_align"]
+            updated["grad_align_cosine"] = grad_by_index[row_index]["grad_align_cosine"]
+            updated["attribution_score"] = norm_score
+            output_rows.append(updated)
+        except Exception as exc:
+            raise RuntimeError(f"Failed writing attribution row index={row_index}") from exc
 
+    attribution_scores = [row["attribution_score"] for row in output_rows]
+    log(f"Saving {len(output_rows)} rows to {args.output_path}")
     save_jsonl(output_rows, args.output_path)
+    log(
+        "Done. "
+        f"attribution_score_range=({min(attribution_scores):.6f}, {max(attribution_scores):.6f})"
+    )
 
 
 if __name__ == "__main__":
@@ -35167,6 +36372,7 @@ from typing import Dict, Optional
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
+from tqdm.auto import tqdm
 
 SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
@@ -35183,6 +36389,10 @@ from tools.dual_cf_artifact_utils import (
     select_device,
 )
 from trainer.utils import compute_nll_per_sample
+
+
+def log(message: str) -> None:
+    print(f"[score_difficulty] {message}", flush=True)
 
 
 def parse_args():
@@ -35227,6 +36437,7 @@ def load_stage_map(raw: Optional[str]) -> Optional[Dict[str, float]]:
 
 def collect_confidence_scores(args, dataset) -> Dict[int, float]:
     if args.confidence_column:
+        log(f"Using precomputed confidence column `{args.confidence_column}`")
         return {
             int(row["index"]): float(row[args.confidence_column])
             for row in dataset
@@ -35234,8 +36445,14 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         }
 
     if not args.model_cfg:
+        log("No model config provided, skipping confidence scoring")
         return {}
 
+    log(
+        "Loading confidence model "
+        f"cfg={args.model_cfg} model_path={args.model_path or '<cfg-default>'} "
+        f"tokenizer_path={args.tokenizer_path or '<model-path>'}"
+    )
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
@@ -35264,6 +36481,7 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         qa_dataset = Subset(
             qa_dataset, range(min(int(args.max_examples), len(qa_dataset)))
         )
+    qa_size = len(qa_dataset) if hasattr(qa_dataset, "__len__") else None
     collator = DataCollatorForSupervisedDataset(tokenizer, index="index")
     dataloader = DataLoader(
         qa_dataset,
@@ -35271,10 +36489,21 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         shuffle=False,
         collate_fn=collator,
     )
+    log(
+        "Scoring confidence with "
+        f"rows={qa_size if qa_size is not None else 'unknown'} "
+        f"batch_size={max(1, int(args.batch_size))} device={device}"
+    )
 
     confidence_scores: Dict[int, float] = {}
     with torch.inference_mode():
-        for batch in dataloader:
+        batch_iter = tqdm(
+            dataloader,
+            total=len(dataloader) if hasattr(dataloader, "__len__") else None,
+            desc="confidence",
+            dynamic_ncols=True,
+        )
+        for batch in batch_iter:
             model_inputs = {
                 "input_ids": batch["input_ids"],
                 "attention_mask": batch["attention_mask"],
@@ -35289,11 +36518,18 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
             )
             for sample_index, loss in zip(batch["index"].tolist(), losses.tolist()):
                 confidence_scores[int(sample_index)] = float(-loss)
+    log(f"Collected confidence scores for {len(confidence_scores)} rows")
     return confidence_scores
 
 
 def main():
     args = parse_args()
+    log(
+        "Starting with "
+        f"dataset_path={args.dataset_path} split={args.split} "
+        f"dataset_name={args.dataset_name} data_files={args.data_files} "
+        f"output_path={args.output_path}"
+    )
     dataset = load_dataset_split(
         path=args.dataset_path,
         split=args.split,
@@ -35302,7 +36538,10 @@ def main():
         max_examples=args.max_examples,
     )
     rows = [dict(row) for row in dataset]
+    log(f"Loaded {len(rows)} rows for difficulty scoring")
     stage_map = load_stage_map(args.stage_map_json)
+    if stage_map is not None:
+        log(f"Loaded stage map with {len(stage_map)} entries from {args.stage_map_json}")
     confidence_scores = collect_confidence_scores(args=args, dataset=dataset)
 
     mrd_raw = []
@@ -35349,6 +36588,17 @@ def main():
             "No active difficulty components. Provide at least one positive weight and source."
         )
 
+    active_components = []
+    if has_mrd and args.w_mrd > 0.0:
+        active_components.append(f"mrd(w={args.w_mrd})")
+    if has_pop and args.w_pop > 0.0:
+        active_components.append(f"popularity(w={args.w_pop})")
+    if confidence_scores and args.w_conf > 0.0:
+        active_components.append(f"confidence(w={args.w_conf})")
+    if stage_raw and args.w_stage > 0.0:
+        active_components.append(f"stage(w={args.w_stage})")
+    log("Active difficulty components: " + ", ".join(active_components))
+
     hardness_mrd = []
     pop_norm = []
     conf_norm = []
@@ -35361,41 +36611,59 @@ def main():
     stage_norm = stage_raw
 
     output_rows = []
-    for idx, row in enumerate(rows):
-        weighted_sum = 0.0
-        weight_total = 0.0
+    row_iter = tqdm(
+        enumerate(rows),
+        total=len(rows),
+        desc="difficulty_rows",
+        dynamic_ncols=True,
+    )
+    for idx, row in row_iter:
+        row_index = row.get("index", "<missing>")
+        try:
+            weighted_sum = 0.0
+            weight_total = 0.0
 
-        row_answer = resolve_answer(
-            row=row,
-            answer_key=args.answer_key,
-            answer_index=args.answer_index,
-        )
-        updated = dict(row)
-        updated["answer"] = row_answer
+            row_answer = resolve_answer(
+                row=row,
+                answer_key=args.answer_key,
+                answer_index=args.answer_index,
+            )
+            updated = dict(row)
+            updated["answer"] = row_answer
 
-        if hardness_mrd and args.w_mrd > 0.0:
-            updated["hardness_mrd"] = hardness_mrd[idx]
-            weighted_sum += float(args.w_mrd) * hardness_mrd[idx]
-            weight_total += float(args.w_mrd)
-        if pop_norm and args.w_pop > 0.0:
-            updated["difficulty_popularity_norm"] = pop_norm[idx]
-            weighted_sum += float(args.w_pop) * pop_norm[idx]
-            weight_total += float(args.w_pop)
-        if conf_norm and args.w_conf > 0.0:
-            updated["difficulty_confidence_norm"] = conf_norm[idx]
-            weighted_sum += float(args.w_conf) * conf_norm[idx]
-            weight_total += float(args.w_conf)
-        if stage_norm and args.w_stage > 0.0:
-            updated["difficulty_stage_prior"] = float(stage_norm[idx])
-            weighted_sum += float(args.w_stage) * float(stage_norm[idx])
-            weight_total += float(args.w_stage)
+            if hardness_mrd and args.w_mrd > 0.0:
+                updated["hardness_mrd"] = hardness_mrd[idx]
+                weighted_sum += float(args.w_mrd) * hardness_mrd[idx]
+                weight_total += float(args.w_mrd)
+            if pop_norm and args.w_pop > 0.0:
+                updated["difficulty_popularity_norm"] = pop_norm[idx]
+                weighted_sum += float(args.w_pop) * pop_norm[idx]
+                weight_total += float(args.w_pop)
+            if conf_norm and args.w_conf > 0.0:
+                updated["difficulty_confidence_norm"] = conf_norm[idx]
+                weighted_sum += float(args.w_conf) * conf_norm[idx]
+                weight_total += float(args.w_conf)
+            if stage_norm and args.w_stage > 0.0:
+                updated["difficulty_stage_prior"] = float(stage_norm[idx])
+                weighted_sum += float(args.w_stage) * float(stage_norm[idx])
+                weight_total += float(args.w_stage)
 
-        if weight_total <= 0.0:
-            raise ValueError("Difficulty score has zero active weight for at least one row.")
-        updated["difficulty_score"] = weighted_sum / weight_total
-        output_rows.append(updated)
+            if weight_total <= 0.0:
+                raise ValueError("Difficulty score has zero active weight for at least one row.")
+            updated["difficulty_score"] = weighted_sum / weight_total
+            output_rows.append(updated)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed processing difficulty row index={row_index} at position={idx}"
+            ) from exc
 
+    difficulty_scores = [row["difficulty_score"] for row in output_rows]
+    log(f"Saving {len(output_rows)} rows to {args.output_path}")
     save_jsonl(output_rows, args.output_path)
+    log(
+        "Done. "
+        f"difficulty_score_range=({min(difficulty_scores):.6f}, {max(difficulty_scores):.6f})"
+    )
 
 
 if __name__ == "__main__":
