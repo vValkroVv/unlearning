@@ -259,18 +259,21 @@ Directory Structure:
 ├── LICENSE
 ├── loku_integration_diff.md
 ├── Makefile
+│   ├── metrics-new/duet-rwku-metric-tables.md
 ├── MU.yml
 ├── npo_integration_diff.md
 ├── npo_sam_integration_diff.md
 ├── npo_sam.md
 ├── package_saves.sh
 ├── plan-test-dual.md
+├── prod-gpu-runs-new-5ep.md
 ├── prod-gpu-runs-new.md
 ├── prod-gpu-runs.md
 ├── prod-runs.md
 ├── r2d_integration_diff.md
 ├── README.md
 ├── results-run.md
+├── run-bert-cos-sim.md
 │   ├── scripts/calc_cos_sim.py
 │   ├── scripts/duet
 │   │   ├── scripts/duet/_splits.sh
@@ -1380,6 +1383,26 @@ Pending:
 
 </content>
 
+<content full_path="run-bert-cos-sim.md">
+## Common setup
+
+```bash
+cd /home/vkropoti/diploma/open-unlearning
+source /data/home/vkropoti/unlearning-venv/bin/activate
+
+export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
+export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
+export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR"
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+```
+
+CUDA_VISIBLE_DEVICES=0 python scripts/calc_cos_sim.py --base-dir . --benchmarks duet,rwku --gpu 0
+</content>
+
 <content full_path="package_saves.sh">
 #!/usr/bin/env bash
 
@@ -1406,19 +1429,29 @@ mkdir -p "${clean_dir}"
 copied_files=0
 skipped_files=0
 
-while IFS= read -r -d '' src_file; do
-    rel_path="${src_file#${src_dir}/}"
-    base_name="$(basename "${src_file}")"
-    dir_name="$(dirname "${src_file}")"
+should_keep_file() {
+    local rel_path="$1"
+    local base_name
+    local dir_name
 
-    keep=0
-    if [[ "${base_name}" == *_SUMMARY.json ]]; then
-        keep=1
-    elif [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
-        keep=1
+    base_name="$(basename "${rel_path}")"
+    dir_name="$(dirname "${rel_path}")"
+
+    if [[ "${base_name}" == *_SUMMARY.json || "${base_name}" == *_EVAL.json ]]; then
+        return 0
     fi
 
-    if [[ "${keep}" -eq 0 ]]; then
+    if [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+while IFS= read -r -d '' src_file; do
+    rel_path="${src_file#${src_dir}/}"
+
+    if ! should_keep_file "${rel_path}"; then
         skipped_files=$((skipped_files + 1))
         continue
     fi
@@ -1435,6 +1468,593 @@ echo "[package_saves] skipped files: ${skipped_files}"
 zip -rq "${zip_path}" "${clean_dir}"
 echo "[package_saves] wrote ${zip_path}"
 echo "[package_saves] done"
+
+</content>
+
+<content full_path="prod-gpu-runs-new-5ep.md">
+# Production GPU Runs (Offline Server, DUET + RWKU)
+
+This runbook keeps only the current production targets:
+
+- datasets: `DUET`, `RWKU`
+- methods: `GA`, `NPO`, `NPO-SAM`, `LoKU`
+- model groups in this file: `Llama`, `Qwen`, `Gemma`
+
+Common rules used everywhere below:
+
+- `PER_DEVICE_TRAIN_BS=16`
+- `GRAD_ACCUM=2`
+- `NUM_EPOCHS=5`
+- `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`
+- `EVAL_BATCH_SIZE=64`
+- `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
+- current production LoRA adapters use only `q_proj`, `k_proj`, `v_proj`, `o_proj`
+- DUET always uses `MERGE_POPULARITY_FORGET=1`
+- RWKU does not use `USE_SFT_BASE`; it loads the base model directly via `HF_BASE_MODEL_PATH`
+
+## Current Local Structure
+
+Expected layout inside `/data/home/vkropoti/unlearning`:
+
+```text
+SwetieePawsss/
+  DUET/
+    data/*.parquet
+  exp_r/
+    data/*.parquet
+  DUET_ft_models/
+    llama-3.1-8b-instruct-tripunlamb-ft/
+    qwen2.5-7b-instruct-tripunlamb-ft/
+    gemma-7b-it-tripunlamb-ft/
+models/
+  BASE/
+    Llama-3.1-8B-Instruct/
+    Qwen2.5-7B-Instruct/
+    gemma-7b-it/
+```
+
+Notes:
+
+- DUET scripts read the dataset from `SwetieePawsss/DUET`.
+- RWKU scripts read the dataset from `SwetieePawsss/exp_r`.
+- DUET finetuned checkpoints should live under `SwetieePawsss/DUET_ft_models`, one subfolder per model.
+- RWKU base models should live under `/data/home/vkropoti/unlearning/models/BASE`.
+- Use direct local paths in `HF_BASE_MODEL_PATH` for RWKU offline runs.
+
+## One-time path wiring
+
+If your code is in `/home/vkropoti/diploma/open-unlearning` but datasets/models are in
+`/data/home/vkropoti/unlearning/SwetieePawsss`, create this symlink once:
+
+```bash
+ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss /home/vkropoti/diploma/open-unlearning/SwetieePawsss
+```
+
+## Common setup
+
+```bash
+cd /home/vkropoti/diploma/open-unlearning
+source /data/home/vkropoti/unlearning-venv/bin/activate
+
+export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
+export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
+export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR"
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+```
+
+## Llama
+
+### 1) GA - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/ga_duet.sh
+```
+
+### 2) NPO - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=2 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_duet.sh
+```
+
+### 3) NPO-SAM - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+### 4) LoKU - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+IMPORTANCE_BATCH_SIZE=16 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/duet_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/loku_duet.sh
+```
+
+### 5) GA - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/ga_rwku.sh
+```
+
+### 6) NPO - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/npo_rwku.sh
+```
+
+### 7) NPO-SAM - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=2 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/npo_sam_rwku.sh
+```
+
+### 8) LoKU - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+BASE_MODEL=Llama-3.1-8B-Instruct \
+MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+IMPORTANCE_BATCH_SIZE=16 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/rwku_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/loku_rwku.sh
+```
+
+## Qwen
+
+### 1) GA - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/ga_duet.sh
+```
+
+### 2) NPO - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=2 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_duet.sh
+```
+
+### 3) NPO-SAM - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+### 4) LoKU - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+IMPORTANCE_BATCH_SIZE=16 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/qwen_duet_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/loku_duet.sh
+```
+
+### 5) GA - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/ga_rwku.sh
+```
+
+### 6) NPO - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/npo_rwku.sh
+```
+
+### 7) NPO-SAM - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=2 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/npo_sam_rwku.sh
+```
+
+### 8) LoKU - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+BASE_MODEL=Qwen2.5-7B-Instruct \
+MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+IMPORTANCE_BATCH_SIZE=16 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/qwen_rwku_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/loku_rwku.sh
+```
+
+## Gemma
+
+### 1) GA - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/ga_duet.sh
+```
+
+### 2) NPO - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_duet.sh
+```
+
+### 3) NPO-SAM - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/npo_sam_duet.sh
+```
+
+### 4) LoKU - DUET (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+USE_SFT_BASE=1 \
+LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
+SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft \
+MERGE_POPULARITY_FORGET=1 \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+IMPORTANCE_BATCH_SIZE=16 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/gemma_duet_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/duet/loku_duet.sh
+```
+
+### 5) GA - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=2 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/ga_rwku.sh
+```
+
+### 6) NPO - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=1 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/npo_rwku.sh
+```
+
+### 7) NPO-SAM - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=5 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/npo_sam_rwku.sh
+```
+
+### 8) LoKU - RWKU (done)
+
+```bash
+CUDA_DEVICE_ORDER=PCI_BUS_ID \
+CUDA_VISIBLE_DEVICES=4 \
+BASE_MODEL=gemma-7b-it \
+MODEL_CONFIG=gemma-7b-it-lora \
+HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+PER_DEVICE_TRAIN_BS=16 \
+GRAD_ACCUM=2 \
+NUM_EPOCHS=5 \
+LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
+IMPORTANCE_BATCH_SIZE=16 \
+IMPORTANCE_MAX_STEPS=0 \
+IMPORTANCE_PATH=/data/home/vkropoti/unlearning/importance_tmp/gemma_rwku_loku_imp.pt \
+DELETE_IMPORTANCE_AFTER_RUN=1 \
+FILA_BASE_PATH=/data/home/vkropoti/unlearning/fila_base_tmp/{task_name} \
+DELETE_FILA_BASE_AFTER_EVAL=1 \
+EVAL_BATCH_SIZE=64 \
+DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
+bash scripts/rwku/loku_rwku.sh
+```
 
 </content>
 
@@ -3962,11 +4582,11 @@ export HF_DATASETS_OFFLINE=1
 
 ## Llama
 
-### 1) GA - DUET
+### 1) GA - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -3983,11 +4603,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
-### 2) NPO - DUET
+### 2) NPO - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -4004,11 +4624,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
-### 3) NPO-SAM - DUET
+### 3) NPO-SAM - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -4025,11 +4645,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
-### 4) LoKU - DUET
+### 4) LoKU - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
@@ -4052,14 +4672,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU
+### 5) GA - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4069,14 +4690,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/ga_rwku.sh
 ```
 
-### 6) NPO - RWKU
+### 6) NPO - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4086,14 +4708,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_rwku.sh
 ```
 
-### 7) NPO-SAM - RWKU
+### 7) NPO-SAM - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4103,7 +4726,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_sam_rwku.sh
 ```
 
-### 8) LoKU - RWKU
+### 8) LoKU - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
@@ -4111,6 +4734,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Llama-3.1-8B-Instruct \
 MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4128,11 +4752,11 @@ bash scripts/rwku/loku_rwku.sh
 
 ## Qwen
 
-### 1) GA - DUET
+### 1) GA - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -4149,11 +4773,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
-### 2) NPO - DUET
+### 2) NPO - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -4170,11 +4794,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
-### 3) NPO-SAM - DUET
+### 3) NPO-SAM - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -4191,11 +4815,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
-### 4) LoKU - DUET
+### 4) LoKU - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
@@ -4218,14 +4842,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU
+### 5) GA - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4235,14 +4860,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/ga_rwku.sh
 ```
 
-### 6) NPO - RWKU
+### 6) NPO - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4252,14 +4878,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_rwku.sh
 ```
 
-### 7) NPO-SAM - RWKU
+### 7) NPO-SAM - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4269,7 +4896,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_sam_rwku.sh
 ```
 
-### 8) LoKU - RWKU
+### 8) LoKU - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
@@ -4277,6 +4904,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=Qwen2.5-7B-Instruct \
 MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4294,11 +4922,11 @@ bash scripts/rwku/loku_rwku.sh
 
 ## Gemma
 
-### 1) GA - DUET
+### 1) GA - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -4315,11 +4943,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/ga_duet.sh
 ```
 
-### 2) NPO - DUET
+### 2) NPO - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -4336,11 +4964,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_duet.sh
 ```
 
-### 3) NPO-SAM - DUET
+### 3) NPO-SAM - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -4357,11 +4985,11 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/npo_sam_duet.sh
 ```
 
-### 4) LoKU - DUET
+### 4) LoKU - DUET (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
@@ -4384,14 +5012,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/duet/loku_duet.sh
 ```
 
-### 5) GA - RWKU
+### 5) GA - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=2 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4401,7 +5030,7 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/ga_rwku.sh
 ```
 
-### 6) NPO - RWKU
+### 6) NPO - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
@@ -4409,6 +5038,7 @@ CUDA_VISIBLE_DEVICES=1 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4418,14 +5048,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_rwku.sh
 ```
 
-### 7) NPO-SAM - RWKU
+### 7) NPO-SAM - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=5 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -4435,14 +5066,15 @@ DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
 bash scripts/rwku/npo_sam_rwku.sh
 ```
 
-### 8) LoKU - RWKU
+### 8) LoKU - RWKU (done)
 
 ```bash
 CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=1 \
+CUDA_VISIBLE_DEVICES=4 \
 BASE_MODEL=gemma-7b-it \
 MODEL_CONFIG=gemma-7b-it-lora \
 HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
+TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
 PER_DEVICE_TRAIN_BS=16 \
 GRAD_ACCUM=2 \
 NUM_EPOCHS=2 \
@@ -13938,6 +14570,75 @@ simple_evaluate_args:
 
 </content>
 
+<content full_path="metrics-new/duet-rwku-metric-tables.md">
+# DUET and RWKU Metric Tables
+
+Numbers come from `DUET_SUMMARY.json` under `metrics-new/saves-clean/unlearn/.../evals/`.
+
+Color key: <span style="color:#c62828"><strong>F</strong></span> = `forget_qa_rouge`, <span style="color:#1565c0"><strong>H</strong></span> = `holdout_qa_rouge`.
+
+Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma1p0`; `npo_sam` uses `beta0p1_alpha1p0_gamma1p0_rho0p01_adF`; DUET uses merged `city_forget_5`.
+
+## DUET
+
+### Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.9368</span><br><span style="color:#1565c0">H 0.9635</span> | <span style="color:#c62828">F 0.9453</span><br><span style="color:#1565c0">H 0.9567</span> | <span style="color:#c62828">F 0.8293</span><br><span style="color:#1565c0">H 0.9363</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.9363</span><br><span style="color:#1565c0">H 0.9608</span> | <span style="color:#c62828">F 0.9372</span><br><span style="color:#1565c0">H 0.9690</span> | <span style="color:#c62828">F 0.9136</span><br><span style="color:#1565c0">H 0.9650</span> | <span style="color:#c62828">F 0.8675</span><br><span style="color:#1565c0">H 0.9843</span> | <span style="color:#c62828">F 0.8339</span><br><span style="color:#1565c0">H 0.9953</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.9407</span><br><span style="color:#1565c0">H 0.9625</span> | <span style="color:#c62828">F 0.9409</span><br><span style="color:#1565c0">H 0.9620</span> | <span style="color:#c62828">F 0.9242</span><br><span style="color:#1565c0">H 0.9623</span> | <span style="color:#c62828">F 0.8404</span><br><span style="color:#1565c0">H 0.9775</span> | <span style="color:#c62828">F 0.6842</span><br><span style="color:#1565c0">H 0.9698</span> |
+| LoKU | <span style="color:#c62828">F 0.8994</span><br><span style="color:#1565c0">H 0.9657</span> | <span style="color:#c62828">F 0.2319</span><br><span style="color:#1565c0">H 0.9393</span> | <span style="color:#c62828">F 0.2736</span><br><span style="color:#1565c0">H 0.9440</span> | <span style="color:#c62828">F 0.0621</span><br><span style="color:#1565c0">H 0.9440</span> | <span style="color:#c62828">F 0.0809</span><br><span style="color:#1565c0">H 0.9490</span> |
+
+### Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8846</span><br><span style="color:#1565c0">H 0.8348</span> | <span style="color:#c62828">F 0.8690</span><br><span style="color:#1565c0">H 0.8332</span> | <span style="color:#c62828">F 0.8124</span><br><span style="color:#1565c0">H 0.8202</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.8811</span><br><span style="color:#1565c0">H 0.8308</span> | <span style="color:#c62828">F 0.8729</span><br><span style="color:#1565c0">H 0.8365</span> | <span style="color:#c62828">F 0.8563</span><br><span style="color:#1565c0">H 0.8315</span> | <span style="color:#c62828">F 0.8003</span><br><span style="color:#1565c0">H 0.8780</span> | <span style="color:#c62828">F 0.6959</span><br><span style="color:#1565c0">H 0.9102</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8852</span><br><span style="color:#1565c0">H 0.8305</span> | <span style="color:#c62828">F 0.8627</span><br><span style="color:#1565c0">H 0.8425</span> | <span style="color:#c62828">F 0.8387</span><br><span style="color:#1565c0">H 0.8385</span> | <span style="color:#c62828">F 0.5907</span><br><span style="color:#1565c0">H 0.8619</span> | <span style="color:#c62828">F 0.2107</span><br><span style="color:#1565c0">H 0.7688</span> |
+| LoKU | <span style="color:#c62828">F 0.8674</span><br><span style="color:#1565c0">H 0.8507</span> | <span style="color:#c62828">F 0.7829</span><br><span style="color:#1565c0">H 0.8595</span> | <span style="color:#c62828">F 0.7163</span><br><span style="color:#1565c0">H 0.8820</span> | <span style="color:#c62828">F 0.1855</span><br><span style="color:#1565c0">H 0.8953</span> | <span style="color:#c62828">F 0.0738</span><br><span style="color:#1565c0">H 0.9122</span> |
+
+### gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8795</span><br><span style="color:#1565c0">H 0.9043</span> | <span style="color:#c62828">F 0.7861</span><br><span style="color:#1565c0">H 0.8173</span> | <span style="color:#c62828">F 0.0624</span><br><span style="color:#1565c0">H 0.0095</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.8840</span><br><span style="color:#1565c0">H 0.9147</span> | <span style="color:#c62828">F 0.8747</span><br><span style="color:#1565c0">H 0.9292</span> | <span style="color:#c62828">F 0.8628</span><br><span style="color:#1565c0">H 0.9204</span> | <span style="color:#c62828">F 0.8071</span><br><span style="color:#1565c0">H 0.8520</span> | <span style="color:#c62828">F 0.7018</span><br><span style="color:#1565c0">H 0.9081</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8769</span><br><span style="color:#1565c0">H 0.9087</span> | <span style="color:#c62828">F 0.8847</span><br><span style="color:#1565c0">H 0.9338</span> | <span style="color:#c62828">F 0.8599</span><br><span style="color:#1565c0">H 0.9313</span> | <span style="color:#c62828">F 0.6956</span><br><span style="color:#1565c0">H 0.8373</span> | <span style="color:#c62828">F 0.5389</span><br><span style="color:#1565c0">H 0.7770</span> |
+| LoKU | <span style="color:#c62828">F 0.8217</span><br><span style="color:#1565c0">H 0.9343</span> | <span style="color:#c62828">F 0.1323</span><br><span style="color:#1565c0">H 0.8758</span> | <span style="color:#c62828">F 0.1031</span><br><span style="color:#1565c0">H 0.9165</span> | <span style="color:#c62828">F 0.1234</span><br><span style="color:#1565c0">H 0.9112</span> | <span style="color:#c62828">F 0.0805</span><br><span style="color:#1565c0">H 0.9017</span> |
+
+## RWKU
+
+### Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8315</span><br><span style="color:#1565c0">H 0.8777</span> | <span style="color:#c62828">F 0.0080</span><br><span style="color:#1565c0">H 0.0070</span> | <span style="color:#c62828">F 0.0008</span><br><span style="color:#1565c0">H 0.0001</span> | <span style="color:#c62828">F 0.0030</span><br><span style="color:#1565c0">H 0.0009</span> | <span style="color:#c62828">F 0.0022</span><br><span style="color:#1565c0">H 0.0009</span> |
+| NPO | <span style="color:#c62828">F 0.7580</span><br><span style="color:#1565c0">H 0.8314</span> | <span style="color:#c62828">F 0.7556</span><br><span style="color:#1565c0">H 0.8373</span> | <span style="color:#c62828">F 0.7512</span><br><span style="color:#1565c0">H 0.8487</span> | <span style="color:#c62828">F 0.6838</span><br><span style="color:#1565c0">H 0.8940</span> | <span style="color:#c62828">F 0.6318</span><br><span style="color:#1565c0">H 0.9086</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.7850</span><br><span style="color:#1565c0">H 0.8545</span> | <span style="color:#c62828">F 0.8331</span><br><span style="color:#1565c0">H 0.8915</span> | <span style="color:#c62828">F 0.8750</span><br><span style="color:#1565c0">H 0.8849</span> | <span style="color:#c62828">F 0.6815</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.5286</span><br><span style="color:#1565c0">H 0.8851</span> |
+| LoKU | <span style="color:#c62828">F 0.6633</span><br><span style="color:#1565c0">H 0.8084</span> | <span style="color:#c62828">F 0.5064</span><br><span style="color:#1565c0">H 0.8548</span> | <span style="color:#c62828">F 0.1185</span><br><span style="color:#1565c0">H 0.7976</span> | <span style="color:#c62828">F 0.0689</span><br><span style="color:#1565c0">H 0.8995</span> | <span style="color:#c62828">F 0.0389</span><br><span style="color:#1565c0">H 0.8806</span> |
+
+### Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.4270</span><br><span style="color:#1565c0">H 0.4795</span> | <span style="color:#c62828">F 0.4578</span><br><span style="color:#1565c0">H 0.4956</span> | <span style="color:#c62828">F 0.0119</span><br><span style="color:#1565c0">H 0.0061</span> | <span style="color:#c62828">F 0.0022</span><br><span style="color:#1565c0">H 0.0003</span> | <span style="color:#c62828">F 0.0008</span><br><span style="color:#1565c0">H 0.0001</span> |
+| NPO | <span style="color:#c62828">F 0.4266</span><br><span style="color:#1565c0">H 0.4806</span> | <span style="color:#c62828">F 0.4162</span><br><span style="color:#1565c0">H 0.4823</span> | <span style="color:#c62828">F 0.4105</span><br><span style="color:#1565c0">H 0.4920</span> | <span style="color:#c62828">F 0.3739</span><br><span style="color:#1565c0">H 0.5639</span> | <span style="color:#c62828">F 0.3458</span><br><span style="color:#1565c0">H 0.6479</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.4266</span><br><span style="color:#1565c0">H 0.4778</span> | <span style="color:#c62828">F 0.4109</span><br><span style="color:#1565c0">H 0.4767</span> | <span style="color:#c62828">F 0.4006</span><br><span style="color:#1565c0">H 0.4781</span> | <span style="color:#c62828">F 0.3797</span><br><span style="color:#1565c0">H 0.5384</span> | <span style="color:#c62828">F 0.2977</span><br><span style="color:#1565c0">H 0.5962</span> |
+| LoKU | <span style="color:#c62828">F 0.4611</span><br><span style="color:#1565c0">H 0.5337</span> | <span style="color:#c62828">F 0.4606</span><br><span style="color:#1565c0">H 0.5914</span> | <span style="color:#c62828">F 0.4274</span><br><span style="color:#1565c0">H 0.6426</span> | <span style="color:#c62828">F 0.3398</span><br><span style="color:#1565c0">H 0.7433</span> | <span style="color:#c62828">F 0.0302</span><br><span style="color:#1565c0">H 0.7528</span> |
+
+### gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.4805</span><br><span style="color:#1565c0">H 0.5334</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.4930</span><br><span style="color:#1565c0">H 0.5278</span> | <span style="color:#c62828">F 0.4825</span><br><span style="color:#1565c0">H 0.5339</span> | <span style="color:#c62828">F 0.4744</span><br><span style="color:#1565c0">H 0.5442</span> | <span style="color:#c62828">F 0.4159</span><br><span style="color:#1565c0">H 0.6159</span> | <span style="color:#c62828">F 0.2992</span><br><span style="color:#1565c0">H 0.6345</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.4973</span><br><span style="color:#1565c0">H 0.5378</span> | <span style="color:#c62828">F 0.4134</span><br><span style="color:#1565c0">H 0.5066</span> | <span style="color:#c62828">F 0.3406</span><br><span style="color:#1565c0">H 0.4810</span> | <span style="color:#c62828">F 0.3134</span><br><span style="color:#1565c0">H 0.5718</span> | <span style="color:#c62828">F 0.2712</span><br><span style="color:#1565c0">H 0.6441</span> |
+| LoKU | <span style="color:#c62828">F 0.3149</span><br><span style="color:#1565c0">H 0.4535</span> | <span style="color:#c62828">F 0.3614</span><br><span style="color:#1565c0">H 0.7042</span> | <span style="color:#c62828">F 0.2127</span><br><span style="color:#1565c0">H 0.7381</span> | <span style="color:#c62828">F 0.0519</span><br><span style="color:#1565c0">H 0.8286</span> | <span style="color:#c62828">F 0.0200</span><br><span style="color:#1565c0">H 0.8371</span> |
+
+</content>
+
 <content full_path="configs/train.yaml">
 defaults:
   - _self_
@@ -19823,67 +20524,48 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Iterable
+from typing import Dict, Iterable
+
+from sentence_transformers import SentenceTransformer
 
 
-def _load_sbert(device: str):
-    try:
-        from sentence_transformers import SentenceTransformer
-    except Exception:
-        return None
+def _load_sbert(device: str) -> SentenceTransformer:
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
 
 
-def _tokenize(text: str) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    for token in text.lower().split():
-        counts[token] = counts.get(token, 0) + 1
-    return counts
-
-
-def _cosine_from_counts(a: Dict[str, int], b: Dict[str, int]) -> float:
-    if not a or not b:
-        return 0.0
-    dot = 0.0
-    for k, v in a.items():
-        dot += v * b.get(k, 0)
-    norm_a = math.sqrt(sum(v * v for v in a.values()))
-    norm_b = math.sqrt(sum(v * v for v in b.values()))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return float(dot / (norm_a * norm_b))
-
-
-def _compute_metric(metric_block: Dict[str, object], model) -> Dict[str, object]:
+def _compute_metric(metric_block: Dict[str, object], model: SentenceTransformer) -> Dict[str, object]:
     value_by_index = metric_block.get("value_by_index", {})
-    out_by_index: Dict[str, object] = {}
-    scores = []
+    texts_gt, texts_gen, valid_indices = [], [], []
     for idx, item in value_by_index.items():
         if not isinstance(item, dict):
             continue
-        gt = item.get("ground_truth", "")
-        gen = item.get("generation", "")
-        if gt is None or gen is None:
+        gt = item.get("ground_truth")
+        gen = item.get("generation")
+        if not gt or not gen:
+            print(f"[cos_sim] WARNING: skipping index {idx} — missing ground_truth={gt!r} generation={gen!r}")
             continue
-        if model is not None:
-            emb = model.encode([str(gt), str(gen)], normalize_embeddings=True)
-            sim = float(emb[0] @ emb[1])
-        else:
-            sim = _cosine_from_counts(_tokenize(str(gt)), _tokenize(str(gen)))
-        out_by_index[str(idx)] = {
-            "cos_sim": sim,
-            "ground_truth": gt,
-            "generation": gen,
-        }
-        scores.append(sim)
-    agg = float(sum(scores) / len(scores)) if scores else 0.0
-    return {"agg_value": agg, "value_by_index": out_by_index}
+        texts_gt.append(str(gt))
+        texts_gen.append(str(gen))
+        valid_indices.append(idx)
+
+    if not valid_indices:
+        return {"agg_value": 0.0, "value_by_index": {}}
+
+    embs_gt = model.encode(texts_gt, normalize_embeddings=True)
+    embs_gen = model.encode(texts_gen, normalize_embeddings=True)
+    sims = (embs_gt * embs_gen).sum(axis=1).tolist()
+
+    out_by_index: Dict[str, object] = {}
+    for idx, gt, gen, sim in zip(valid_indices, texts_gt, texts_gen, sims):
+        out_by_index[str(idx)] = {"cos_sim": float(sim), "ground_truth": gt, "generation": gen}
+
+    agg = sum(sims) / len(sims)
+    return {"agg_value": float(agg), "value_by_index": out_by_index}
 
 
-def process_file(path: Path, model) -> bool:
+def process_file(path: Path, model: SentenceTransformer) -> bool:
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -19894,9 +20576,9 @@ def process_file(path: Path, model) -> bool:
     for key, block in data.items():
         if not isinstance(block, dict) or "value_by_index" not in block:
             continue
-        if "ground_truth" not in next(iter(block.get("value_by_index", {}).values()), {}):
+        if not any("ground_truth" in item for item in block["value_by_index"].values() if isinstance(item, dict)):
             continue
-        out_key = key.replace("_rouge", "_cos_sim")
+        out_key = key.replace("_rouge", "_cos_sim", 1)
         out[out_key] = _compute_metric(block, model)
         updated = True
 
@@ -19929,8 +20611,6 @@ def main() -> None:
     device = "cuda" if args.gpu not in (None, "", "-1") else "cpu"
     print(f"[cos_sim] Loading SBERT on {device}")
     model = _load_sbert(device=device)
-    if model is None:
-        print("[cos_sim] WARNING: sentence-transformers not installed; falling back to token cosine.")
 
     try:
         from tqdm import tqdm  # type: ignore
@@ -19943,20 +20623,27 @@ def main() -> None:
             return items
 
     for bench in benches:
-        root = base_dir / "saves" / "unlearn" / bench
-        if not root.exists():
-            print(f"[cos_sim] Skip missing benchmark: {bench}")
+        # Process unlearn runs
+        unlearn_root = base_dir / "saves" / "unlearn" / bench
+        paths = []
+        if unlearn_root.exists():
+            paths.extend([p for p in unlearn_root.glob("**/evals/DUET_EVAL.json") if "pretrained" not in p.parts])
+        
+        # Process base (orig) runs
+        base_eval_root = base_dir / "saves" / "evals" / f"{bench}_base"
+        if base_eval_root.exists():
+            paths.extend(list(base_eval_root.glob("**/DUET_EVAL.json")))
+
+        if not paths:
+            print(f"[cos_sim] No eval files found for benchmark: {bench}")
             continue
-        paths = [p for p in root.glob("**/evals/DUET_EVAL.json") if "pretrained" not in p.parts]
+
         for path in _iter(paths, f"{bench}: cos_sim"):
-            run_dir = path.parent.parent
-            algo = run_dir.parent.name
-            run_name = run_dir.name
-            print(f"[cos_sim] {bench} | {algo} | {run_name}")
+            print(f"[cos_sim] Processing {path}")
             if process_file(path, model):
                 total += 1
             else:
-                print(f"[cos_sim] Skipped (no value_by_index): {path}")
+                print(f"[cos_sim] Skipped (no value_by_index or ground_truth): {path}")
     print(f"Written COS_SIM_EVAL.json for {total} eval folders.")
 
 
@@ -20247,7 +20934,7 @@ raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_betas="${BETAS:-0.1 0.015}"
+raw_betas="${BETAS:-0.1}"
 raw_betas="${raw_betas//,/ }"
 raw_betas="${raw_betas//\"/}"
 raw_betas="${raw_betas//\'/}"
@@ -20259,7 +20946,7 @@ raw_alphas="${raw_alphas//\"/}"
 raw_alphas="${raw_alphas//\'/}"
 read -r -a alphas <<< "${raw_alphas}"
 
-raw_gammas="${GAMMAS:-1.0 2.25}"
+raw_gammas="${GAMMAS:-1.0}"
 raw_gammas="${raw_gammas//,/ }"
 raw_gammas="${raw_gammas//\"/}"
 raw_gammas="${raw_gammas//\'/}"
@@ -27699,6 +28386,7 @@ echo "Master Port: $MASTER_PORT"
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${base_model_path}}"
 
 echo "[rwku][GA] Using Hugging Face base checkpoint ${base_model_path}"
 
@@ -27757,6 +28445,7 @@ for lr in "${lrs[@]}"; do
                         forget_split=${forget_split} \
                         retain_split=${retain_split} \
                         model.model_args.pretrained_model_name_or_path=${base_model_path} \
+                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                         model.model_args.device_map="auto" \
                         model.model_args.low_cpu_mem_usage=true \
                         model.lora_config.r=${lora_r} \
@@ -27783,6 +28472,7 @@ for lr in "${lrs[@]}"; do
                     task_name=${task_name} \
                     model.model_args.pretrained_model_name_or_path=${run_dir} \
                     model.model_args.base_model_name_or_path=${base_model_path} \
+                    model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                     model.model_args.device_map="auto" \
                     model.model_args.low_cpu_mem_usage=true \
                     model.lora_config.r=${lora_r} \
@@ -28663,6 +29353,7 @@ echo "Master Port: $MASTER_PORT"
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${base_model_path}}"
 
 echo "[rwku][NPO] Using Hugging Face base checkpoint ${base_model_path}"
 
@@ -28745,6 +29436,7 @@ for lr in "${lrs[@]}"; do
                                     forget_split=${forget_split} \
                                     retain_split=${retain_split} \
                                     model.model_args.pretrained_model_name_or_path=${base_model_path} \
+                                    model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                     model.model_args.device_map="auto" \
                                     model.model_args.low_cpu_mem_usage=true \
                                     model.lora_config.r=${lora_r} \
@@ -28775,6 +29467,7 @@ for lr in "${lrs[@]}"; do
                                 task_name=${task_name} \
                                 model.model_args.pretrained_model_name_or_path=${run_dir} \
                                 model.model_args.base_model_name_or_path=${base_model_path} \
+                                model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                 model.model_args.device_map="auto" \
                                 model.model_args.low_cpu_mem_usage=true \
                                 model.lora_config.r=${lora_r} \

@@ -4,67 +4,48 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Iterable
+from typing import Dict, Iterable
+
+from sentence_transformers import SentenceTransformer
 
 
-def _load_sbert(device: str):
-    try:
-        from sentence_transformers import SentenceTransformer
-    except Exception:
-        return None
+def _load_sbert(device: str) -> SentenceTransformer:
     return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
 
 
-def _tokenize(text: str) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    for token in text.lower().split():
-        counts[token] = counts.get(token, 0) + 1
-    return counts
-
-
-def _cosine_from_counts(a: Dict[str, int], b: Dict[str, int]) -> float:
-    if not a or not b:
-        return 0.0
-    dot = 0.0
-    for k, v in a.items():
-        dot += v * b.get(k, 0)
-    norm_a = math.sqrt(sum(v * v for v in a.values()))
-    norm_b = math.sqrt(sum(v * v for v in b.values()))
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return float(dot / (norm_a * norm_b))
-
-
-def _compute_metric(metric_block: Dict[str, object], model) -> Dict[str, object]:
+def _compute_metric(metric_block: Dict[str, object], model: SentenceTransformer) -> Dict[str, object]:
     value_by_index = metric_block.get("value_by_index", {})
-    out_by_index: Dict[str, object] = {}
-    scores = []
+    texts_gt, texts_gen, valid_indices = [], [], []
     for idx, item in value_by_index.items():
         if not isinstance(item, dict):
             continue
-        gt = item.get("ground_truth", "")
-        gen = item.get("generation", "")
-        if gt is None or gen is None:
+        gt = item.get("ground_truth")
+        gen = item.get("generation")
+        if not gt or not gen:
+            print(f"[cos_sim] WARNING: skipping index {idx} — missing ground_truth={gt!r} generation={gen!r}")
             continue
-        if model is not None:
-            emb = model.encode([str(gt), str(gen)], normalize_embeddings=True)
-            sim = float(emb[0] @ emb[1])
-        else:
-            sim = _cosine_from_counts(_tokenize(str(gt)), _tokenize(str(gen)))
-        out_by_index[str(idx)] = {
-            "cos_sim": sim,
-            "ground_truth": gt,
-            "generation": gen,
-        }
-        scores.append(sim)
-    agg = float(sum(scores) / len(scores)) if scores else 0.0
-    return {"agg_value": agg, "value_by_index": out_by_index}
+        texts_gt.append(str(gt))
+        texts_gen.append(str(gen))
+        valid_indices.append(idx)
+
+    if not valid_indices:
+        return {"agg_value": 0.0, "value_by_index": {}}
+
+    embs_gt = model.encode(texts_gt, normalize_embeddings=True)
+    embs_gen = model.encode(texts_gen, normalize_embeddings=True)
+    sims = (embs_gt * embs_gen).sum(axis=1).tolist()
+
+    out_by_index: Dict[str, object] = {}
+    for idx, gt, gen, sim in zip(valid_indices, texts_gt, texts_gen, sims):
+        out_by_index[str(idx)] = {"cos_sim": float(sim), "ground_truth": gt, "generation": gen}
+
+    agg = sum(sims) / len(sims)
+    return {"agg_value": float(agg), "value_by_index": out_by_index}
 
 
-def process_file(path: Path, model) -> bool:
+def process_file(path: Path, model: SentenceTransformer) -> bool:
     try:
         data = json.loads(path.read_text())
     except Exception:
@@ -75,9 +56,9 @@ def process_file(path: Path, model) -> bool:
     for key, block in data.items():
         if not isinstance(block, dict) or "value_by_index" not in block:
             continue
-        if "ground_truth" not in next(iter(block.get("value_by_index", {}).values()), {}):
+        if not any("ground_truth" in item for item in block["value_by_index"].values() if isinstance(item, dict)):
             continue
-        out_key = key.replace("_rouge", "_cos_sim")
+        out_key = key.replace("_rouge", "_cos_sim", 1)
         out[out_key] = _compute_metric(block, model)
         updated = True
 
@@ -110,8 +91,6 @@ def main() -> None:
     device = "cuda" if args.gpu not in (None, "", "-1") else "cpu"
     print(f"[cos_sim] Loading SBERT on {device}")
     model = _load_sbert(device=device)
-    if model is None:
-        print("[cos_sim] WARNING: sentence-transformers not installed; falling back to token cosine.")
 
     try:
         from tqdm import tqdm  # type: ignore
@@ -124,20 +103,27 @@ def main() -> None:
             return items
 
     for bench in benches:
-        root = base_dir / "saves" / "unlearn" / bench
-        if not root.exists():
-            print(f"[cos_sim] Skip missing benchmark: {bench}")
+        # Process unlearn runs
+        unlearn_root = base_dir / "saves" / "unlearn" / bench
+        paths = []
+        if unlearn_root.exists():
+            paths.extend([p for p in unlearn_root.glob("**/evals/DUET_EVAL.json") if "pretrained" not in p.parts])
+        
+        # Process base (orig) runs
+        base_eval_root = base_dir / "saves" / "evals" / f"{bench}_base"
+        if base_eval_root.exists():
+            paths.extend(list(base_eval_root.glob("**/DUET_EVAL.json")))
+
+        if not paths:
+            print(f"[cos_sim] No eval files found for benchmark: {bench}")
             continue
-        paths = [p for p in root.glob("**/evals/DUET_EVAL.json") if "pretrained" not in p.parts]
+
         for path in _iter(paths, f"{bench}: cos_sim"):
-            run_dir = path.parent.parent
-            algo = run_dir.parent.name
-            run_name = run_dir.name
-            print(f"[cos_sim] {bench} | {algo} | {run_name}")
+            print(f"[cos_sim] Processing {path}")
             if process_file(path, model):
                 total += 1
             else:
-                print(f"[cos_sim] Skipped (no value_by_index): {path}")
+                print(f"[cos_sim] Skipped (no value_by_index or ground_truth): {path}")
     print(f"Written COS_SIM_EVAL.json for {total} eval folders.")
 
 
