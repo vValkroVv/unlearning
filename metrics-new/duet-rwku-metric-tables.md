@@ -1,14 +1,22 @@
 # DUET and RWKU Metric Tables
 
-Numbers come from `DUET_SUMMARY.json` under `metrics-new/saves-clean/unlearn/.../evals/`.
+Sources:
+- `2ep`: `metrics-new/ep2/saves-clean-2ep-cos-sim/unlearn`
+- `5ep`: `metrics-new/ep5/saves-clean-5ep-cos-sim/unlearn`
 
-Color key: <span style="color:#c62828"><strong>F</strong></span> = `forget_qa_rouge`, <span style="color:#1565c0"><strong>H</strong></span> = `holdout_qa_rouge`.
+Metric files:
+- `ROUGE`: `DUET_SUMMARY.json` with `forget_qa_rouge` and `holdout_qa_rouge`
+- `COS_SIM`: `COS_SIM_EVAL.json` with `forget_qa_cos_sim.agg_value` and `holdout_qa_cos_sim.agg_value`
+
+Color key: <span style="color:#c62828"><strong>F</strong></span> = forget metric, <span style="color:#1565c0"><strong>H</strong></span> = holdout metric.
 
 Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma1p0`; `npo_sam` uses `beta0p1_alpha1p0_gamma1p0_rho0p01_adF`; DUET uses merged `city_forget_5`.
 
-## DUET
+## ROUGE
 
-### Llama-3.1-8B-Instruct
+### 2 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -17,7 +25,7 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO-SAM | <span style="color:#c62828">F 0.9407</span><br><span style="color:#1565c0">H 0.9625</span> | <span style="color:#c62828">F 0.9409</span><br><span style="color:#1565c0">H 0.9620</span> | <span style="color:#c62828">F 0.9242</span><br><span style="color:#1565c0">H 0.9623</span> | <span style="color:#c62828">F 0.8404</span><br><span style="color:#1565c0">H 0.9775</span> | <span style="color:#c62828">F 0.6842</span><br><span style="color:#1565c0">H 0.9698</span> |
 | LoKU | <span style="color:#c62828">F 0.8994</span><br><span style="color:#1565c0">H 0.9657</span> | <span style="color:#c62828">F 0.2319</span><br><span style="color:#1565c0">H 0.9393</span> | <span style="color:#c62828">F 0.2736</span><br><span style="color:#1565c0">H 0.9440</span> | <span style="color:#c62828">F 0.0621</span><br><span style="color:#1565c0">H 0.9440</span> | <span style="color:#c62828">F 0.0809</span><br><span style="color:#1565c0">H 0.9490</span> |
 
-### Qwen2.5-7B-Instruct
+#### DUET / Qwen2.5-7B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -26,7 +34,7 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO-SAM | <span style="color:#c62828">F 0.8852</span><br><span style="color:#1565c0">H 0.8305</span> | <span style="color:#c62828">F 0.8627</span><br><span style="color:#1565c0">H 0.8425</span> | <span style="color:#c62828">F 0.8387</span><br><span style="color:#1565c0">H 0.8385</span> | <span style="color:#c62828">F 0.5907</span><br><span style="color:#1565c0">H 0.8619</span> | <span style="color:#c62828">F 0.2107</span><br><span style="color:#1565c0">H 0.7688</span> |
 | LoKU | <span style="color:#c62828">F 0.8674</span><br><span style="color:#1565c0">H 0.8507</span> | <span style="color:#c62828">F 0.7829</span><br><span style="color:#1565c0">H 0.8595</span> | <span style="color:#c62828">F 0.7163</span><br><span style="color:#1565c0">H 0.8820</span> | <span style="color:#c62828">F 0.1855</span><br><span style="color:#1565c0">H 0.8953</span> | <span style="color:#c62828">F 0.0738</span><br><span style="color:#1565c0">H 0.9122</span> |
 
-### gemma-7b-it
+#### DUET / gemma-7b-it
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -35,9 +43,7 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO-SAM | <span style="color:#c62828">F 0.8769</span><br><span style="color:#1565c0">H 0.9087</span> | <span style="color:#c62828">F 0.8847</span><br><span style="color:#1565c0">H 0.9338</span> | <span style="color:#c62828">F 0.8599</span><br><span style="color:#1565c0">H 0.9313</span> | <span style="color:#c62828">F 0.6956</span><br><span style="color:#1565c0">H 0.8373</span> | <span style="color:#c62828">F 0.5389</span><br><span style="color:#1565c0">H 0.7770</span> |
 | LoKU | <span style="color:#c62828">F 0.8217</span><br><span style="color:#1565c0">H 0.9343</span> | <span style="color:#c62828">F 0.1323</span><br><span style="color:#1565c0">H 0.8758</span> | <span style="color:#c62828">F 0.1031</span><br><span style="color:#1565c0">H 0.9165</span> | <span style="color:#c62828">F 0.1234</span><br><span style="color:#1565c0">H 0.9112</span> | <span style="color:#c62828">F 0.0805</span><br><span style="color:#1565c0">H 0.9017</span> |
 
-## RWKU
-
-### Llama-3.1-8B-Instruct
+#### RWKU / Llama-3.1-8B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -46,7 +52,7 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO-SAM | <span style="color:#c62828">F 0.7850</span><br><span style="color:#1565c0">H 0.8545</span> | <span style="color:#c62828">F 0.8331</span><br><span style="color:#1565c0">H 0.8915</span> | <span style="color:#c62828">F 0.8750</span><br><span style="color:#1565c0">H 0.8849</span> | <span style="color:#c62828">F 0.6815</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.5286</span><br><span style="color:#1565c0">H 0.8851</span> |
 | LoKU | <span style="color:#c62828">F 0.6633</span><br><span style="color:#1565c0">H 0.8084</span> | <span style="color:#c62828">F 0.5064</span><br><span style="color:#1565c0">H 0.8548</span> | <span style="color:#c62828">F 0.1185</span><br><span style="color:#1565c0">H 0.7976</span> | <span style="color:#c62828">F 0.0689</span><br><span style="color:#1565c0">H 0.8995</span> | <span style="color:#c62828">F 0.0389</span><br><span style="color:#1565c0">H 0.8806</span> |
 
-### Qwen2.5-7B-Instruct
+#### RWKU / Qwen2.5-7B-Instruct
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -55,7 +61,7 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO-SAM | <span style="color:#c62828">F 0.4266</span><br><span style="color:#1565c0">H 0.4778</span> | <span style="color:#c62828">F 0.4109</span><br><span style="color:#1565c0">H 0.4767</span> | <span style="color:#c62828">F 0.4006</span><br><span style="color:#1565c0">H 0.4781</span> | <span style="color:#c62828">F 0.3797</span><br><span style="color:#1565c0">H 0.5384</span> | <span style="color:#c62828">F 0.2977</span><br><span style="color:#1565c0">H 0.5962</span> |
 | LoKU | <span style="color:#c62828">F 0.4611</span><br><span style="color:#1565c0">H 0.5337</span> | <span style="color:#c62828">F 0.4606</span><br><span style="color:#1565c0">H 0.5914</span> | <span style="color:#c62828">F 0.4274</span><br><span style="color:#1565c0">H 0.6426</span> | <span style="color:#c62828">F 0.3398</span><br><span style="color:#1565c0">H 0.7433</span> | <span style="color:#c62828">F 0.0302</span><br><span style="color:#1565c0">H 0.7528</span> |
 
-### gemma-7b-it
+#### RWKU / gemma-7b-it
 
 | Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
 |---|---|---|---|---|---|
@@ -63,3 +69,174 @@ Selection note: `npo` uses the production default suffix `beta0p5_alpha1p0_gamma
 | NPO | <span style="color:#c62828">F 0.4930</span><br><span style="color:#1565c0">H 0.5278</span> | <span style="color:#c62828">F 0.4825</span><br><span style="color:#1565c0">H 0.5339</span> | <span style="color:#c62828">F 0.4744</span><br><span style="color:#1565c0">H 0.5442</span> | <span style="color:#c62828">F 0.4159</span><br><span style="color:#1565c0">H 0.6159</span> | <span style="color:#c62828">F 0.2992</span><br><span style="color:#1565c0">H 0.6345</span> |
 | NPO-SAM | <span style="color:#c62828">F 0.4973</span><br><span style="color:#1565c0">H 0.5378</span> | <span style="color:#c62828">F 0.4134</span><br><span style="color:#1565c0">H 0.5066</span> | <span style="color:#c62828">F 0.3406</span><br><span style="color:#1565c0">H 0.4810</span> | <span style="color:#c62828">F 0.3134</span><br><span style="color:#1565c0">H 0.5718</span> | <span style="color:#c62828">F 0.2712</span><br><span style="color:#1565c0">H 0.6441</span> |
 | LoKU | <span style="color:#c62828">F 0.3149</span><br><span style="color:#1565c0">H 0.4535</span> | <span style="color:#c62828">F 0.3614</span><br><span style="color:#1565c0">H 0.7042</span> | <span style="color:#c62828">F 0.2127</span><br><span style="color:#1565c0">H 0.7381</span> | <span style="color:#c62828">F 0.0519</span><br><span style="color:#1565c0">H 0.8286</span> | <span style="color:#c62828">F 0.0200</span><br><span style="color:#1565c0">H 0.8371</span> |
+
+### 5 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.9415</span><br><span style="color:#1565c0">H 0.9660</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.9360</span><br><span style="color:#1565c0">H 0.9670</span> | <span style="color:#c62828">F 0.8919</span><br><span style="color:#1565c0">H 0.9745</span> | <span style="color:#c62828">F 0.8719</span><br><span style="color:#1565c0">H 0.9833</span> | <span style="color:#c62828">F 0.8015</span><br><span style="color:#1565c0">H 0.9990</span> | <span style="color:#c62828">F 0.7887</span><br><span style="color:#1565c0">H 0.9980</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.9404</span><br><span style="color:#1565c0">H 0.9637</span> | <span style="color:#c62828">F 0.8988</span><br><span style="color:#1565c0">H 0.9617</span> | <span style="color:#c62828">F 0.8642</span><br><span style="color:#1565c0">H 0.9658</span> | <span style="color:#c62828">F 0.7315</span><br><span style="color:#1565c0">H 0.9840</span> | <span style="color:#c62828">F 0.4844</span><br><span style="color:#1565c0">H 0.9897</span> |
+| LoKU | <span style="color:#c62828">F 0.5758</span><br><span style="color:#1565c0">H 0.9517</span> | <span style="color:#c62828">F 0.1439</span><br><span style="color:#1565c0">H 0.9582</span> | <span style="color:#c62828">F 0.1474</span><br><span style="color:#1565c0">H 0.9830</span> | <span style="color:#c62828">F 0.0503</span><br><span style="color:#1565c0">H 0.9940</span> | <span style="color:#c62828">F 0.0382</span><br><span style="color:#1565c0">H 0.9927</span> |
+
+#### DUET / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8798</span><br><span style="color:#1565c0">H 0.8275</span> | <span style="color:#c62828">F 0.7922</span><br><span style="color:#1565c0">H 0.8060</span> | <span style="color:#c62828">F 0.5439</span><br><span style="color:#1565c0">H 0.4217</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.8820</span><br><span style="color:#1565c0">H 0.8315</span> | <span style="color:#c62828">F 0.8535</span><br><span style="color:#1565c0">H 0.8442</span> | <span style="color:#c62828">F 0.8319</span><br><span style="color:#1565c0">H 0.8455</span> | <span style="color:#c62828">F 0.7741</span><br><span style="color:#1565c0">H 0.9597</span> | <span style="color:#c62828">F 0.4946</span><br><span style="color:#1565c0">H 0.9827</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8762</span><br><span style="color:#1565c0">H 0.8355</span> | <span style="color:#c62828">F 0.8248</span><br><span style="color:#1565c0">H 0.8365</span> | <span style="color:#c62828">F 0.7767</span><br><span style="color:#1565c0">H 0.8363</span> | <span style="color:#c62828">F 0.1960</span><br><span style="color:#1565c0">H 0.8780</span> | <span style="color:#c62828">F 0.1347</span><br><span style="color:#1565c0">H 0.8803</span> |
+| LoKU | <span style="color:#c62828">F 0.8257</span><br><span style="color:#1565c0">H 0.8567</span> | <span style="color:#c62828">F 0.2679</span><br><span style="color:#1565c0">H 0.8815</span> | <span style="color:#c62828">F 0.2447</span><br><span style="color:#1565c0">H 0.8940</span> | <span style="color:#c62828">F 0.1345</span><br><span style="color:#1565c0">H 0.9813</span> | <span style="color:#c62828">F 0.0615</span><br><span style="color:#1565c0">H 0.9980</span> |
+
+#### DUET / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8329</span><br><span style="color:#1565c0">H 0.8964</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.8732</span><br><span style="color:#1565c0">H 0.9177</span> | <span style="color:#c62828">F 0.8431</span><br><span style="color:#1565c0">H 0.9118</span> | <span style="color:#c62828">F 0.8133</span><br><span style="color:#1565c0">H 0.8986</span> | <span style="color:#c62828">F 0.7175</span><br><span style="color:#1565c0">H 0.9695</span> | <span style="color:#c62828">F 0.5617</span><br><span style="color:#1565c0">H 0.9690</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8793</span><br><span style="color:#1565c0">H 0.9169</span> | <span style="color:#c62828">F 0.8485</span><br><span style="color:#1565c0">H 0.9185</span> | <span style="color:#c62828">F 0.7750</span><br><span style="color:#1565c0">H 0.8958</span> | <span style="color:#c62828">F 0.6749</span><br><span style="color:#1565c0">H 0.9600</span> | <span style="color:#c62828">F 0.6708</span><br><span style="color:#1565c0">H 0.9843</span> |
+| LoKU | <span style="color:#c62828">F 0.2646</span><br><span style="color:#1565c0">H 0.6942</span> | <span style="color:#c62828">F 0.0691</span><br><span style="color:#1565c0">H 0.9743</span> | <span style="color:#c62828">F 0.0498</span><br><span style="color:#1565c0">H 0.9920</span> | <span style="color:#c62828">F 0.0424</span><br><span style="color:#1565c0">H 0.9963</span> | <span style="color:#c62828">F 0.0156</span><br><span style="color:#1565c0">H 0.9900</span> |
+
+#### RWKU / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.0068</span><br><span style="color:#1565c0">H 0.0042</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0008</span><br><span style="color:#1565c0">H 0.0001</span> | <span style="color:#c62828">F 0.0030</span><br><span style="color:#1565c0">H 0.0009</span> | <span style="color:#c62828">F 0.0022</span><br><span style="color:#1565c0">H 0.0009</span> |
+| NPO | <span style="color:#c62828">F 0.7606</span><br><span style="color:#1565c0">H 0.8375</span> | <span style="color:#c62828">F 0.7444</span><br><span style="color:#1565c0">H 0.8428</span> | <span style="color:#c62828">F 0.7522</span><br><span style="color:#1565c0">H 0.8797</span> | <span style="color:#c62828">F 0.6147</span><br><span style="color:#1565c0">H 0.9515</span> | <span style="color:#c62828">F 0.5909</span><br><span style="color:#1565c0">H 0.9644</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8036</span><br><span style="color:#1565c0">H 0.8651</span> | <span style="color:#c62828">F 0.8464</span><br><span style="color:#1565c0">H 0.8635</span> | <span style="color:#c62828">F 0.8508</span><br><span style="color:#1565c0">H 0.8769</span> | <span style="color:#c62828">F 0.2811</span><br><span style="color:#1565c0">H 0.9259</span> | <span style="color:#c62828">F 0.0911</span><br><span style="color:#1565c0">H 0.9331</span> |
+| LoKU | <span style="color:#c62828">F 0.6610</span><br><span style="color:#1565c0">H 0.8477</span> | <span style="color:#c62828">F 0.3578</span><br><span style="color:#1565c0">H 0.9008</span> | <span style="color:#c62828">F 0.0307</span><br><span style="color:#1565c0">H 0.9374</span> | <span style="color:#c62828">F 0.0388</span><br><span style="color:#1565c0">H 0.9713</span> | <span style="color:#c62828">F 0.0186</span><br><span style="color:#1565c0">H 0.9708</span> |
+
+#### RWKU / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.4813</span><br><span style="color:#1565c0">H 0.5121</span> | <span style="color:#c62828">F 0.0014</span><br><span style="color:#1565c0">H 0.0005</span> | <span style="color:#c62828">F 0.0015</span><br><span style="color:#1565c0">H 0.0004</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0008</span><br><span style="color:#1565c0">H 0.0001</span> |
+| NPO | <span style="color:#c62828">F 0.4199</span><br><span style="color:#1565c0">H 0.4765</span> | <span style="color:#c62828">F 0.3954</span><br><span style="color:#1565c0">H 0.4958</span> | <span style="color:#c62828">F 0.3861</span><br><span style="color:#1565c0">H 0.5217</span> | <span style="color:#c62828">F 0.2969</span><br><span style="color:#1565c0">H 0.7174</span> | <span style="color:#c62828">F 0.2656</span><br><span style="color:#1565c0">H 0.7869</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.4235</span><br><span style="color:#1565c0">H 0.4814</span> | <span style="color:#c62828">F 0.3984</span><br><span style="color:#1565c0">H 0.4770</span> | <span style="color:#c62828">F 0.3936</span><br><span style="color:#1565c0">H 0.4989</span> | <span style="color:#c62828">F 0.3104</span><br><span style="color:#1565c0">H 0.6542</span> | <span style="color:#c62828">F 0.2482</span><br><span style="color:#1565c0">H 0.7510</span> |
+| LoKU | <span style="color:#c62828">F 0.4622</span><br><span style="color:#1565c0">H 0.5803</span> | <span style="color:#c62828">F 0.3977</span><br><span style="color:#1565c0">H 0.6698</span> | <span style="color:#c62828">F 0.2941</span><br><span style="color:#1565c0">H 0.7353</span> | <span style="color:#c62828">F 0.0286</span><br><span style="color:#1565c0">H 0.8965</span> | <span style="color:#c62828">F 0.0113</span><br><span style="color:#1565c0">H 0.9215</span> |
+
+#### RWKU / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.1065</span><br><span style="color:#1565c0">H 0.0570</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.4916</span><br><span style="color:#1565c0">H 0.5271</span> | <span style="color:#c62828">F 0.4628</span><br><span style="color:#1565c0">H 0.5292</span> | <span style="color:#c62828">F 0.4363</span><br><span style="color:#1565c0">H 0.5581</span> | <span style="color:#c62828">F 0.3436</span><br><span style="color:#1565c0">H 0.6747</span> | <span style="color:#c62828">F 0.2151</span><br><span style="color:#1565c0">H 0.7358</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.4658</span><br><span style="color:#1565c0">H 0.5118</span> | <span style="color:#c62828">F 0.3373</span><br><span style="color:#1565c0">H 0.4545</span> | <span style="color:#c62828">F 0.3306</span><br><span style="color:#1565c0">H 0.5315</span> | <span style="color:#c62828">F 0.2568</span><br><span style="color:#1565c0">H 0.7303</span> | <span style="color:#c62828">F 0.2062</span><br><span style="color:#1565c0">H 0.8278</span> |
+| LoKU | <span style="color:#c62828">F 0.3984</span><br><span style="color:#1565c0">H 0.6377</span> | <span style="color:#c62828">F 0.0529</span><br><span style="color:#1565c0">H 0.7963</span> | <span style="color:#c62828">F 0.0225</span><br><span style="color:#1565c0">H 0.8686</span> | <span style="color:#c62828">F 0.0356</span><br><span style="color:#1565c0">H 0.9495</span> | <span style="color:#c62828">F 0.0088</span><br><span style="color:#1565c0">H 0.9482</span> |
+
+## COS_SIM
+
+### 2 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8446</span><br><span style="color:#1565c0">H 0.8666</span> | <span style="color:#c62828">F 0.6230</span><br><span style="color:#1565c0">H 0.5900</span> | <span style="color:#c62828">F 0.5855</span><br><span style="color:#1565c0">H 0.5374</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> |
+| NPO | <span style="color:#c62828">F 0.8445</span><br><span style="color:#1565c0">H 0.8654</span> | <span style="color:#c62828">F 0.8239</span><br><span style="color:#1565c0">H 0.8766</span> | <span style="color:#c62828">F 0.7970</span><br><span style="color:#1565c0">H 0.9343</span> | <span style="color:#c62828">F 0.6360</span><br><span style="color:#1565c0">H 0.9778</span> | <span style="color:#c62828">F 0.6512</span><br><span style="color:#1565c0">H 0.9907</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8441</span><br><span style="color:#1565c0">H 0.8648</span> | <span style="color:#c62828">F 0.7119</span><br><span style="color:#1565c0">H 0.7662</span> | <span style="color:#c62828">F 0.6703</span><br><span style="color:#1565c0">H 0.8706</span> | <span style="color:#c62828">F 0.6635</span><br><span style="color:#1565c0">H 0.9651</span> | <span style="color:#c62828">F 0.5736</span><br><span style="color:#1565c0">H 0.9549</span> |
+| LoKU | <span style="color:#c62828">F 0.8871</span><br><span style="color:#1565c0">H 0.9722</span> | <span style="color:#c62828">F 0.5868</span><br><span style="color:#1565c0">H 0.9622</span> | <span style="color:#c62828">F 0.5540</span><br><span style="color:#1565c0">H 0.9575</span> | <span style="color:#c62828">F 0.4865</span><br><span style="color:#1565c0">H 0.9675</span> | <span style="color:#c62828">F 0.4981</span><br><span style="color:#1565c0">H 0.9701</span> |
+
+#### DUET / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8997</span><br><span style="color:#1565c0">H 0.8756</span> | <span style="color:#c62828">F 0.8519</span><br><span style="color:#1565c0">H 0.8466</span> | <span style="color:#c62828">F 0.7790</span><br><span style="color:#1565c0">H 0.7051</span> | <span style="color:#c62828">F 0.0593</span><br><span style="color:#1565c0">H 0.0922</span> | <span style="color:#c62828">F 0.0583</span><br><span style="color:#1565c0">H 0.0917</span> |
+| NPO | <span style="color:#c62828">F 0.8961</span><br><span style="color:#1565c0">H 0.8734</span> | <span style="color:#c62828">F 0.8737</span><br><span style="color:#1565c0">H 0.8735</span> | <span style="color:#c62828">F 0.8684</span><br><span style="color:#1565c0">H 0.8826</span> | <span style="color:#c62828">F 0.8251</span><br><span style="color:#1565c0">H 0.9172</span> | <span style="color:#c62828">F 0.7783</span><br><span style="color:#1565c0">H 0.9379</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8987</span><br><span style="color:#1565c0">H 0.8752</span> | <span style="color:#c62828">F 0.8453</span><br><span style="color:#1565c0">H 0.8487</span> | <span style="color:#c62828">F 0.8361</span><br><span style="color:#1565c0">H 0.8640</span> | <span style="color:#c62828">F 0.7395</span><br><span style="color:#1565c0">H 0.9101</span> | <span style="color:#c62828">F 0.5614</span><br><span style="color:#1565c0">H 0.8425</span> |
+| LoKU | <span style="color:#c62828">F 0.9102</span><br><span style="color:#1565c0">H 0.9037</span> | <span style="color:#c62828">F 0.8673</span><br><span style="color:#1565c0">H 0.9174</span> | <span style="color:#c62828">F 0.8086</span><br><span style="color:#1565c0">H 0.9270</span> | <span style="color:#c62828">F 0.5687</span><br><span style="color:#1565c0">H 0.9389</span> | <span style="color:#c62828">F 0.5050</span><br><span style="color:#1565c0">H 0.9498</span> |
+
+#### DUET / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.5821</span><br><span style="color:#1565c0">H 0.5518</span> | <span style="color:#c62828">F 0.5476</span><br><span style="color:#1565c0">H 0.4944</span> | <span style="color:#c62828">F 0.1204</span><br><span style="color:#1565c0">H 0.0985</span> | <span style="color:#c62828">F 0.0676</span><br><span style="color:#1565c0">H 0.1006</span> | <span style="color:#c62828">F 0.0681</span><br><span style="color:#1565c0">H 0.1030</span> |
+| NPO | <span style="color:#c62828">F 0.5993</span><br><span style="color:#1565c0">H 0.5668</span> | <span style="color:#c62828">F 0.5860</span><br><span style="color:#1565c0">H 0.5717</span> | <span style="color:#c62828">F 0.5784</span><br><span style="color:#1565c0">H 0.5707</span> | <span style="color:#c62828">F 0.5531</span><br><span style="color:#1565c0">H 0.5980</span> | <span style="color:#c62828">F 0.4783</span><br><span style="color:#1565c0">H 0.7598</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.5857</span><br><span style="color:#1565c0">H 0.5574</span> | <span style="color:#c62828">F 0.5832</span><br><span style="color:#1565c0">H 0.5664</span> | <span style="color:#c62828">F 0.5664</span><br><span style="color:#1565c0">H 0.5775</span> | <span style="color:#c62828">F 0.5128</span><br><span style="color:#1565c0">H 0.6417</span> | <span style="color:#c62828">F 0.4907</span><br><span style="color:#1565c0">H 0.7256</span> |
+| LoKU | <span style="color:#c62828">F 0.6582</span><br><span style="color:#1565c0">H 0.7002</span> | <span style="color:#c62828">F 0.4874</span><br><span style="color:#1565c0">H 0.9237</span> | <span style="color:#c62828">F 0.4715</span><br><span style="color:#1565c0">H 0.9559</span> | <span style="color:#c62828">F 0.5453</span><br><span style="color:#1565c0">H 0.9490</span> | <span style="color:#c62828">F 0.5206</span><br><span style="color:#1565c0">H 0.9468</span> |
+
+#### RWKU / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.5974</span><br><span style="color:#1565c0">H 0.6196</span> | <span style="color:#c62828">F 0.1151</span><br><span style="color:#1565c0">H 0.1311</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> | <span style="color:#c62828">F 0.0826</span><br><span style="color:#1565c0">H 0.0841</span> | <span style="color:#c62828">F 0.0631</span><br><span style="color:#1565c0">H 0.0669</span> |
+| NPO | <span style="color:#c62828">F 0.7735</span><br><span style="color:#1565c0">H 0.8229</span> | <span style="color:#c62828">F 0.7497</span><br><span style="color:#1565c0">H 0.8265</span> | <span style="color:#c62828">F 0.7394</span><br><span style="color:#1565c0">H 0.8389</span> | <span style="color:#c62828">F 0.6603</span><br><span style="color:#1565c0">H 0.9010</span> | <span style="color:#c62828">F 0.5535</span><br><span style="color:#1565c0">H 0.9194</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.7199</span><br><span style="color:#1565c0">H 0.7513</span> | <span style="color:#c62828">F 0.4963</span><br><span style="color:#1565c0">H 0.6197</span> | <span style="color:#c62828">F 0.4430</span><br><span style="color:#1565c0">H 0.6826</span> | <span style="color:#c62828">F 0.3330</span><br><span style="color:#1565c0">H 0.8029</span> | <span style="color:#c62828">F 0.2995</span><br><span style="color:#1565c0">H 0.8822</span> |
+| LoKU | <span style="color:#c62828">F 0.7768</span><br><span style="color:#1565c0">H 0.8769</span> | <span style="color:#c62828">F 0.6610</span><br><span style="color:#1565c0">H 0.9026</span> | <span style="color:#c62828">F 0.2738</span><br><span style="color:#1565c0">H 0.8552</span> | <span style="color:#c62828">F 0.1919</span><br><span style="color:#1565c0">H 0.9296</span> | <span style="color:#c62828">F 0.1676</span><br><span style="color:#1565c0">H 0.9159</span> |
+
+#### RWKU / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.6111</span><br><span style="color:#1565c0">H 0.6651</span> | <span style="color:#c62828">F 0.3397</span><br><span style="color:#1565c0">H 0.3482</span> | <span style="color:#c62828">F 0.0830</span><br><span style="color:#1565c0">H 0.0982</span> | <span style="color:#c62828">F 0.0874</span><br><span style="color:#1565c0">H 0.0808</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> |
+| NPO | <span style="color:#c62828">F 0.6103</span><br><span style="color:#1565c0">H 0.6648</span> | <span style="color:#c62828">F 0.6017</span><br><span style="color:#1565c0">H 0.6656</span> | <span style="color:#c62828">F 0.5978</span><br><span style="color:#1565c0">H 0.6723</span> | <span style="color:#c62828">F 0.5753</span><br><span style="color:#1565c0">H 0.7209</span> | <span style="color:#c62828">F 0.5621</span><br><span style="color:#1565c0">H 0.7761</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.6117</span><br><span style="color:#1565c0">H 0.6640</span> | <span style="color:#c62828">F 0.6018</span><br><span style="color:#1565c0">H 0.6644</span> | <span style="color:#c62828">F 0.5942</span><br><span style="color:#1565c0">H 0.6640</span> | <span style="color:#c62828">F 0.5821</span><br><span style="color:#1565c0">H 0.7068</span> | <span style="color:#c62828">F 0.5055</span><br><span style="color:#1565c0">H 0.7444</span> |
+| LoKU | <span style="color:#c62828">F 0.6390</span><br><span style="color:#1565c0">H 0.7002</span> | <span style="color:#c62828">F 0.6439</span><br><span style="color:#1565c0">H 0.7441</span> | <span style="color:#c62828">F 0.6126</span><br><span style="color:#1565c0">H 0.7748</span> | <span style="color:#c62828">F 0.3124</span><br><span style="color:#1565c0">H 0.8100</span> | <span style="color:#c62828">F 0.4846</span><br><span style="color:#1565c0">H 0.8632</span> |
+
+#### RWKU / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.3232</span><br><span style="color:#1565c0">H 0.3261</span> | <span style="color:#c62828">F 0.0423</span><br><span style="color:#1565c0">H 0.0438</span> | <span style="color:#c62828">F 0.0820</span><br><span style="color:#1565c0">H 0.0830</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.3629</span><br><span style="color:#1565c0">H 0.3762</span> | <span style="color:#c62828">F 0.3481</span><br><span style="color:#1565c0">H 0.3821</span> | <span style="color:#c62828">F 0.3467</span><br><span style="color:#1565c0">H 0.3962</span> | <span style="color:#c62828">F 0.2930</span><br><span style="color:#1565c0">H 0.5915</span> | <span style="color:#c62828">F 0.2110</span><br><span style="color:#1565c0">H 0.6327</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.3418</span><br><span style="color:#1565c0">H 0.3624</span> | <span style="color:#c62828">F 0.2899</span><br><span style="color:#1565c0">H 0.3504</span> | <span style="color:#c62828">F 0.2596</span><br><span style="color:#1565c0">H 0.3561</span> | <span style="color:#c62828">F 0.2329</span><br><span style="color:#1565c0">H 0.5829</span> | <span style="color:#c62828">F 0.1950</span><br><span style="color:#1565c0">H 0.6508</span> |
+| LoKU | <span style="color:#c62828">F 0.5096</span><br><span style="color:#1565c0">H 0.6373</span> | <span style="color:#c62828">F 0.5756</span><br><span style="color:#1565c0">H 0.8188</span> | <span style="color:#c62828">F 0.4526</span><br><span style="color:#1565c0">H 0.8357</span> | <span style="color:#c62828">F 0.2558</span><br><span style="color:#1565c0">H 0.8882</span> | <span style="color:#c62828">F 0.5129</span><br><span style="color:#1565c0">H 0.9161</span> |
+
+### 5 Epochs
+
+#### DUET / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.7273</span><br><span style="color:#1565c0">H 0.8168</span> | <span style="color:#c62828">F 0.0962</span><br><span style="color:#1565c0">H 0.0778</span> | <span style="color:#c62828">F 0.0956</span><br><span style="color:#1565c0">H 0.0775</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> | <span style="color:#c62828">F 0.0933</span><br><span style="color:#1565c0">H 0.0930</span> |
+| NPO | <span style="color:#c62828">F 0.8384</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.8100</span><br><span style="color:#1565c0">H 0.9453</span> | <span style="color:#c62828">F 0.8004</span><br><span style="color:#1565c0">H 0.9724</span> | <span style="color:#c62828">F 0.5966</span><br><span style="color:#1565c0">H 0.9967</span> | <span style="color:#c62828">F 0.6230</span><br><span style="color:#1565c0">H 0.9942</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8016</span><br><span style="color:#1565c0">H 0.8437</span> | <span style="color:#c62828">F 0.6559</span><br><span style="color:#1565c0">H 0.9096</span> | <span style="color:#c62828">F 0.6625</span><br><span style="color:#1565c0">H 0.9472</span> | <span style="color:#c62828">F 0.6223</span><br><span style="color:#1565c0">H 0.9850</span> | <span style="color:#c62828">F 0.5048</span><br><span style="color:#1565c0">H 0.9678</span> |
+| LoKU | <span style="color:#c62828">F 0.7064</span><br><span style="color:#1565c0">H 0.9657</span> | <span style="color:#c62828">F 0.5022</span><br><span style="color:#1565c0">H 0.9753</span> | <span style="color:#c62828">F 0.5134</span><br><span style="color:#1565c0">H 0.9902</span> | <span style="color:#c62828">F 0.4543</span><br><span style="color:#1565c0">H 0.9959</span> | <span style="color:#c62828">F 0.4093</span><br><span style="color:#1565c0">H 0.9949</span> |
+
+#### DUET / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.8843</span><br><span style="color:#1565c0">H 0.8629</span> | <span style="color:#c62828">F 0.5433</span><br><span style="color:#1565c0">H 0.5086</span> | <span style="color:#c62828">F 0.4611</span><br><span style="color:#1565c0">H 0.3946</span> | <span style="color:#c62828">F 0.0583</span><br><span style="color:#1565c0">H 0.0917</span> | <span style="color:#c62828">F 0.0583</span><br><span style="color:#1565c0">H 0.0917</span> |
+| NPO | <span style="color:#c62828">F 0.8818</span><br><span style="color:#1565c0">H 0.8690</span> | <span style="color:#c62828">F 0.8620</span><br><span style="color:#1565c0">H 0.8888</span> | <span style="color:#c62828">F 0.8565</span><br><span style="color:#1565c0">H 0.8967</span> | <span style="color:#c62828">F 0.6423</span><br><span style="color:#1565c0">H 0.9645</span> | <span style="color:#c62828">F 0.5863</span><br><span style="color:#1565c0">H 0.9881</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.8801</span><br><span style="color:#1565c0">H 0.8670</span> | <span style="color:#c62828">F 0.8285</span><br><span style="color:#1565c0">H 0.8709</span> | <span style="color:#c62828">F 0.8180</span><br><span style="color:#1565c0">H 0.8815</span> | <span style="color:#c62828">F 0.4643</span><br><span style="color:#1565c0">H 0.9012</span> | <span style="color:#c62828">F 0.5085</span><br><span style="color:#1565c0">H 0.9195</span> |
+| LoKU | <span style="color:#c62828">F 0.8864</span><br><span style="color:#1565c0">H 0.9118</span> | <span style="color:#c62828">F 0.6101</span><br><span style="color:#1565c0">H 0.9268</span> | <span style="color:#c62828">F 0.6002</span><br><span style="color:#1565c0">H 0.9396</span> | <span style="color:#c62828">F 0.5314</span><br><span style="color:#1565c0">H 0.9861</span> | <span style="color:#c62828">F 0.4343</span><br><span style="color:#1565c0">H 0.9947</span> |
+
+#### DUET / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.5166</span><br><span style="color:#1565c0">H 0.5072</span> | <span style="color:#c62828">F 0.0605</span><br><span style="color:#1565c0">H 0.0747</span> | <span style="color:#c62828">F 0.0506</span><br><span style="color:#1565c0">H 0.0770</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0671</span><br><span style="color:#1565c0">H 0.1026</span> |
+| NPO | <span style="color:#c62828">F 0.5920</span><br><span style="color:#1565c0">H 0.5740</span> | <span style="color:#c62828">F 0.5709</span><br><span style="color:#1565c0">H 0.5691</span> | <span style="color:#c62828">F 0.5581</span><br><span style="color:#1565c0">H 0.5787</span> | <span style="color:#c62828">F 0.5081</span><br><span style="color:#1565c0">H 0.9692</span> | <span style="color:#c62828">F 0.4671</span><br><span style="color:#1565c0">H 0.9760</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.5849</span><br><span style="color:#1565c0">H 0.5601</span> | <span style="color:#c62828">F 0.5554</span><br><span style="color:#1565c0">H 0.5804</span> | <span style="color:#c62828">F 0.5295</span><br><span style="color:#1565c0">H 0.6163</span> | <span style="color:#c62828">F 0.5221</span><br><span style="color:#1565c0">H 0.9394</span> | <span style="color:#c62828">F 0.4799</span><br><span style="color:#1565c0">H 0.9857</span> |
+| LoKU | <span style="color:#c62828">F 0.4984</span><br><span style="color:#1565c0">H 0.7961</span> | <span style="color:#c62828">F 0.4472</span><br><span style="color:#1565c0">H 0.9866</span> | <span style="color:#c62828">F 0.3161</span><br><span style="color:#1565c0">H 0.9946</span> | <span style="color:#c62828">F 0.4393</span><br><span style="color:#1565c0">H 0.9980</span> | <span style="color:#c62828">F 0.3408</span><br><span style="color:#1565c0">H 0.9948</span> |
+
+#### RWKU / Llama-3.1-8B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.0922</span><br><span style="color:#1565c0">H 0.0895</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> | <span style="color:#c62828">F 0.0826</span><br><span style="color:#1565c0">H 0.0841</span> | <span style="color:#c62828">F 0.0631</span><br><span style="color:#1565c0">H 0.0669</span> |
+| NPO | <span style="color:#c62828">F 0.7544</span><br><span style="color:#1565c0">H 0.8116</span> | <span style="color:#c62828">F 0.7404</span><br><span style="color:#1565c0">H 0.8543</span> | <span style="color:#c62828">F 0.6250</span><br><span style="color:#1565c0">H 0.8668</span> | <span style="color:#c62828">F 0.5528</span><br><span style="color:#1565c0">H 0.9518</span> | <span style="color:#c62828">F 0.4742</span><br><span style="color:#1565c0">H 0.9700</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.6414</span><br><span style="color:#1565c0">H 0.7185</span> | <span style="color:#c62828">F 0.4359</span><br><span style="color:#1565c0">H 0.7175</span> | <span style="color:#c62828">F 0.3973</span><br><span style="color:#1565c0">H 0.7354</span> | <span style="color:#c62828">F 0.2024</span><br><span style="color:#1565c0">H 0.9288</span> | <span style="color:#c62828">F 0.1907</span><br><span style="color:#1565c0">H 0.9227</span> |
+| LoKU | <span style="color:#c62828">F 0.7645</span><br><span style="color:#1565c0">H 0.8960</span> | <span style="color:#c62828">F 0.5471</span><br><span style="color:#1565c0">H 0.9323</span> | <span style="color:#c62828">F 0.1817</span><br><span style="color:#1565c0">H 0.9547</span> | <span style="color:#c62828">F 0.1641</span><br><span style="color:#1565c0">H 0.9802</span> | <span style="color:#c62828">F 0.0876</span><br><span style="color:#1565c0">H 0.9791</span> |
+
+#### RWKU / Qwen2.5-7B-Instruct
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.4172</span><br><span style="color:#1565c0">H 0.4494</span> | <span style="color:#c62828">F 0.1270</span><br><span style="color:#1565c0">H 0.1171</span> | <span style="color:#c62828">F 0.0752</span><br><span style="color:#1565c0">H 0.0866</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0713</span><br><span style="color:#1565c0">H 0.0748</span> |
+| NPO | <span style="color:#c62828">F 0.6041</span><br><span style="color:#1565c0">H 0.6603</span> | <span style="color:#c62828">F 0.5935</span><br><span style="color:#1565c0">H 0.6771</span> | <span style="color:#c62828">F 0.5877</span><br><span style="color:#1565c0">H 0.6933</span> | <span style="color:#c62828">F 0.5239</span><br><span style="color:#1565c0">H 0.8177</span> | <span style="color:#c62828">F 0.4926</span><br><span style="color:#1565c0">H 0.8620</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.6083</span><br><span style="color:#1565c0">H 0.6652</span> | <span style="color:#c62828">F 0.5948</span><br><span style="color:#1565c0">H 0.6672</span> | <span style="color:#c62828">F 0.5910</span><br><span style="color:#1565c0">H 0.6797</span> | <span style="color:#c62828">F 0.5246</span><br><span style="color:#1565c0">H 0.7753</span> | <span style="color:#c62828">F 0.4088</span><br><span style="color:#1565c0">H 0.8362</span> |
+| LoKU | <span style="color:#c62828">F 0.6428</span><br><span style="color:#1565c0">H 0.7366</span> | <span style="color:#c62828">F 0.5766</span><br><span style="color:#1565c0">H 0.7866</span> | <span style="color:#c62828">F 0.4178</span><br><span style="color:#1565c0">H 0.8142</span> | <span style="color:#c62828">F 0.1654</span><br><span style="color:#1565c0">H 0.9337</span> | <span style="color:#c62828">F 0.5174</span><br><span style="color:#1565c0">H 0.9587</span> |
+
+#### RWKU / gemma-7b-it
+
+| Method | 1e-6 | 5e-6 | 1e-5 | 5e-5 | 1e-4 |
+|---|---|---|---|---|---|
+| GA | <span style="color:#c62828">F 0.2244</span><br><span style="color:#1565c0">H 0.2172</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> | <span style="color:#c62828">F 0.0000</span><br><span style="color:#1565c0">H 0.0000</span> |
+| NPO | <span style="color:#c62828">F 0.3547</span><br><span style="color:#1565c0">H 0.3785</span> | <span style="color:#c62828">F 0.3455</span><br><span style="color:#1565c0">H 0.4049</span> | <span style="color:#c62828">F 0.3286</span><br><span style="color:#1565c0">H 0.5545</span> | <span style="color:#c62828">F 0.2675</span><br><span style="color:#1565c0">H 0.7537</span> | <span style="color:#c62828">F 0.1710</span><br><span style="color:#1565c0">H 0.8001</span> |
+| NPO-SAM | <span style="color:#c62828">F 0.3165</span><br><span style="color:#1565c0">H 0.3528</span> | <span style="color:#c62828">F 0.2609</span><br><span style="color:#1565c0">H 0.3901</span> | <span style="color:#c62828">F 0.2587</span><br><span style="color:#1565c0">H 0.5437</span> | <span style="color:#c62828">F 0.2080</span><br><span style="color:#1565c0">H 0.7901</span> | <span style="color:#c62828">F 0.1721</span><br><span style="color:#1565c0">H 0.8691</span> |
+| LoKU | <span style="color:#c62828">F 0.5938</span><br><span style="color:#1565c0">H 0.7719</span> | <span style="color:#c62828">F 0.4795</span><br><span style="color:#1565c0">H 0.8890</span> | <span style="color:#c62828">F 0.5079</span><br><span style="color:#1565c0">H 0.9289</span> | <span style="color:#c62828">F 0.2422</span><br><span style="color:#1565c0">H 0.9687</span> | <span style="color:#c62828">F 0.4835</span><br><span style="color:#1565c0">H 0.9745</span> |
+
