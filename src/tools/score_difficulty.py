@@ -12,6 +12,7 @@ from typing import Dict, Optional
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
+from tqdm.auto import tqdm
 
 SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
@@ -28,6 +29,10 @@ from tools.dual_cf_artifact_utils import (
     select_device,
 )
 from trainer.utils import compute_nll_per_sample
+
+
+def log(message: str) -> None:
+    print(f"[score_difficulty] {message}", flush=True)
 
 
 def parse_args():
@@ -72,6 +77,7 @@ def load_stage_map(raw: Optional[str]) -> Optional[Dict[str, float]]:
 
 def collect_confidence_scores(args, dataset) -> Dict[int, float]:
     if args.confidence_column:
+        log(f"Using precomputed confidence column `{args.confidence_column}`")
         return {
             int(row["index"]): float(row[args.confidence_column])
             for row in dataset
@@ -79,8 +85,14 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         }
 
     if not args.model_cfg:
+        log("No model config provided, skipping confidence scoring")
         return {}
 
+    log(
+        "Loading confidence model "
+        f"cfg={args.model_cfg} model_path={args.model_path or '<cfg-default>'} "
+        f"tokenizer_path={args.tokenizer_path or '<model-path>'}"
+    )
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
@@ -109,6 +121,7 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         qa_dataset = Subset(
             qa_dataset, range(min(int(args.max_examples), len(qa_dataset)))
         )
+    qa_size = len(qa_dataset) if hasattr(qa_dataset, "__len__") else None
     collator = DataCollatorForSupervisedDataset(tokenizer, index="index")
     dataloader = DataLoader(
         qa_dataset,
@@ -116,10 +129,21 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
         shuffle=False,
         collate_fn=collator,
     )
+    log(
+        "Scoring confidence with "
+        f"rows={qa_size if qa_size is not None else 'unknown'} "
+        f"batch_size={max(1, int(args.batch_size))} device={device}"
+    )
 
     confidence_scores: Dict[int, float] = {}
     with torch.inference_mode():
-        for batch in dataloader:
+        batch_iter = tqdm(
+            dataloader,
+            total=len(dataloader) if hasattr(dataloader, "__len__") else None,
+            desc="confidence",
+            dynamic_ncols=True,
+        )
+        for batch in batch_iter:
             model_inputs = {
                 "input_ids": batch["input_ids"],
                 "attention_mask": batch["attention_mask"],
@@ -134,11 +158,18 @@ def collect_confidence_scores(args, dataset) -> Dict[int, float]:
             )
             for sample_index, loss in zip(batch["index"].tolist(), losses.tolist()):
                 confidence_scores[int(sample_index)] = float(-loss)
+    log(f"Collected confidence scores for {len(confidence_scores)} rows")
     return confidence_scores
 
 
 def main():
     args = parse_args()
+    log(
+        "Starting with "
+        f"dataset_path={args.dataset_path} split={args.split} "
+        f"dataset_name={args.dataset_name} data_files={args.data_files} "
+        f"output_path={args.output_path}"
+    )
     dataset = load_dataset_split(
         path=args.dataset_path,
         split=args.split,
@@ -147,7 +178,10 @@ def main():
         max_examples=args.max_examples,
     )
     rows = [dict(row) for row in dataset]
+    log(f"Loaded {len(rows)} rows for difficulty scoring")
     stage_map = load_stage_map(args.stage_map_json)
+    if stage_map is not None:
+        log(f"Loaded stage map with {len(stage_map)} entries from {args.stage_map_json}")
     confidence_scores = collect_confidence_scores(args=args, dataset=dataset)
 
     mrd_raw = []
@@ -194,6 +228,17 @@ def main():
             "No active difficulty components. Provide at least one positive weight and source."
         )
 
+    active_components = []
+    if has_mrd and args.w_mrd > 0.0:
+        active_components.append(f"mrd(w={args.w_mrd})")
+    if has_pop and args.w_pop > 0.0:
+        active_components.append(f"popularity(w={args.w_pop})")
+    if confidence_scores and args.w_conf > 0.0:
+        active_components.append(f"confidence(w={args.w_conf})")
+    if stage_raw and args.w_stage > 0.0:
+        active_components.append(f"stage(w={args.w_stage})")
+    log("Active difficulty components: " + ", ".join(active_components))
+
     hardness_mrd = []
     pop_norm = []
     conf_norm = []
@@ -206,41 +251,59 @@ def main():
     stage_norm = stage_raw
 
     output_rows = []
-    for idx, row in enumerate(rows):
-        weighted_sum = 0.0
-        weight_total = 0.0
+    row_iter = tqdm(
+        enumerate(rows),
+        total=len(rows),
+        desc="difficulty_rows",
+        dynamic_ncols=True,
+    )
+    for idx, row in row_iter:
+        row_index = row.get("index", "<missing>")
+        try:
+            weighted_sum = 0.0
+            weight_total = 0.0
 
-        row_answer = resolve_answer(
-            row=row,
-            answer_key=args.answer_key,
-            answer_index=args.answer_index,
-        )
-        updated = dict(row)
-        updated["answer"] = row_answer
+            row_answer = resolve_answer(
+                row=row,
+                answer_key=args.answer_key,
+                answer_index=args.answer_index,
+            )
+            updated = dict(row)
+            updated["answer"] = row_answer
 
-        if hardness_mrd and args.w_mrd > 0.0:
-            updated["hardness_mrd"] = hardness_mrd[idx]
-            weighted_sum += float(args.w_mrd) * hardness_mrd[idx]
-            weight_total += float(args.w_mrd)
-        if pop_norm and args.w_pop > 0.0:
-            updated["difficulty_popularity_norm"] = pop_norm[idx]
-            weighted_sum += float(args.w_pop) * pop_norm[idx]
-            weight_total += float(args.w_pop)
-        if conf_norm and args.w_conf > 0.0:
-            updated["difficulty_confidence_norm"] = conf_norm[idx]
-            weighted_sum += float(args.w_conf) * conf_norm[idx]
-            weight_total += float(args.w_conf)
-        if stage_norm and args.w_stage > 0.0:
-            updated["difficulty_stage_prior"] = float(stage_norm[idx])
-            weighted_sum += float(args.w_stage) * float(stage_norm[idx])
-            weight_total += float(args.w_stage)
+            if hardness_mrd and args.w_mrd > 0.0:
+                updated["hardness_mrd"] = hardness_mrd[idx]
+                weighted_sum += float(args.w_mrd) * hardness_mrd[idx]
+                weight_total += float(args.w_mrd)
+            if pop_norm and args.w_pop > 0.0:
+                updated["difficulty_popularity_norm"] = pop_norm[idx]
+                weighted_sum += float(args.w_pop) * pop_norm[idx]
+                weight_total += float(args.w_pop)
+            if conf_norm and args.w_conf > 0.0:
+                updated["difficulty_confidence_norm"] = conf_norm[idx]
+                weighted_sum += float(args.w_conf) * conf_norm[idx]
+                weight_total += float(args.w_conf)
+            if stage_norm and args.w_stage > 0.0:
+                updated["difficulty_stage_prior"] = float(stage_norm[idx])
+                weighted_sum += float(args.w_stage) * float(stage_norm[idx])
+                weight_total += float(args.w_stage)
 
-        if weight_total <= 0.0:
-            raise ValueError("Difficulty score has zero active weight for at least one row.")
-        updated["difficulty_score"] = weighted_sum / weight_total
-        output_rows.append(updated)
+            if weight_total <= 0.0:
+                raise ValueError("Difficulty score has zero active weight for at least one row.")
+            updated["difficulty_score"] = weighted_sum / weight_total
+            output_rows.append(updated)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed processing difficulty row index={row_index} at position={idx}"
+            ) from exc
 
+    difficulty_scores = [row["difficulty_score"] for row in output_rows]
+    log(f"Saving {len(output_rows)} rows to {args.output_path}")
     save_jsonl(output_rows, args.output_path)
+    log(
+        "Done. "
+        f"difficulty_score_range=({min(difficulty_scores):.6f}, {max(difficulty_scores):.6f})"
+    )
 
 
 if __name__ == "__main__":

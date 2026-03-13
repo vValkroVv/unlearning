@@ -117,6 +117,9 @@ def load_model_bundle(
     tokenizer_path: Optional[str] = None,
     model_subfolder: Optional[str] = None,
     tokenizer_subfolder: Optional[str] = None,
+    lora_r: Optional[int] = None,
+    lora_alpha: Optional[int] = None,
+    lora_dropout: Optional[float] = None,
 ):
     model_cfg = OmegaConf.load(model_cfg_path)
     # Offline artifact tools manage their own device placement, so avoid
@@ -144,6 +147,14 @@ def load_model_bundle(
     if tokenizer_subfolder not in (None, "", "null", "None"):
         with open_dict(model_cfg):
             model_cfg.tokenizer_args.subfolder = tokenizer_subfolder
+    if model_cfg.get("lora_config", None) is not None:
+        with open_dict(model_cfg):
+            if lora_r is not None:
+                model_cfg.lora_config.r = int(lora_r)
+            if lora_alpha is not None:
+                model_cfg.lora_config.lora_alpha = int(lora_alpha)
+            if lora_dropout is not None:
+                model_cfg.lora_config.lora_dropout = float(lora_dropout)
     model, tokenizer = get_model(model_cfg)
     if hasattr(model, "config") and model.config is not None:
         model.config.use_cache = False

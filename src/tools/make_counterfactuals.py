@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict
 
 import torch
+from tqdm.auto import tqdm
 
 SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
@@ -29,6 +30,14 @@ from tools.dual_cf_artifact_utils import (
     save_jsonl,
     select_device,
 )
+
+
+def log(message: str) -> None:
+    print(f"[make_counterfactuals] {message}", flush=True)
+
+
+def normalize_text(value: str) -> str:
+    return " ".join(str(value).strip().lower().split())
 
 
 def parse_args():
@@ -75,6 +84,11 @@ def load_mapping(path: str, key_field: str, alternate_field: str) -> Dict[str, s
 
 
 def build_generator(args):
+    log(
+        "Loading generator model "
+        f"cfg={args.model_cfg} model_path={args.model_path or '<cfg-default>'} "
+        f"tokenizer_path={args.tokenizer_path or '<model-path>'}"
+    )
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
@@ -86,6 +100,7 @@ def build_generator(args):
     if getattr(model, "hf_device_map", None) is None:
         model = model.to(device)
     model.eval()
+    log(f"Generator model ready on device={device}")
 
     def generate_alternate(question: str, answer: str) -> str:
         prompt_variants = [
@@ -149,6 +164,12 @@ def build_generator(args):
 
 def main():
     args = parse_args()
+    log(
+        "Starting with "
+        f"dataset_path={args.dataset_path} split={args.split} "
+        f"dataset_name={args.dataset_name} data_files={args.data_files} "
+        f"output_path={args.output_path}"
+    )
     dataset = load_dataset_split(
         path=args.dataset_path,
         split=args.split,
@@ -156,18 +177,31 @@ def main():
         data_files=args.data_files,
         max_examples=args.max_examples,
     )
+    dataset_size = len(dataset) if hasattr(dataset, "__len__") else None
+    if dataset_size is not None:
+        log(f"Loaded {dataset_size} source rows")
 
     mapping = None
     generate_alternate = None
     if args.alternate_column:
-        pass
+        log(f"Using alternate column `{args.alternate_column}` from the dataset")
     elif args.alternate_jsonl:
+        log(
+            "Loading alternates from JSONL "
+            f"path={args.alternate_jsonl} key={args.mapping_key} "
+            f"alternate_key={args.mapping_alternate_key}"
+        )
         mapping = load_mapping(
             path=args.alternate_jsonl,
             key_field=args.mapping_key,
             alternate_field=args.mapping_alternate_key,
         )
+        log(f"Loaded {len(mapping)} alternate mappings")
     elif args.model_cfg:
+        log(
+            "Generating alternates with model "
+            f"max_new_tokens={args.max_new_tokens} temperature={args.temperature} top_p={args.top_p}"
+        )
         generate_alternate = build_generator(args)
     else:
         raise ValueError(
@@ -175,33 +209,58 @@ def main():
         )
 
     rows = []
-    for row in dataset:
-        answer = resolve_answer(
-            row=row,
-            answer_key=args.answer_key,
-            answer_index=args.answer_index,
-        )
-        if args.alternate_column:
-            alternate = row[args.alternate_column]
-        elif mapping is not None:
-            join_value = str(row[args.mapping_key])
-            if join_value not in mapping:
-                raise KeyError(
-                    f"No alternate found for {args.mapping_key}={join_value} in mapping."
-                )
-            alternate = mapping[join_value]
-        else:
-            alternate = generate_alternate(
-                str(row[args.question_key]),
-                str(answer),
+    empty_alternate_count = 0
+    same_as_answer_count = 0
+    row_iter = tqdm(
+        dataset,
+        total=dataset_size,
+        desc="counterfactual_rows",
+        dynamic_ncols=True,
+    )
+    for row_no, row in enumerate(row_iter, start=1):
+        row_index = row.get("index", "<missing>")
+        try:
+            answer = resolve_answer(
+                row=row,
+                answer_key=args.answer_key,
+                answer_index=args.answer_index,
             )
+            if args.alternate_column:
+                alternate = row[args.alternate_column]
+            elif mapping is not None:
+                join_value = str(row[args.mapping_key])
+                if join_value not in mapping:
+                    raise KeyError(
+                        f"No alternate found for {args.mapping_key}={join_value} in mapping."
+                    )
+                alternate = mapping[join_value]
+            else:
+                alternate = generate_alternate(
+                    str(row[args.question_key]),
+                    str(answer),
+                )
 
-        updated = dict(row)
-        updated["answer"] = answer
-        updated["alternate"] = str(alternate).strip()
-        rows.append(updated)
+            updated = dict(row)
+            updated["answer"] = answer
+            updated["alternate"] = str(alternate).strip()
+            if not updated["alternate"]:
+                empty_alternate_count += 1
+            if normalize_text(updated["alternate"]) == normalize_text(answer):
+                same_as_answer_count += 1
+            rows.append(updated)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed processing row_no={row_no} index={row_index} "
+                f"question_key={args.question_key}"
+            ) from exc
 
+    log(f"Saving {len(rows)} rows to {args.output_path}")
     save_jsonl(rows, args.output_path)
+    log(
+        "Done. "
+        f"rows={len(rows)} empty_alternates={empty_alternate_count} "
+        f"same_as_answer_after_normalization={same_as_answer_count}"
+    )
 
 
 if __name__ == "__main__":

@@ -51,6 +51,16 @@ with:
 - `scripts/popqa/dual_cf_popqa.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
 
+### Documentation / runbooks
+
+- `prod-run-dual-gpu.md`
+
+### End-to-end runner scripts
+
+- `dual-scripts-run/run_llama_dual_cf_e2e.sh`
+- `dual-scripts-run/run_qwen_dual_cf_e2e.sh`
+- `dual-scripts-run/run_gemma_dual_cf_e2e.sh`
+
 ### Offline artifact tools
 
 - `src/tools/dual_cf_artifact_utils.py`
@@ -341,13 +351,104 @@ Added file:
 
 Purpose:
 
-- reusable JSONL validation for:
-  - required keys
-  - duplicate indices
-  - empty question/answer/alternate fields
-  - non-finite score values
-  - `alternate == answer`
-  - difficulty/attribution range reporting
+- reusable JSONL validation for required keys
+- duplicate indices
+- empty question / answer / alternate fields
+- non-finite score values
+- `alternate == answer`
+- difficulty / attribution range reporting
+
+## Production alignment (2026-03-13)
+
+Changed files:
+
+- `configs/experiment/unlearn/rwku/dual_cf_lora.yaml`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- RWKU DualCF now defaults to the current production instruct stack:
+  `Llama-3.1-8B-Instruct` and `Llama-3.1-8B-Instruct-lora`
+- DUET and RWKU DualCF launchers now default to the same production surface as
+  the other active methods: `PER_DEVICE_TRAIN_BS=16`, `GRAD_ACCUM=2`,
+  `NUM_EPOCHS=2`, `EVAL_BATCH_SIZE=64`, and
+  `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`
+- Added `prod-run-dual-gpu.md` with merged-only `DUET` artifact generation,
+  `RWKU` artifact generation, mandatory `validate_dual_cf_artifact.py` before
+  training, and six ready-to-run training launches
+- The new runbook keeps full attribution scoring explicit via
+  `--retain-max-steps 0` and `--forget-max-steps 0`
+
+## Artifact observability (2026-03-13)
+
+Changed files:
+
+- `src/tools/make_counterfactuals.py`
+- `src/tools/score_difficulty.py`
+- `src/tools/score_attribution.py`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- added explicit stage prints for dataset loading, model loading, scoring mode,
+  output path, and final score ranges
+- added `tqdm` progress bars to `make_counterfactuals.py` and
+  `score_difficulty.py`; `score_attribution.py` now also reports the final
+  write stage in addition to retain / forget gradient progress
+- per-row failures now raise with row position / index context so it is easier
+  to identify the broken sample or stage when an artifact build fails
+- updated the production DualCF artifact runbook for H100 80GB usage:
+  `score_difficulty.py --batch-size 32` and
+  `score_attribution.py --retain-batch-size 4`
+
+## Artifact LoRA parity (2026-03-13)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `src/tools/score_attribution.py`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- `score_attribution.py` now accepts explicit LoRA overrides:
+  `--lora-r`, `--lora-alpha`, `--lora-dropout`
+- the shared offline model loader now applies those overrides before building
+  the temporary LoRA model used for attribution scoring
+- the production DualCF runbook now pins attribution scoring to the same LoRA
+  shape as the previous production runs:
+  `r=32`, `alpha=64`, `dropout=0.0`
+
+## End-to-end wrappers (2026-03-13)
+
+Changed files:
+
+- `dual-scripts-run/run_llama_dual_cf_e2e.sh`
+- `dual-scripts-run/run_qwen_dual_cf_e2e.sh`
+- `dual-scripts-run/run_gemma_dual_cf_e2e.sh`
+
+Updates:
+
+- added three model-specific wrapper scripts that execute the full DualCF flow
+  for each family:
+  merged DUET artifact build, DUET validation, DUET training, RWKU artifact
+  build, RWKU validation, and RWKU training
+- each wrapper accepts GPU and epoch parameters either as positional args or as
+  env vars:
+  `bash .../run_llama_dual_cf_e2e.sh 4 2` or
+  `CUDA_VISIBLE_DEVICES=4 NUM_EPOCHS=2 bash .../run_llama_dual_cf_e2e.sh`
+- wrappers reuse the same production defaults as `prod-run-dual-gpu.md` and
+  keep artifact LoRA parity with training via `r=32`, `alpha=64`,
+  `dropout=0.0`
+- wrappers now also support hardware-specific batch profiles:
+  `H100` and `L40S`
+- current built-in estimates are:
+  - `H100`: train batch `16`, grad accum `2`, eval batch `64`,
+    difficulty batch `32`, attribution retain batch `4`
+  - `L40S`: train batch `8`, grad accum `4`, eval batch `32`,
+    difficulty batch `16`, attribution retain batch `2`
 
 ## Offline tooling
 

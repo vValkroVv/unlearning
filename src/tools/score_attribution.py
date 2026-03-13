@@ -29,6 +29,10 @@ from tools.dual_cf_artifact_utils import (
 )
 
 
+def log(message: str) -> None:
+    print(f"[score_attribution] {message}", flush=True)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Score DualCF attribution artifacts.")
     parser.add_argument("--model-cfg", required=True)
@@ -59,6 +63,9 @@ def parse_args():
     parser.add_argument("--device", default=None)
     parser.add_argument("--lora-only", action="store_true")
     parser.add_argument("--alignment", choices=("dot", "cosine"), default="dot")
+    parser.add_argument("--lora-r", type=int, default=None)
+    parser.add_argument("--lora-alpha", type=int, default=None)
+    parser.add_argument("--lora-dropout", type=float, default=None)
     return parser.parse_args()
 
 
@@ -116,6 +123,7 @@ def accumulate_retain_gradient(
             if param.grad is not None:
                 retain_grad[name] += param.grad.detach().float().cpu()
         steps += 1
+        retain_iter.set_postfix(steps=steps)
 
     if steps <= 0:
         raise ValueError("Retain gradient accumulation saw zero steps.")
@@ -124,11 +132,17 @@ def accumulate_retain_gradient(
     retain_norm = math.sqrt(
         sum(float((grad * grad).sum().item()) for grad in retain_grad.values())
     )
-    return retain_grad, retain_norm
+    return retain_grad, retain_norm, steps
 
 
 def main():
     args = parse_args()
+    log(
+        "Starting with "
+        f"forget_dataset={args.forget_dataset_path}:{args.forget_dataset_name}:{args.forget_split} "
+        f"retain_dataset={args.retain_dataset_path}:{args.retain_dataset_name}:{args.retain_split} "
+        f"output_path={args.output_path}"
+    )
     retain_question_key = args.retain_question_key or args.question_key
     forget_limit = 0
     if int(args.forget_max_steps) > 0:
@@ -136,18 +150,29 @@ def main():
     elif int(args.forget_max_examples) > 0:
         forget_limit = int(args.forget_max_examples)
 
+    log(
+        "Loading attribution model "
+        f"cfg={args.model_cfg} model_path={args.model_path or '<cfg-default>'} "
+        f"tokenizer_path={args.tokenizer_path or '<model-path>'} "
+        f"lora_only={args.lora_only} alignment={args.alignment} "
+        f"lora_r={args.lora_r} lora_alpha={args.lora_alpha} lora_dropout={args.lora_dropout}"
+    )
     model, tokenizer, template_args = load_model_bundle(
         model_cfg_path=args.model_cfg,
         model_path=args.model_path,
         tokenizer_path=args.tokenizer_path,
         model_subfolder=args.model_subfolder,
         tokenizer_subfolder=args.tokenizer_subfolder,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
     )
     device = select_device(args.device)
     move_to_device = getattr(model, "hf_device_map", None) is None
     if move_to_device:
         model = model.to(device)
     model.eval()
+    log(f"Model ready on device={device}")
 
     forget_dataset = build_qa_dataset(
         dataset_path=args.forget_dataset_path,
@@ -188,6 +213,13 @@ def main():
             forget_dataset,
             range(min(forget_limit, len(forget_dataset))),
         )
+    log(
+        "Prepared datasets with "
+        f"forget_rows={len(forget_rows)} "
+        f"retain_rows={len(retain_dataset) if hasattr(retain_dataset, '__len__') else 'unknown'} "
+        f"retain_batch_size={max(1, int(args.retain_batch_size))} "
+        f"forget_batch_size=1"
+    )
 
     collator = DataCollatorForSupervisedDataset(tokenizer, index="index")
     retain_loader = DataLoader(
@@ -206,14 +238,23 @@ def main():
     selected_params = list(iter_selected_params(model, lora_only=args.lora_only))
     if not selected_params:
         raise ValueError("No trainable parameters matched the requested attribution setup.")
+    log(
+        "Selected trainable params "
+        f"count={len(selected_params)} sample={[name for name, _ in selected_params[:5]]}"
+    )
 
-    retain_grad, retain_norm = accumulate_retain_gradient(
+    log("Accumulating retain gradients")
+    retain_grad, retain_norm, retain_steps = accumulate_retain_gradient(
         model=model,
         dataloader=retain_loader,
         selected_params=selected_params,
         device=device,
         move_to_device=move_to_device,
         max_steps=int(args.retain_max_steps),
+    )
+    log(
+        "Retain gradient accumulation finished "
+        f"steps={retain_steps} retain_norm={retain_norm:.6f}"
     )
 
     grad_by_index: Dict[int, Dict[str, float]] = {}
@@ -223,50 +264,70 @@ def main():
         desc="forget_grad",
         dynamic_ncols=True,
     )
+    log("Scoring forget examples against retain gradient reference")
     for batch in forget_iter:
-        model.zero_grad(set_to_none=True)
-        outputs = model(**to_model_inputs(batch, device=device, move_to_device=move_to_device))
-        outputs.loss.backward()
+        row_index = int(batch["index"][0].item())
+        try:
+            model.zero_grad(set_to_none=True)
+            outputs = model(**to_model_inputs(batch, device=device, move_to_device=move_to_device))
+            outputs.loss.backward()
 
-        dot_value = 0.0
-        forget_norm_sq = 0.0
-        for name, param in selected_params:
-            if param.grad is None:
-                continue
-            forget_grad = param.grad.detach().float().cpu()
-            retain_component = retain_grad[name]
-            dot_value += float((forget_grad * retain_component).sum().item())
-            forget_norm_sq += float((forget_grad * forget_grad).sum().item())
+            dot_value = 0.0
+            forget_norm_sq = 0.0
+            for name, param in selected_params:
+                if param.grad is None:
+                    continue
+                forget_grad = param.grad.detach().float().cpu()
+                retain_component = retain_grad[name]
+                dot_value += float((forget_grad * retain_component).sum().item())
+                forget_norm_sq += float((forget_grad * forget_grad).sum().item())
 
-        forget_norm = math.sqrt(forget_norm_sq)
-        cosine_value = dot_value / max(forget_norm * max(retain_norm, 1e-12), 1e-12)
-        score_value = cosine_value if args.alignment == "cosine" else dot_value
-        grad_by_index[int(batch["index"][0].item())] = {
-            "grad_align": dot_value,
-            "grad_align_cosine": cosine_value,
-            "risk_raw": max(0.0, score_value),
-        }
+            forget_norm = math.sqrt(forget_norm_sq)
+            cosine_value = dot_value / max(forget_norm * max(retain_norm, 1e-12), 1e-12)
+            score_value = cosine_value if args.alignment == "cosine" else dot_value
+            grad_by_index[row_index] = {
+                "grad_align": dot_value,
+                "grad_align_cosine": cosine_value,
+                "risk_raw": max(0.0, score_value),
+            }
+        except Exception as exc:
+            raise RuntimeError(f"Failed attribution scoring for forget index={row_index}") from exc
 
     risk_norm = normalize_minmax(
         [grad_by_index[int(row["index"])]["risk_raw"] for row in forget_rows]
     )
 
     output_rows = []
-    for norm_score, row in zip(risk_norm, forget_rows):
+    output_iter = tqdm(
+        zip(risk_norm, forget_rows),
+        total=len(forget_rows),
+        desc="write_scores",
+        dynamic_ncols=True,
+    )
+    for norm_score, row in output_iter:
         row_index = int(row["index"])
-        answer = resolve_answer(
-            row=row,
-            answer_key=args.forget_answer_key,
-            answer_index=args.forget_answer_index,
-        )
-        updated = dict(row)
-        updated["answer"] = answer
-        updated["grad_align"] = grad_by_index[row_index]["grad_align"]
-        updated["grad_align_cosine"] = grad_by_index[row_index]["grad_align_cosine"]
-        updated["attribution_score"] = norm_score
-        output_rows.append(updated)
+        try:
+            answer = resolve_answer(
+                row=row,
+                answer_key=args.forget_answer_key,
+                answer_index=args.forget_answer_index,
+            )
+            updated = dict(row)
+            updated["answer"] = answer
+            updated["grad_align"] = grad_by_index[row_index]["grad_align"]
+            updated["grad_align_cosine"] = grad_by_index[row_index]["grad_align_cosine"]
+            updated["attribution_score"] = norm_score
+            output_rows.append(updated)
+        except Exception as exc:
+            raise RuntimeError(f"Failed writing attribution row index={row_index}") from exc
 
+    attribution_scores = [row["attribution_score"] for row in output_rows]
+    log(f"Saving {len(output_rows)} rows to {args.output_path}")
     save_jsonl(output_rows, args.output_path)
+    log(
+        "Done. "
+        f"attribution_score_range=({min(attribution_scores):.6f}, {max(attribution_scores):.6f})"
+    )
 
 
 if __name__ == "__main__":

@@ -58,10 +58,10 @@ if [[ -n "${FORGET_SPLIT_OVERRIDE:-}" && -n "${RETAIN_SPLIT_OVERRIDE:-}" ]]; the
     )
 fi
 
-per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
-gradient_accumulation_steps=${GRAD_ACCUM:-32}
-eval_batch_size=${EVAL_BATCH_SIZE:-8}
-num_train_epochs=${NUM_EPOCHS:-5}
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-16}
+gradient_accumulation_steps=${GRAD_ACCUM:-2}
+eval_batch_size=${EVAL_BATCH_SIZE:-64}
+num_train_epochs=${NUM_EPOCHS:-2}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 
@@ -77,7 +77,7 @@ if [[ "${cf_dataset_path}" == "json" ]] && is_nullish "${cf_dataset_data_files}"
     exit 1
 fi
 
-raw_lrs="${LRS:-1e-5}"
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
 raw_lrs="${raw_lrs//\"/}"
 raw_lrs="${raw_lrs//\'/}"
