@@ -72,6 +72,15 @@ export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-32}
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-1}
 export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-1}
 export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-12}
+export UTILITY_ROOT=${UTILITY_ROOT:-${REPO_ROOT}/artifacts/evals/utility_1k_v1}
+export BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-${DATA_ROOT}/saves/eval/utility_baselines}
+export RUN_UTILITY_EVAL=${RUN_UTILITY_EVAL:-1}
+export EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
+export UTILITY_EVAL_BATCH_SIZE=${UTILITY_EVAL_BATCH_SIZE:-16}
+export UTILITY_APPLY_CHAT_TEMPLATE=${UTILITY_APPLY_CHAT_TEMPLATE:-true}
+export BASE_MODEL_EVAL_CONFIG=${BASE_MODEL_EVAL_CONFIG:-${BASE_MODEL}}
+export LORA_MODEL_EVAL_CONFIG=${LORA_MODEL_EVAL_CONFIG:-${MODEL_CONFIG}}
+export UTILITY_FORGET_TAU=${UTILITY_FORGET_TAU:-}
 
 export LRS="${LRS:-1e-5}"
 export TAU_DS="${TAU_DS:-0.5}"
@@ -118,6 +127,36 @@ Half-epoch note for the `NUM_EPOCHS=1` validation profile:
 - keep `MAX_STEPS=0`
 - launchers compute `save_steps = ceil(steps_per_epoch / 2)`
 - expect one `checkpoint-*` around half an epoch plus the final run directory
+
+## Utility-1K panel
+
+Build the fixed general-knowledge panel once per machine and reuse it for every
+method, seed, and checkpoint run.
+
+```bash
+mkdir -p "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
+
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
+  --mmlu-pro 400 \
+  --truthfulqa-bin 200 \
+  --arc 200 \
+  --winogrande 200
+```
+
+If you already have a forget-target alias file, rebuild the panel with:
+
+```bash
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
+  --mmlu-pro 400 \
+  --truthfulqa-bin 200 \
+  --arc 200 \
+  --winogrande 200 \
+  --exclude-targets-file /data/home/vkropoti/unlearning/evals/forget_target_aliases.txt
+```
 
 ## vLLM generator
 
@@ -337,6 +376,8 @@ Every method variant above uses the same trajectory-saving behavior:
 - endpoint eval into `run_dir/evals`
 - training trace in `run_dir/dualcf_trace.jsonl`
 - top-level adapter safetensor cleanup after endpoint eval
+- the same post-hoc checkpoint evaluator for forget/locality plus Utility-1K
+  when `RUN_UTILITY_EVAL=1`
 
 ## RWKU training
 
@@ -356,67 +397,83 @@ Run the same ablation variants on RWKU after DUET rare / popular are stable.
 DUET:
 
 ```bash
-scripts/duet/eval_checkpoints_duet.sh \
+RUN_UTILITY_EVAL=1 scripts/duet/eval_checkpoints_duet.sh \
   /path/to/run_dir \
   city_forget_rare_5 \
   city_fast_retain_500 \
   ${HF_BASE_MODEL_PATH} \
   ${HF_BASE_MODEL_PATH} \
-  ${MODEL_CONFIG}
+  ${LORA_MODEL_EVAL_CONFIG} \
+  ${BASE_MODEL_EVAL_CONFIG}
 ```
 
 For LoKU, the checkpoint evaluator auto-detects `run_dir/base_model` and uses
-it instead of the original base path. To clean that FILA base after trajectory
-eval:
+it instead of the original base path. If you want a second utility baseline on
+that LoKU base model, set `EVAL_RUN_BASE_MODEL=1`. To clean the FILA base after
+trajectory eval:
 
 ```bash
-DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/duet/eval_checkpoints_duet.sh \
+RUN_UTILITY_EVAL=1 EVAL_RUN_BASE_MODEL=1 DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 \
+scripts/duet/eval_checkpoints_duet.sh \
   /path/to/loku_run_dir \
   city_forget_rare_5 \
   city_fast_retain_500 \
   ${HF_BASE_MODEL_PATH} \
   ${HF_BASE_MODEL_PATH} \
-  ${MODEL_CONFIG}
+  ${LORA_MODEL_EVAL_CONFIG} \
+  ${BASE_MODEL_EVAL_CONFIG}
 ```
 
 RWKU:
 
 ```bash
-scripts/rwku/eval_checkpoints_rwku.sh \
+RUN_UTILITY_EVAL=1 scripts/rwku/eval_checkpoints_rwku.sh \
   /path/to/run_dir \
   forget_level2 \
   neighbor_level2 \
   ${HF_BASE_MODEL_PATH} \
   ${HF_BASE_MODEL_PATH} \
-  ${MODEL_CONFIG}
+  ${LORA_MODEL_EVAL_CONFIG} \
+  ${BASE_MODEL_EVAL_CONFIG}
 ```
 
 For LoKU on RWKU, the same cleanup pattern works:
 
 ```bash
-DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/rwku/eval_checkpoints_rwku.sh \
+RUN_UTILITY_EVAL=1 EVAL_RUN_BASE_MODEL=1 DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 \
+scripts/rwku/eval_checkpoints_rwku.sh \
   /path/to/loku_run_dir \
   forget_level2 \
   neighbor_level2 \
   ${HF_BASE_MODEL_PATH} \
   ${HF_BASE_MODEL_PATH} \
-  ${MODEL_CONFIG}
+  ${LORA_MODEL_EVAL_CONFIG} \
+  ${BASE_MODEL_EVAL_CONFIG}
 ```
 
 Each script writes:
 
 - per-checkpoint eval folders under `checkpoint_evals/`
 - `checkpoint_evals/summary.tsv`
+- per-checkpoint Utility-1K eval folders under `checkpoint_evals_utility/`
+- `checkpoint_evals_utility/summary.tsv`
+- `checkpoint_evals_merged/summary.tsv`
+- `checkpoint_evals_merged/trajectory_metrics.json`
 
 If the top-level run directory was already cleaned by
 `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`, the checkpoint-eval scripts skip
 reloading that endpoint adapter and reuse the existing `run_dir/evals`
-summary instead.
+summary instead. Utility evaluation will then use the highest surviving
+checkpoint as the endpoint proxy.
 
 By default, the checkpoint-eval scripts also delete
 `checkpoint-*/adapter_model.safetensors` after successful trajectory eval.
 Set `DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=0` if you need to keep
 them for a rerun.
+
+`UTILITY_FORGET_TAU` is optional. If you set it before the checkpoint sweep,
+the merged trajectory JSON will also report `U@F_tau` at the nearest matched
+forget score.
 
 ## Campaign order
 

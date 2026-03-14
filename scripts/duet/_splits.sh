@@ -14,29 +14,35 @@ set_forget_retain_splits() {
     local merge_flag="${MERGE_POPULARITY_FORGET:-0}"
     if [[ "${merge_flag}" != "1" ]]; then
         forget_retain_splits=("${DUET_SPLITS[@]}")
-        return
+    else
+        declare -A merge_forget
+        declare -A merge_label
+        local pair forget retain base key
+        for pair in "${DUET_SPLITS[@]}"; do
+            forget=$(echo "$pair" | cut -d' ' -f1)
+            retain=$(echo "$pair" | cut -d' ' -f2)
+            base=${forget/_rare_/_}
+            base=${base/_popular_/_}
+            key="${base}|${retain}"
+            if [[ -z "${merge_forget[$key]+x}" ]]; then
+                merge_forget[$key]="${forget}"
+            else
+                merge_forget[$key]="${merge_forget[$key]}+${forget}"
+            fi
+            merge_label[$key]="${base}"
+        done
+
+        forget_retain_splits=()
+        for key in "${!merge_forget[@]}"; do
+            retain=${key#*|}
+            forget_retain_splits+=("${merge_forget[$key]} ${retain} ${merge_label[$key]}")
+        done
     fi
 
-    declare -A merge_forget
-    declare -A merge_label
-    local pair forget retain base key
-    for pair in "${DUET_SPLITS[@]}"; do
-        forget=$(echo "$pair" | cut -d' ' -f1)
-        retain=$(echo "$pair" | cut -d' ' -f2)
-        base=${forget/_rare_/_}
-        base=${base/_popular_/_}
-        key="${base}|${retain}"
-        if [[ -z "${merge_forget[$key]+x}" ]]; then
-            merge_forget[$key]="${forget}"
-        else
-            merge_forget[$key]="${merge_forget[$key]}+${forget}"
-        fi
-        merge_label[$key]="${base}"
-    done
-
-    forget_retain_splits=()
-    for key in "${!merge_forget[@]}"; do
-        retain=${key#*|}
-        forget_retain_splits+=("${merge_forget[$key]} ${retain} ${merge_label[$key]}")
-    done
+    if [[ -n "${FORGET_SPLIT_OVERRIDE:-}" && -n "${RETAIN_SPLIT_OVERRIDE:-}" ]]; then
+        local override_label="${FORGET_LABEL_OVERRIDE:-${FORGET_SPLIT_OVERRIDE}}"
+        forget_retain_splits=(
+            "${FORGET_SPLIT_OVERRIDE} ${RETAIN_SPLIT_OVERRIDE} ${override_label}"
+        )
+    fi
 }

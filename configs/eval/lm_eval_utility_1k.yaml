@@ -1,0 +1,17 @@
+# @package eval.lm_eval
+
+handler: LMEvalEvaluator
+output_dir: ${paths.output_dir}
+overwrite: true
+include_subtask_metrics: true
+
+include_path: configs/lm_eval_tasks/utility_1k
+
+tasks:
+  - utility_1k
+
+simple_evaluate_args:
+  batch_size: 16
+  num_fewshot: 0
+  apply_chat_template: true
+  system_instruction: null

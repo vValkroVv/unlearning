@@ -125,6 +125,7 @@ importance_lora_dropout="${IMPORTANCE_LORA_DROPOUT:-${lora_dropouts[0]}}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
 delete_fila_base_after_eval="${DELETE_FILA_BASE_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 if [[ "${checkpoint_every_half_epoch}" == "1" && "${delete_fila_base_after_eval}" == "1" ]]; then
     echo "[rwku][LoKU] CHECKPOINT_EVERY_HALF_EPOCH=1 requires keeping FILA base_model for later checkpoint eval; overriding DELETE_FILA_BASE_AFTER_EVAL=0"
@@ -354,7 +355,7 @@ for lr in "${lrs[@]}"; do
                                     trainer.method_args.fila_adapter_name=${fila_adapter_name}
                                     trainer.method_args.fila_base_subdir=${base_residual_dir}
                                     trainer.method_args.run_fila_sanity_check=${run_fila_sanity_check}
-                                    trainer.trace_jsonl=true
+                                    +trainer.trace_jsonl=true
                                     retain_logs_path=null
                                     "${extra_schedule_args[@]}"
                                     paths.output_dir=${run_dir}
@@ -391,6 +392,17 @@ for lr in "${lrs[@]}"; do
                                 retain_logs_path=null \
                             )
                             python src/eval.py "${eval_cmd[@]}"
+
+                            if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                FILA_BASE_PATH="${base_residual_dir}" bash "${script_dir}/eval_checkpoints_rwku.sh" \
+                                    "${run_dir}" \
+                                    "${forget_split}" \
+                                    "${retain_split}" \
+                                    "${base_model_path}" \
+                                    "${tokenizer_model_path}" \
+                                    "${lora_model}" \
+                                    "${base_model}"
+                            fi
 
                             if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
                                 if compgen -G "${run_dir}/*.safetensors" > /dev/null; then

@@ -1,0 +1,6 @@
+group: utility_1k
+task:
+  - utility_mmlu_pro_400
+  - utility_truthfulqa_bin_200
+  - utility_arc_200
+  - utility_winogrande_200

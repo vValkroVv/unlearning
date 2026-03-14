@@ -8,33 +8,33 @@ METHOD_VARIANT=${METHOD_VARIANT:-full}
 
 case "${METHOD_VARIANT}" in
   full)
-    exec "${script_dir}/dual_cf_rwku.sh"
+    exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
   d_only)
     export DISABLE_ATTRIBUTION_ROUTES=${DISABLE_ATTRIBUTION_ROUTES:-true}
-    exec "${script_dir}/dual_cf_rwku.sh"
+    exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
   a_only)
     export DISABLE_DIFFICULTY_ROUTES=${DISABLE_DIFFICULTY_ROUTES:-true}
-    exec "${script_dir}/dual_cf_rwku.sh"
+    exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
   dpo)
     export TRAINER=${TRAINER:-DPO}
     export METHOD_NAME=${METHOD_NAME:-dpo_cf}
     export RUN_LABEL=${RUN_LABEL:-DPO}
-    exec "${script_dir}/dual_cf_rwku.sh"
+    exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
   ga)
-    exec "${script_dir}/ga_rwku.sh"
+    exec bash "${script_dir}/ga_rwku.sh"
     ;;
   npo)
-    exec "${script_dir}/npo_rwku.sh"
+    exec bash "${script_dir}/npo_rwku.sh"
     ;;
   npo_sam)
-    exec "${script_dir}/npo_sam_rwku.sh"
+    exec bash "${script_dir}/npo_sam_rwku.sh"
     ;;
   loku)
-    exec "${script_dir}/loku_rwku.sh"
+    exec bash "${script_dir}/loku_rwku.sh"
     ;;
   *)
     echo "[run_dualcf_ablation_v2] Unsupported METHOD_VARIANT=${METHOD_VARIANT}" >&2

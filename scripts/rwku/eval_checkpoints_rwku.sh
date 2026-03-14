@@ -2,8 +2,10 @@
 
 set -euo pipefail
 
+script_dir=$(dirname "$(realpath "$0")")
+
 if [[ $# -lt 5 ]]; then
-  echo "usage: $0 RUN_DIR FORGET_SPLIT RETAIN_SPLIT BASE_MODEL_PATH TOKENIZER_PATH [MODEL_CONFIG]" >&2
+  echo "usage: $0 RUN_DIR FORGET_SPLIT RETAIN_SPLIT BASE_MODEL_PATH TOKENIZER_PATH [LORA_MODEL_CONFIG] [BASE_MODEL_CONFIG]" >&2
   exit 1
 fi
 
@@ -12,10 +14,19 @@ FORGET_SPLIT=$2
 RETAIN_SPLIT=$3
 BASE_MODEL_PATH=$4
 TOKENIZER_PATH=$5
-MODEL_CONFIG=${6:-Llama-3.1-8B-Instruct-lora}
+ORIGINAL_BASE_MODEL_PATH=${BASE_MODEL_PATH}
+MODEL_CONFIG_RAW=${6:-${LORA_MODEL_EVAL_CONFIG:-Llama-3.1-8B-Instruct-lora}}
+BASE_MODEL_CONFIG_RAW=${7:-${BASE_MODEL_EVAL_CONFIG:-}}
 EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-64}
 DELETE_RUN_BASE_MODEL_AFTER_EVAL=${DELETE_RUN_BASE_MODEL_AFTER_EVAL:-0}
 DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL:-1}
+
+normalize_model_config_name() {
+  local raw="${1:-}"
+  raw="${raw##*/}"
+  raw="${raw%.yaml}"
+  echo "${raw}"
+}
 
 has_loadable_weights() {
   local model_dir="$1"
@@ -42,6 +53,15 @@ delete_checkpoint_adapter_weights() {
   done < <(find "${run_dir}" -maxdepth 1 -type d -name 'checkpoint-*' -print0)
   echo "[rwku][ckpt-eval] Removed ${deleted} checkpoint adapter weight files"
 }
+
+MODEL_CONFIG=$(normalize_model_config_name "${MODEL_CONFIG_RAW}")
+if [[ -n "${BASE_MODEL_CONFIG_RAW}" ]]; then
+  BASE_MODEL_CONFIG=$(normalize_model_config_name "${BASE_MODEL_CONFIG_RAW}")
+elif [[ "${MODEL_CONFIG}" == *-lora ]]; then
+  BASE_MODEL_CONFIG="${MODEL_CONFIG%-lora}"
+else
+  BASE_MODEL_CONFIG="${MODEL_CONFIG}"
+fi
 
 RESOLVED_BASE_MODEL_PATH=${FILA_BASE_PATH:-${BASE_MODEL_PATH}}
 if [[ -d "${RUN_DIR}/base_model" ]]; then
@@ -80,6 +100,29 @@ done
 python src/tools/summarize_checkpoint_metrics.py \
   --run-dir "${RUN_DIR}" \
   --output-path "${RUN_DIR}/checkpoint_evals/summary.tsv"
+
+if [[ "${RUN_UTILITY_EVAL:-0}" == "1" ]]; then
+  LORA_BASE_MODEL_PATH="${RESOLVED_BASE_MODEL_PATH}" "${script_dir}/../utility/eval_checkpoints_utility.sh" \
+    "${RUN_DIR}" \
+    "${BASE_MODEL_CONFIG}" \
+    "${MODEL_CONFIG}" \
+    "${ORIGINAL_BASE_MODEL_PATH}" \
+    "${TOKENIZER_PATH}"
+fi
+
+if [[ -f "${RUN_DIR}/checkpoint_evals/summary.tsv" && -f "${RUN_DIR}/checkpoint_evals_utility/summary.tsv" ]]; then
+  merge_cmd=(
+    python src/tools/merge_checkpoint_utility_summaries.py
+    --checkpoint-summary "${RUN_DIR}/checkpoint_evals/summary.tsv"
+    --utility-summary "${RUN_DIR}/checkpoint_evals_utility/summary.tsv"
+    --output-path "${RUN_DIR}/checkpoint_evals_merged/summary.tsv"
+    --trajectory-path "${RUN_DIR}/checkpoint_evals_merged/trajectory_metrics.json"
+  )
+  if [[ -n "${UTILITY_FORGET_TAU:-}" ]]; then
+    merge_cmd+=(--forget-tau "${UTILITY_FORGET_TAU}")
+  fi
+  "${merge_cmd[@]}"
+fi
 
 if [[ "${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL}" == "1" ]]; then
   delete_checkpoint_adapter_weights "${RUN_DIR}"

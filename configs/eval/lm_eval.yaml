@@ -4,6 +4,8 @@
 handler: LMEvalEvaluator
 output_dir: ${paths.output_dir} # set to default eval directory
 overwrite: false
+include_subtask_metrics: false
+include_path: null
 
 # Define evaluation tasks here
 tasks:

@@ -89,6 +89,7 @@ lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -172,7 +173,7 @@ for lr in "${lrs[@]}"; do
                                             trainer.method_args.sam_rho=${sam_rho}
                                             trainer.method_args.sam_adaptive=${sam_adaptive}
                                             trainer.method_args.sam_eps=${sam_eps}
-                                            trainer.trace_jsonl=true
+                                            +trainer.trace_jsonl=true
                                             retain_logs_path=null
                                             "${extra_schedule_args[@]}"
                                             paths.output_dir=${run_dir}
@@ -208,6 +209,17 @@ for lr in "${lrs[@]}"; do
                                         retain_logs_path=null \
                                     )
                                     python src/eval.py "${eval_cmd[@]}"
+
+                                    if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                        bash "${script_dir}/eval_checkpoints_rwku.sh" \
+                                            "${run_dir}" \
+                                            "${forget_split}" \
+                                            "${retain_split}" \
+                                            "${base_model_path}" \
+                                            "${tokenizer_model_path}" \
+                                            "${lora_model}" \
+                                            "${base_model}"
+                                    fi
 
                                     if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
                                         if compgen -G "${run_dir}/*.safetensors" > /dev/null; then

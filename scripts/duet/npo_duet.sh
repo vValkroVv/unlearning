@@ -92,6 +92,7 @@ lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
@@ -159,7 +160,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.model_args.pretrained_model_name_or_path=${base_model_path}
                                         model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
                                         model.model_args.device_map="auto"
-                                        model.model_args.low_cpu_mem_usage=true
+                                        ++model.model_args.low_cpu_mem_usage=true
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
@@ -171,7 +172,7 @@ for split in "${forget_retain_splits[@]}"; do
                                         trainer.method_args.alpha=${alpha}
                                         trainer.method_args.gamma=${gamma}
                                         trainer.method_args.retain_loss_type=NLL
-                                        trainer.trace_jsonl=true
+                                        +trainer.trace_jsonl=true
                                         retain_logs_path=null
                                         "${extra_schedule_args[@]}"
                                         "${extra_train_args[@]}"
@@ -195,10 +196,10 @@ for split in "${forget_retain_splits[@]}"; do
                                     holdout_split=${retain_split} \
                                     task_name=${task_name} \
                                     model.model_args.pretrained_model_name_or_path=${run_dir} \
-                                    model.model_args.base_model_name_or_path=${base_model_path} \
+                                    ++model.model_args.base_model_name_or_path=${base_model_path} \
                                     model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
                                     model.model_args.device_map="auto" \
-                                    model.model_args.low_cpu_mem_usage=true \
+                                    ++model.model_args.low_cpu_mem_usage=true \
                                     model.lora_config.r=${lora_r} \
                                     model.lora_config.lora_alpha=${lora_alpha} \
                                     model.lora_config.lora_dropout=${lora_dropout} \
@@ -209,6 +210,17 @@ for split in "${forget_retain_splits[@]}"; do
                                     retain_logs_path=null \
                                 )
                                 python src/eval.py "${eval_cmd[@]}"
+
+                                if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                    bash "${script_dir}/eval_checkpoints_duet.sh" \
+                                        "${run_dir}" \
+                                        "${forget_split}" \
+                                        "${retain_split}" \
+                                        "${base_model_path}" \
+                                        "${tokenizer_model_path}" \
+                                        "${lora_model}" \
+                                        "${base_model}"
+                                fi
 
                                 if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
                                     if compgen -G "${run_dir}/*.safetensors" > /dev/null; then

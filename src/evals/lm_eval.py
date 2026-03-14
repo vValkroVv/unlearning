@@ -1,4 +1,5 @@
 import logging
+from contextlib import contextmanager
 from omegaconf import OmegaConf
 
 from lm_eval.models.hf_vlms import HFLM
@@ -18,13 +19,53 @@ class LMEvalEvaluator(Evaluator):
         self.tasks = OmegaConf.to_container(
             self.eval_cfg.tasks, resolve=True, throw_on_missing=True
         )
-        self.task_manager = TaskManager()
         self.simple_evaluate_args = dict(kwargs.get("simple_evaluate_args", {}))
+        self.include_subtask_metrics = bool(
+            self.eval_cfg.get("include_subtask_metrics", False)
+        )
+        include_path = self.eval_cfg.get("include_path", None)
+        if include_path is not None and OmegaConf.is_config(include_path):
+            include_path = OmegaConf.to_container(include_path, resolve=True)
+        self.task_manager = (
+            TaskManager(include_path=include_path) if include_path else TaskManager()
+        )
+
+    @contextmanager
+    def _skip_peft_tie_weights(self, model):
+        """
+        lm-eval's HFLM re-calls tie_weights() even when we pass an already-loaded
+        PEFT-wrapped model instance. Some LoRA checkpoints that adapt lm_head then
+        fail inside transformers during that second tie step. The model is already
+        loaded in a valid tied state, so we temporarily no-op tie_weights only for
+        the HFLM wrapper construction and restore the original method afterwards.
+        """
+        if not hasattr(model, "peft_config"):
+            yield
+            return
+
+        tie_weights = getattr(model, "tie_weights", None)
+        if not callable(tie_weights):
+            yield
+            return
+
+        setattr(model, "tie_weights", lambda: model)
+        try:
+            yield
+        finally:
+            setattr(model, "tie_weights", tie_weights)
 
     def prepare_model(self, model, **kwargs):
         """Prepare model for evaluation"""
         model.eval()
-        return HFLM(model)
+        hflm_args = {
+            "tokenizer": kwargs.get("tokenizer", None),
+        }
+        for key in ("batch_size", "max_batch_size"):
+            value = self.simple_evaluate_args.get(key)
+            if value is not None:
+                hflm_args[key] = value
+        with self._skip_peft_tie_weights(model):
+            return HFLM(model, **hflm_args)
 
     def summarize(self, eval_results: dict, task_name: str) -> dict:
         """
@@ -52,6 +93,16 @@ class LMEvalEvaluator(Evaluator):
                     summary[key] = float(value)
                 except (TypeError, ValueError):
                     summary[key] = value
+            if self.include_subtask_metrics:
+                for subtask_name, task_metrics in eval_results.get("results", {}).items():
+                    for metric_name, value in task_metrics.items():
+                        key = clean_metric_key(subtask_name, metric_name)
+                        if key is None:
+                            continue
+                        try:
+                            summary[key] = float(value)
+                        except (TypeError, ValueError):
+                            summary[key] = value
         else:
             task_metrics = eval_results.get("results", {}).get(task_name, {})
             for metric_name, value in task_metrics.items():
@@ -108,7 +159,7 @@ class LMEvalEvaluator(Evaluator):
                 task_manager=self.task_manager,
                 **self.simple_evaluate_args,
             )
-            logs.update({task_name: results["samples"]})
+            logs.update({task_name: results.get("samples", {})})
             summary.update(self.summarize(results, task_name))
             self.save_logs(logs, logs_file_path)
             self.save_logs(summary, summary_file_path)

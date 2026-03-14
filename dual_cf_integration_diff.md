@@ -924,3 +924,147 @@ Residual note:
 - full RWKU checkpoint-trajectory evaluation was not rerun because it would
   repeat full benchmark eval over all saved checkpoints; the script fix itself
   was validated on DUET and is shared with RWKU
+
+## General LLM utility checkpoint evaluation update (2026-03-14)
+
+Changed files:
+
+- `src/evals/lm_eval.py`
+- `configs/eval/lm_eval.yaml`
+- `configs/eval/lm_eval_utility_1k.yaml`
+- `configs/experiment/eval/utility_1k/default.yaml`
+- `configs/lm_eval_tasks/utility_1k/utils.py`
+- `configs/lm_eval_tasks/utility_1k/_base_mc.yaml`
+- `configs/lm_eval_tasks/utility_1k/utility_mmlu_pro_400.yaml`
+- `configs/lm_eval_tasks/utility_1k/utility_truthfulqa_bin_200.yaml`
+- `configs/lm_eval_tasks/utility_1k/utility_arc_200.yaml`
+- `configs/lm_eval_tasks/utility_1k/utility_winogrande_200.yaml`
+- `configs/lm_eval_tasks/utility_1k/_utility_1k.yaml`
+- `src/tools/build_utility_1k_panel.py`
+- `src/tools/checkpoint_summary_utils.py`
+- `src/tools/summarize_checkpoint_metrics.py`
+- `src/tools/summarize_utility_metrics.py`
+- `src/tools/merge_checkpoint_utility_summaries.py`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/rwku/eval_checkpoints_rwku.sh`
+- `prod-run-dual-vast.md`
+- `tests/test_utility_pipeline.py`
+
+Updates:
+
+- added a fixed local `Utility-1K` pipeline built from:
+  - `MMLU-Pro 400`
+  - `TruthfulQA-Binary 200`
+  - `ARC-Challenge 200`
+  - `WinoGrande-debiased 200`
+- `build_utility_1k_panel.py` freezes those subsets into local JSONL files and
+  optionally filters rows that mention forget targets / aliases before the panel
+  is written
+- the lm-eval wrapper now supports:
+  - `include_path` for repo-local custom task directories
+  - `include_subtask_metrics` so grouped runs like `utility_1k` still expose the
+    per-task accuracies needed for weighted utility summaries
+  - forwarding the already-loaded tokenizer and effective batch size into
+    `HFLM(...)`, which the old wrapper was not doing
+- added a dedicated Utility-1K lm-eval config plus repo-local task YAMLs for the
+  fixed panel
+- added `scripts/utility/eval_checkpoints_utility.sh`, which evaluates:
+  - `base_model_orig`
+  - optional `base_model_run`
+  - every `checkpoint-*`
+  - `final` when top-level weights still exist
+- DUET and RWKU checkpoint-eval scripts now optionally call the utility sweep
+  through `RUN_UTILITY_EVAL=1` before any checkpoint adapter cleanup happens
+- the standard checkpoint summary now normalizes the top-level endpoint label to
+  `final` and records `step` plus `epoch`
+- added:
+  - `checkpoint_evals_utility/summary.tsv`
+  - `checkpoint_evals_merged/summary.tsv`
+  - `checkpoint_evals_merged/trajectory_metrics.json`
+- merged trajectory metrics now report:
+  - weighted `utility_avg`
+  - `utility_delta_vs_base`
+  - utility AUC
+  - max utility drawdown
+  - best-final gap
+  - optional `U@F_tau` when `UTILITY_FORGET_TAU` is set
+- the VAST runbook now documents:
+  - one-time Utility-1K panel build
+  - baseline-cache location
+  - DUET / RWKU checkpoint sweep commands with utility enabled for all
+    algorithm variants
+
+Validation:
+
+- `bash -n scripts/utility/eval_checkpoints_utility.sh`
+- `bash -n scripts/duet/eval_checkpoints_duet.sh`
+- `bash -n scripts/rwku/eval_checkpoints_rwku.sh`
+- `.venv/bin/python -m py_compile` on the new / changed Python files
+- `.venv/bin/python -m unittest discover -s tests -v`
+  - this ran a real smoke path that:
+    - built a local panel from fixture datasets
+    - created a tiny local tokenizer, base model, and LoRA adapters
+    - executed `scripts/utility/eval_checkpoints_utility.sh`
+    - generated utility and merged checkpoint summaries end to end
+
+Additional DUET launcher updates:
+
+- `scripts/duet/_splits.sh`
+  - now honors `FORGET_SPLIT_OVERRIDE`, `RETAIN_SPLIT_OVERRIDE`, and
+    `FORGET_LABEL_OVERRIDE` consistently for the ablation runner and all older
+    DUET baselines
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+  - now preserves explicit split overrides instead of overwriting them for
+    `rare` / `popular`
+  - now dispatches sub-scripts through `bash ...` instead of relying on execute
+    bits
+- `scripts/duet/ga_duet.sh`
+- `scripts/duet/npo_duet.sh`
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/loku_duet.sh`
+  - fixed Hydra overrides for `trace_jsonl` and optional model args in the older
+    scripts
+  - when `RUN_UTILITY_EVAL=1`, these launchers now automatically run the
+    checkpoint sweep plus Utility-1K after the normal endpoint DUET eval, before
+    top-level adapter cleanup
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+  - fixed LoKU utility baselining so `base_model_orig` always uses the original
+    pretrained base model, while LoKU checkpoints / final still use the FILA
+    residual `base_model` as their adapter base
+
+Additional validation:
+
+- real 1-epoch DUET smoke runs through `scripts/duet/run_dualcf_ablation_v2.sh`
+  with `RUN_UTILITY_EVAL=1` succeeded for:
+  - `METHOD_VARIANT=ga`
+  - `METHOD_VARIANT=npo`
+  - `METHOD_VARIANT=npo_sam`
+  - `METHOD_VARIANT=loku`
+- each smoke run produced:
+  - `checkpoint_evals/summary.tsv`
+  - `checkpoint_evals_utility/summary.tsv`
+  - `checkpoint_evals_merged/summary.tsv`
+  - `checkpoint_evals_merged/trajectory_metrics.json`
+
+RWKU compatibility follow-up:
+
+- the older RWKU baselines had the same integration hazards as the older DUET
+  baselines:
+  - `scripts/rwku/run_dualcf_ablation_v2.sh` relied on execute bits instead of
+    dispatching sub-scripts through `bash`
+  - `scripts/rwku/ga_rwku.sh`
+  - `scripts/rwku/npo_rwku.sh`
+  - `scripts/rwku/npo_sam_rwku.sh`
+  - `scripts/rwku/loku_rwku.sh`
+    - used Hydra overrides that could fail on older configs
+    - did not automatically run post-hoc checkpoint eval / Utility-1K when
+      `RUN_UTILITY_EVAL=1`
+- `scripts/rwku/eval_checkpoints_rwku.sh` also had the same LoKU utility-base
+  bug that DUET had:
+  - `base_model_orig` could incorrectly use the FILA residual `base_model`
+    instead of the original pretrained base model
+- these RWKU scripts were patched to match the DUET fixes, but they have not yet
+  been validated with the same real multi-method smoke sweep that was run for
+  DUET
