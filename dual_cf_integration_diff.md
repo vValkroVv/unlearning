@@ -50,6 +50,14 @@ with:
 - `scripts/duet/dual_cf_duet.sh`
 - `scripts/popqa/dual_cf_popqa.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/duet/ga_duet.sh`
+- `scripts/duet/npo_duet.sh`
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/loku_duet.sh`
+- `scripts/rwku/ga_rwku.sh`
+- `scripts/rwku/npo_rwku.sh`
+- `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/loku_rwku.sh`
 
 ### Documentation / runbooks
 
@@ -207,6 +215,33 @@ This supports the intended ablations without additional trainer classes:
 
 Uniform counterfactual remains available through the existing `DPO` trainer.
 
+## Baseline parity update (2026-03-14)
+
+To make the DUET/RWKU ablation tree directly comparable against DualCF v2, the
+baseline launchers now mirror the same run-management behavior:
+
+- respect a shared `OUTPUT_ROOT`, so production runs can stay under
+  `/data/home/vkropoti/unlearning/saves/unlearn`
+- support `CHECKPOINT_EVERY_HALF_EPOCH=1` with dynamic `save_steps` computed
+  from the actual forget split size
+- support `SAVE_TOTAL_LIMIT` and `MAX_STEPS` in the same style as the DualCF
+  launchers
+- enable `trainer.trace_jsonl=true`, which writes `dualcf_trace.jsonl` into each
+  run directory for GA / NPO / NPO-SAM / LoKU as well
+- keep `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1` behavior consistent, removing
+  top-level run safetensors after endpoint evaluation while leaving
+  `checkpoint-*` directories available for trajectory evaluation
+- LoKU now keeps `run_dir/base_model` by default during trajectory campaigns,
+  and checkpoint evaluators auto-detect that FILA base model for checkpoint
+  scoring before optional cleanup
+
+The checkpoint/eval flow is still two-stage for every method:
+
+1. run the launcher or ablation wrapper to train and do the endpoint eval
+2. run `scripts/duet/eval_checkpoints_duet.sh` or
+   `scripts/rwku/eval_checkpoints_rwku.sh` on the saved run directory to score
+   all half-epoch checkpoints and produce `checkpoint_evals/summary.tsv`
+
 ## Verification-driven fixes (2026-03-09)
 
 After running the DUET and RWKU smoke/functional checks from
@@ -257,6 +292,290 @@ Changed files:
 - `scripts/rwku/dual_cf_rwku.sh`
 
 Fix:
+
+- local JSON runs now quote `cf_dataset_split` consistently so Hydra receives the
+  intended split literal
+
+## DualCF v2 upgrade (2026-03-14)
+
+This update integrates the reviewer-requested next iteration of DualCF instead
+of only documenting the earlier routed baseline.
+
+### New files
+
+Artifact generation / scoring:
+
+- `src/tools/vllm_cf_client.py`
+- `src/tools/build_duet_candidate_bank.py`
+- `src/tools/clean_counterfactuals.py`
+- `src/tools/build_proxy_retain_map.py`
+- `src/tools/calibrate_dual_cf_scores.py`
+- `src/tools/summarize_checkpoint_metrics.py`
+
+Trainer / callbacks:
+
+- `src/trainer/callbacks/__init__.py`
+- `src/trainer/callbacks/jsonl_trace.py`
+
+Configs / scripts:
+
+- `configs/experiment/unlearn/duet/dual_cf_v2_lora.yaml`
+- `configs/experiment/unlearn/rwku/dual_cf_v2_lora.yaml`
+- `scripts/vllm/start_qwen3_cf_server.sh`
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/rwku/eval_checkpoints_rwku.sh`
+
+### Updated files
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `src/tools/make_counterfactuals.py`
+- `src/tools/score_difficulty.py`
+- `src/tools/score_attribution.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `src/trainer/unlearn/dual_cf.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/DualCF.yaml`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+
+### Counterfactual generator v2
+
+`src/tools/make_counterfactuals.py` now supports two generation backends:
+
+- `hf` for the old local-model path
+- `vllm_openai` for a separate vLLM server
+
+Added CLI flags:
+
+- `--generator-backend`
+- `--vllm-base-url`
+- `--vllm-api-key`
+- `--vllm-model`
+- `--generator-concurrency`
+- `--generator-batch-size`
+- `--candidate-bank`
+- `--repair-invalid`
+- `--reject-gold-substring`
+- `--require-short-answer`
+- `--max-overlap-ratio`
+- `--max-alt-length-chars`
+
+`src/tools/vllm_cf_client.py` uses the OpenAI-compatible vLLM server with
+structured JSON outputs so alternates stay short and explanation-style leakage
+is suppressed at generation time.
+
+### DUET candidate bank
+
+`src/tools/build_duet_candidate_bank.py` builds relation-consistent candidates by
+grouping rows by `property_pid`, excluding the same `object_qid`, and emitting a
+per-row `candidate_answers` list. The generator can then choose or minimally
+rewrite candidates instead of free-form inventing long explanations.
+
+### Cleaning and strict validation
+
+`src/tools/clean_counterfactuals.py` applies a dedicated cleanup / repair pass:
+
+- strips prefixes like `Alternative answer:`
+- keeps the first answer span
+- optionally repairs invalid alternates from the candidate bank
+- annotates `cf_invalid_reason` and `cf_is_valid`
+
+`src/tools/validate_dual_cf_artifact.py` now supports stricter checks:
+
+- `--reject-gold-substring`
+- `--require-short-answer`
+- `--max-alt-length-chars`
+- `--check-overlap-ratio`
+- `--strict`
+
+The validator also accepts `--input-path` as an alias for `--artifact-path` and
+checks optional raw score fields when present.
+
+### Richer artifact schema
+
+The v2 artifact tools keep the trainer-facing keys unchanged:
+
+```json
+{
+  "index": 17,
+  "question": "...",
+  "answer": "...",
+  "alternate": "...",
+  "difficulty_score": 0.63,
+  "attribution_score": 0.71
+}
+```
+
+but now also emit raw routing metadata for offline recalibration:
+
+```json
+{
+  "difficulty_score_raw": 0.58,
+  "attribution_score_raw": 0.014,
+  "difficulty_components": {
+    "confidence": 0.82,
+    "popularity": 0.61,
+    "stage_prior": 1.0,
+    "stability": 0.0
+  },
+  "attribution_components": {
+    "global_align": 0.12,
+    "global_align_cosine": 0.07,
+    "local_align": 0.25,
+    "local_align_cosine": 0.19,
+    "proxy_mode": "template_exact",
+    "proxy_key": "...",
+    "proxy_size": 12
+  }
+}
+```
+
+### Offline percentile calibration
+
+`src/tools/calibrate_dual_cf_scores.py` converts raw routing scores into
+artifact-local percentiles and writes calibrated `difficulty_score` /
+`attribution_score` before training. This replaces the earlier assumption that
+raw `0.5` thresholds mean the same thing across model families and datasets.
+
+### Difficulty scorer v2
+
+`src/tools/score_difficulty.py` now:
+
+- accepts `--input-path`
+- writes `difficulty_score_raw` and `difficulty_components`
+- supports `--w-stability`
+- supports `--stability-mode prompt_perturb`
+- keeps a simple no-model path for popularity-only scoring
+
+Important implementation note:
+
+- this script no longer depends on `trainer.utils` import side effects, so it
+  can run in artifact-prep environments that do not have the full training stack
+  loaded
+
+### Attribution scorer v2
+
+`src/tools/build_proxy_retain_map.py` builds a syntax-aware proxy map using a
+delexicalized question template and a fallback token-overlap search.
+
+`src/tools/score_attribution.py` now supports:
+
+- `--retain-proxy-mode global|template_local|hybrid`
+- `--retain-proxy-map`
+- `--hybrid-rho`
+
+In hybrid mode, the tool computes:
+
+- one global retain gradient reference
+- cached local retain gradients per proxy group
+- a mixed raw attribution score used later for percentile calibration
+
+### Trainer updates
+
+`src/trainer/unlearn/dual_cf.py` now adds:
+
+- `alpha_eff_stat`
+- `alpha_eff_topk_frac`
+- `risk_power`
+- `neg_power`
+
+The retain-side batch summary is no longer hard-coded to `risk_gate.mean()`:
+
+```python
+risk_batch = self._summarize_risk(risk_gate)
+lambda_ret_batch = self.lambda_ret_lo + (
+    self.lambda_ret_hi - self.lambda_ret_lo
+) * risk_batch
+```
+
+Supported retain summaries:
+
+- `mean`
+- `p75`
+- `max`
+- `topk_mean`
+
+The trainer now also logs richer route diagnostics:
+
+- `dualcf_s_p50`
+- `dualcf_s_p90`
+- `dualcf_r_p50`
+- `dualcf_r_p90`
+- `dualcf_r_hi_frac`
+- `dualcf_risk_batch`
+
+### Trace logging
+
+`src/trainer/callbacks/jsonl_trace.py` appends every trainer log event to
+`dualcf_trace.jsonl` in the run directory.
+
+`src/trainer/__init__.py` now auto-registers that callback when
+`trace_jsonl: true` is set in the trainer config.
+
+### Config defaults
+
+`configs/trainer/DualCF.yaml` now defaults to the calibrated-score regime:
+
+- `tau_d: 0.6`
+- `tau_a: 0.6`
+- `temp_d: 0.15`
+- `temp_a: 0.15`
+- `lambda_ret_hi: 3.0`
+- `alpha_eff_stat: topk_mean`
+- `alpha_eff_topk_frac: 0.25`
+- `trace_jsonl: true`
+
+### Training / ablation scripts
+
+`scripts/duet/dual_cf_duet.sh` and `scripts/rwku/dual_cf_rwku.sh` were upgraded
+to support:
+
+- v2 experiment configs by default
+- `NUM_EPOCHS=5` by default
+- half-epoch checkpoint saving via `CHECKPOINT_EVERY_HALF_EPOCH=1`
+- dynamic `save_steps` / `logging_steps` computed from artifact size
+- new routing knobs:
+  - `ALPHA_EFF_STATS`
+  - `ALPHA_EFF_TOPK_FRACS`
+  - `RISK_POWERS`
+  - `NEG_POWERS`
+- method reuse through:
+  - `TRAINER`
+  - `METHOD_NAME`
+  - `RUN_LABEL`
+  - `OUTPUT_ROOT`
+
+`scripts/duet/run_dualcf_ablation_v2.sh` and
+`scripts/rwku/run_dualcf_ablation_v2.sh` add one launcher entry point for:
+
+- full DualCF
+- difficulty-only
+- attribution-only
+- DPO on the same artifact
+- GA / NPO / NPO-SAM / LoKU baseline dispatch
+
+### Checkpoint evaluation
+
+`scripts/duet/eval_checkpoints_duet.sh` and
+`scripts/rwku/eval_checkpoints_rwku.sh` evaluate all saved checkpoints plus the
+final run directory and then write `checkpoint_evals/summary.tsv` through
+`src/tools/summarize_checkpoint_metrics.py`.
+
+### Production runbook
+
+`prod-run-dual-gpu.md` now reflects the intended v2 campaign:
+
+- separate vLLM server
+- DUET rare/popular/merged preparation
+- RWKU hybrid attribution preparation
+- 5-epoch training
+- half-epoch checkpoint evaluation
+- DUET split-first campaign order
 
 - launcher train commands now pass
   `"cf_dataset_split='${cf_dataset_split}'"`

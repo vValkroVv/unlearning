@@ -23,6 +23,7 @@ from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
 from trainer.unlearn.loku import LoKU
 from trainer.unlearn.dual_cf import DualCF
+from trainer.callbacks import JsonlTraceCallback
 
 
 import logging
@@ -85,6 +86,8 @@ def load_trainer(
         template_args=template_args,
         **method_args,
     )
+    if bool(trainer_cfg.get("trace_jsonl", False)):
+        trainer.add_callback(JsonlTraceCallback())
     logger.info(
         f"{trainer_handler_name} Trainer loaded, output_dir: {trainer_args.output_dir}"
     )

@@ -6,6 +6,16 @@ script_dir=$(dirname "$(realpath "$0")")
 repo_root=$(realpath "${script_dir}/../..")
 source "${script_dir}/_splits.sh"
 
+resolve_num_rows() {
+    local split="$1"
+    python - <<PY
+import datasets
+split = ${split@Q}
+ds = datasets.load_dataset("SwetieePawsss/DUET", split=split)
+print(len(ds))
+PY
+}
+
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
@@ -45,8 +55,12 @@ fi
 experiment="unlearn/duet/loku_lora.yaml"
 trainer="LoKU"
 
-output_root="${repo_root}/saves/unlearn/duet/loku"
-importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
+output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/duet/loku}"
+if [[ -n "${OUTPUT_ROOT:-}" && -z "${IMPORTANCE_ROOT:-}" ]]; then
+    importance_root="$(dirname "${OUTPUT_ROOT}")/importances/duet/loku"
+else
+    importance_root="${IMPORTANCE_ROOT:-${repo_root}/saves/importances/duet/loku}"
+fi
 importance_path_template="${IMPORTANCE_PATH:-}"
 fila_base_root="${FILA_BASE_ROOT:-}"
 fila_base_path_template="${FILA_BASE_PATH:-}"
@@ -66,6 +80,9 @@ importance_max_steps=${IMPORTANCE_MAX_STEPS:-0}
 eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-2}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
+max_steps="${MAX_STEPS:-0}"
+checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -130,7 +147,12 @@ importance_lora_alpha="${IMPORTANCE_LORA_ALPHA:-${lora_alphas[0]}}"
 importance_lora_dropout="${IMPORTANCE_LORA_DROPOUT:-${lora_dropouts[0]}}"
 delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
-delete_fila_base_after_eval="${DELETE_FILA_BASE_AFTER_EVAL:-1}"
+delete_fila_base_after_eval="${DELETE_FILA_BASE_AFTER_EVAL:-0}"
+
+if [[ "${checkpoint_every_half_epoch}" == "1" && "${delete_fila_base_after_eval}" == "1" ]]; then
+    echo "[duet][LoKU] CHECKPOINT_EVERY_HALF_EPOCH=1 requires keeping FILA base_model for later checkpoint eval; overriding DELETE_FILA_BASE_AFTER_EVAL=0"
+    delete_fila_base_after_eval=0
+fi
 
 importance_cleanup_paths=()
 fila_base_cleanup_paths=()
@@ -307,42 +329,71 @@ for split in "${forget_retain_splits[@]}"; do
                                 if [[ ! -f "${adapter_path}" || ! -d "${base_residual_dir}" || "${force_rerun}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
                                     mkdir -p "$(dirname "${base_residual_dir}")"
-                                    python src/train.py --config-name=unlearn.yaml \
-                                        experiment=${experiment} \
-                                        trainer=${trainer} \
-                                        task_name=${task_name} \
-                                        model=${lora_model} \
-                                        forget_split=${forget_split} \
-                                        retain_split=${retain_split} \
-                                        model.model_args.pretrained_model_name_or_path=${base_model_path} \
-                                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
-                                        model.model_args.device_map="auto" \
-                                        ++model.model_args.low_cpu_mem_usage=true \
-                                        "model.lora_config.target_modules=${loku_target_modules}" \
-                                        model.lora_config.r=${lora_r} \
-                                        model.lora_config.lora_alpha=${lora_alpha} \
-                                        model.lora_config.lora_dropout=${lora_dropout} \
-                                        trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
-                                        trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
-                                        trainer.args.num_train_epochs=${num_train_epochs} \
-                                        trainer.args.gradient_checkpointing=${gradient_checkpointing} \
-                                        trainer.args.learning_rate=${lr} \
-                                        trainer.args.weight_decay=${loku_weight_decay} \
-                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type} \
-                                        +trainer.args.warmup_epochs=${loku_warmup_epochs} \
-                                        trainer.args.warmup_ratio=${loku_warmup_ratio} \
-                                        trainer.method_args.ihl_alpha=${ihl_alpha} \
-                                        trainer.method_args.alpha=${alpha} \
-                                        trainer.method_args.gamma=${gamma} \
-                                        trainer.method_args.retain_loss_type=NLL \
-                                        trainer.method_args.importance_file=${imp_path} \
-                                        trainer.method_args.fila_eps=${fila_eps} \
-                                        trainer.method_args.fila_adapter_name=${fila_adapter_name} \
-                                        trainer.method_args.fila_base_subdir=${base_residual_dir} \
-                                        trainer.method_args.run_fila_sanity_check=${run_fila_sanity_check} \
-                                        retain_logs_path=null \
-                                        "${extra_train_args[@]}" \
+                                    extra_schedule_args=()
+                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                        num_rows=$(resolve_num_rows "${forget_split}")
+                                        global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
+                                        steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
+                                        half_epoch_steps=$(( (steps_per_epoch + 1) / 2 ))
+                                        logging_steps=$(( half_epoch_steps / 2 ))
+                                        if [[ "${logging_steps}" -lt 1 ]]; then
+                                            logging_steps=1
+                                        fi
+                                        extra_schedule_args+=(
+                                            trainer.args.save_strategy=steps
+                                            trainer.args.save_steps=${half_epoch_steps}
+                                            trainer.args.save_total_limit=${save_total_limit}
+                                            trainer.args.logging_strategy=steps
+                                            trainer.args.logging_steps=${logging_steps}
+                                            trainer.args.save_safetensors=true
+                                            trainer.args.load_best_model_at_end=false
+                                        )
+                                    fi
+                                    train_cmd=(
+                                        src/train.py
+                                        --config-name=unlearn.yaml
+                                        experiment=${experiment}
+                                        trainer=${trainer}
+                                        task_name=${task_name}
+                                        model=${lora_model}
+                                        forget_split=${forget_split}
+                                        retain_split=${retain_split}
+                                        model.model_args.pretrained_model_name_or_path=${base_model_path}
+                                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
+                                        model.model_args.device_map="auto"
+                                        ++model.model_args.low_cpu_mem_usage=true
+                                        "model.lora_config.target_modules=${loku_target_modules}"
+                                        model.lora_config.r=${lora_r}
+                                        model.lora_config.lora_alpha=${lora_alpha}
+                                        model.lora_config.lora_dropout=${lora_dropout}
+                                        trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
+                                        trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
+                                        trainer.args.num_train_epochs=${num_train_epochs}
+                                        trainer.args.gradient_checkpointing=${gradient_checkpointing}
+                                        trainer.args.learning_rate=${lr}
+                                        trainer.args.weight_decay=${loku_weight_decay}
+                                        trainer.args.lr_scheduler_type=${loku_lr_scheduler_type}
+                                        +trainer.args.warmup_epochs=${loku_warmup_epochs}
+                                        trainer.args.warmup_ratio=${loku_warmup_ratio}
+                                        trainer.method_args.ihl_alpha=${ihl_alpha}
+                                        trainer.method_args.alpha=${alpha}
+                                        trainer.method_args.gamma=${gamma}
+                                        trainer.method_args.retain_loss_type=NLL
+                                        trainer.method_args.importance_file=${imp_path}
+                                        trainer.method_args.fila_eps=${fila_eps}
+                                        trainer.method_args.fila_adapter_name=${fila_adapter_name}
+                                        trainer.method_args.fila_base_subdir=${base_residual_dir}
+                                        trainer.method_args.run_fila_sanity_check=${run_fila_sanity_check}
+                                        trainer.trace_jsonl=true
+                                        retain_logs_path=null
+                                        "${extra_schedule_args[@]}"
+                                        "${extra_train_args[@]}"
                                         paths.output_dir=${run_dir}
+                                    )
+                                    if [[ "${max_steps}" != "0" ]]; then
+                                        train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    python "${train_cmd[@]}"
                                 fi
 
                                 mkdir -p "${eval_dir}"

@@ -1,3 +1,5 @@
+import math
+
 import torch
 
 from trainer.unlearn.grad_diff import GradDiff
@@ -21,6 +23,10 @@ class DualCF(GradDiff):
         normalize_neg_by_tokens=True,
         disable_difficulty_route=False,
         disable_attribution_route=False,
+        alpha_eff_stat="topk_mean",
+        alpha_eff_topk_frac=0.25,
+        risk_power=1.0,
+        neg_power=1.0,
         *args,
         **kwargs,
     ):
@@ -39,11 +45,17 @@ class DualCF(GradDiff):
         self.normalize_neg_by_tokens = bool(normalize_neg_by_tokens)
         self.disable_difficulty_route = bool(disable_difficulty_route)
         self.disable_attribution_route = bool(disable_attribution_route)
+        self.alpha_eff_stat = str(alpha_eff_stat)
+        self.alpha_eff_topk_frac = float(alpha_eff_topk_frac)
+        self.risk_power = float(risk_power)
+        self.neg_power = float(neg_power)
 
         if self.beta <= 0.0:
             raise ValueError("DualCF requires beta > 0.")
         if self.temp_d <= 0.0 or self.temp_a <= 0.0:
             raise ValueError("DualCF requires temp_d > 0 and temp_a > 0.")
+        if self.alpha_eff_topk_frac <= 0.0 or self.alpha_eff_topk_frac > 1.0:
+            raise ValueError("DualCF requires 0 < alpha_eff_topk_frac <= 1.")
 
         if self.ref_model is None:
             self.ref_model = self._prepare_ref_model(self.model)
@@ -74,6 +86,18 @@ class DualCF(GradDiff):
                 f"{score.numel()}."
             )
         return score
+
+    def _summarize_risk(self, risk_gate: torch.Tensor) -> torch.Tensor:
+        if self.alpha_eff_stat == "mean":
+            return risk_gate.mean()
+        if self.alpha_eff_stat == "p75":
+            return torch.quantile(risk_gate, 0.75)
+        if self.alpha_eff_stat == "max":
+            return risk_gate.max()
+        if self.alpha_eff_stat == "topk_mean":
+            topk = max(1, int(math.ceil(risk_gate.numel() * self.alpha_eff_topk_frac)))
+            return torch.topk(risk_gate, k=topk).values.mean()
+        raise ValueError(f"Unknown alpha_eff_stat={self.alpha_eff_stat}")
 
     def compute_loss(self, model, inputs, return_outputs=False):
         forget_inputs = inputs["forget"]
@@ -109,6 +133,8 @@ class DualCF(GradDiff):
 
         difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
         risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
+        difficulty_gate = difficulty_gate.pow(self.neg_power)
+        risk_gate = risk_gate.pow(self.risk_power)
 
         lambda_neg = self.lambda_neg_max * difficulty_gate * (1.0 - risk_gate)
         forget_scale = 1.0 - (1.0 - self.risk_forget_scale) * risk_gate
@@ -117,9 +143,10 @@ class DualCF(GradDiff):
             forget_scale * (self.cf_weight * cf_vec + lambda_neg * neg_vec)
         ).mean()
 
+        risk_batch = self._summarize_risk(risk_gate)
         lambda_ret_batch = self.lambda_ret_lo + (
             self.lambda_ret_hi - self.lambda_ret_lo
-        ) * risk_gate.mean()
+        ) * risk_batch
         alpha_eff = self.alpha * lambda_ret_batch
 
         retain_loss = self.compute_retain_loss(
@@ -147,7 +174,23 @@ class DualCF(GradDiff):
                     "dualcf_d_mean": float(difficulty.mean().detach().item()),
                     "dualcf_a_mean": float(attribution.mean().detach().item()),
                     "dualcf_s_mean": float(difficulty_gate.mean().detach().item()),
+                    "dualcf_s_p50": float(
+                        torch.quantile(difficulty_gate, 0.50).detach().item()
+                    ),
+                    "dualcf_s_p90": float(
+                        torch.quantile(difficulty_gate, 0.90).detach().item()
+                    ),
                     "dualcf_r_mean": float(risk_gate.mean().detach().item()),
+                    "dualcf_r_p50": float(
+                        torch.quantile(risk_gate, 0.50).detach().item()
+                    ),
+                    "dualcf_r_p90": float(
+                        torch.quantile(risk_gate, 0.90).detach().item()
+                    ),
+                    "dualcf_r_hi_frac": float(
+                        (risk_gate > 0.8).float().mean().detach().item()
+                    ),
+                    "dualcf_risk_batch": float(risk_batch.detach().item()),
                     "dualcf_lambda_neg_mean": float(
                         lambda_neg.mean().detach().item()
                     ),

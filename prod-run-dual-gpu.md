@@ -1,63 +1,15 @@
-# Production DualCF GPU Runs (Offline Server, DUET merged + RWKU)
+# Production DualCF GPU Runs (v2)
 
-This runbook is for the `DualCF` method only.
+This runbook is for the DualCF v2 iteration:
 
-It includes:
+- clean counterfactuals first
+- percentile-calibrate routing offline
+- use hybrid retain attribution
+- run DUET `rare -> popular -> merged`
+- train for `5` epochs
+- save/evaluate half-epoch checkpoints
 
-- merged `DUET` artifact generation for `Llama`, `Qwen`, `Gemma`
-- `RWKU` artifact generation for `Llama`, `Qwen`, `Gemma`
-- final training launches for all six runs
-
-Common production rules used below:
-
-- `PER_DEVICE_TRAIN_BS=16`
-- `GRAD_ACCUM=2`
-- `NUM_EPOCHS=2`
-- `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`
-- `EVAL_BATCH_SIZE=64`
-- `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
-- current production LoRA adapters use only `q_proj`, `k_proj`, `v_proj`, `o_proj`
-- `DUET` in this file is merged only via `MERGE_POPULARITY_FORGET=1`
-- full-artifact attribution scoring is explicit via `--retain-max-steps 0` and `--forget-max-steps 0`
-- for H100 80GB artifact prep in this file:
-  `score_difficulty.py --batch-size 32`
-  and `score_attribution.py --retain-batch-size 4`
-- attribution scoring is forced to production LoRA shape to match training:
-  `--lora-r 32 --lora-alpha 64 --lora-dropout 0.0`
-
-## Current Local Structure
-
-Expected layout inside `/data/home/vkropoti/unlearning`:
-
-```text
-SwetieePawsss/
-  DUET/
-    data/*.parquet
-  exp_r/
-    data/*.parquet
-  DUET_ft_models/
-    llama-3.1-8b-instruct-tripunlamb-ft/
-    qwen2.5-7b-instruct-tripunlamb-ft/
-    gemma-7b-it-tripunlamb-ft/
-models/
-  BASE/
-    Llama-3.1-8B-Instruct/
-    Qwen2.5-7B-Instruct/
-    gemma-7b-it/
-artifacts/
-  dualcf/
-    duet/
-    rwku/
-```
-
-## One-time path wiring
-
-If your code is in `/home/vkropoti/diploma/open-unlearning` but datasets/models are in
-`/data/home/vkropoti/unlearning/SwetieePawsss`, create this symlink once:
-
-```bash
-ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss /home/vkropoti/diploma/open-unlearning/SwetieePawsss
-```
+Do not use Gemma as the main evidence path until counterfactual leakage is fixed.
 
 ## Common setup
 
@@ -70,650 +22,291 @@ export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR"
 
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-export HF_DATASETS_OFFLINE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export PER_DEVICE_TRAIN_BS=16
+export GRAD_ACCUM=2
+export NUM_EPOCHS=5
+export EVAL_BATCH_SIZE=64
+export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1
+export CHECKPOINT_EVERY_HALF_EPOCH=1
+export SAVE_TOTAL_LIMIT=12
+export OUTPUT_ROOT=/data/home/vkropoti/unlearning/saves/unlearn
+
+export LRS="1e-6 5e-6 1e-5 5e-5 1e-4"
+export TAU_DS="0.4 0.5 0.6"
+export TAU_AS="0.4 0.5 0.6"
+export TEMP_DS="0.1 0.2 0.4"
+export TEMP_AS="0.1 0.2 0.4"
+export RISK_FORGET_SCALES="0.25 0.5 0.75"
+export LAMBDA_RET_HIS="2.0 3.0 4.0"
+export ALPHA_EFF_STATS="topk_mean"
+export ALPHA_EFF_TOPK_FRACS="0.25"
 ```
 
-## DUET merged artifacts
+`OUTPUT_ROOT` is respected by:
 
-Use merged forget only for `DUET` in this file:
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/duet/ga_duet.sh`
+- `scripts/duet/npo_duet.sh`
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/loku_duet.sh`
+- `scripts/rwku/ga_rwku.sh`
+- `scripts/rwku/npo_rwku.sh`
+- `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/loku_rwku.sh`
 
-- `city_forget_rare_5+city_forget_popular_5` for counterfactual generation
-- `city_fast_retain_500` for attribution retain bank
+So the run directories land under:
 
-Always run validation before training.
+- `/data/home/vkropoti/unlearning/saves/unlearn/<task_name>`
 
-### Llama - DUET merged artifact
+For `LoKU`, importance files also move out of the repo and default to:
+
+- `/data/home/vkropoti/unlearning/saves/importances/duet/loku`
+- `/data/home/vkropoti/unlearning/saves/importances/rwku/loku`
+
+With the matched launcher updates, all DUET/RWKU ablations now also:
+
+- save `checkpoint-*` directories every ~0.5 epoch when
+  `CHECKPOINT_EVERY_HALF_EPOCH=1`
+- write `dualcf_trace.jsonl` into each run directory
+- remove only top-level `*.safetensors` from `run_dir/` after endpoint eval when
+  `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
+
+Checkpoint safetensors are intentionally kept until you finish trajectory eval.
+
+LoKU-specific note:
+
+- `DELETE_FILA_BASE_AFTER_EVAL` now defaults to `0`
+- if you force `DELETE_FILA_BASE_AFTER_EVAL=1` together with
+  `CHECKPOINT_EVERY_HALF_EPOCH=1`, the launcher overrides it back to `0`
+- this is required because LoKU checkpoint eval needs `run_dir/base_model`
+
+## vLLM generator
+
+Run the Qwen3 generator in a separate env or container, not in the training env.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507
+export TP=4
+export MAX_LEN=8192
+export PORT=8000
+
+scripts/vllm/start_qwen3_cf_server.sh
+```
+
+In the training shell:
+
+```bash
+export VLLM_BASE_URL=http://127.0.0.1:8000/v1
+export VLLM_API_KEY=EMPTY
+export VLLM_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507
+```
+
+## Artifact prep
+
+### DUET rare
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
+export SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
+export FORGET_LABEL=rare
+export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/rare_llama_v2
+
+scripts/duet/prepare_dual_cf_duet_v2.sh
+```
+
+### DUET popular
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+export FORGET_LABEL=popular
+export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/popular_llama_v2
+
+scripts/duet/prepare_dual_cf_duet_v2.sh
+```
+
+### DUET merged
+
+Run this only after rare and popular are clean.
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+export FORGET_LABEL=merged
+export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/merged_llama_v2
+
+scripts/duet/prepare_dual_cf_duet_v2.sh
+```
+
+### RWKU
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
+export FORGET_SPLIT=forget_level2
+export RETAIN_SPLIT=neighbor_level2
+export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama_level2_v2
+
+scripts/rwku/prepare_dual_cf_rwku_v2.sh
+```
+
+## DUET training
+
+### Full DualCF
+
+Rare:
+
+```bash
+export CUDA_VISIBLE_DEVICES=4
+export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/rare_llama_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=full
+export FORGET_LABEL=rare
+
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Popular:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=5
+export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/popular_llama_v2/dualcf_popular_v2.jsonl
+export METHOD_VARIANT=full
+export FORGET_LABEL=popular
 
-ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/duet
-mkdir -p "$ART_ROOT"
-
-MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
-LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
-BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
-SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
-SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
-ART_PREFIX="$ART_ROOT/duet_llama_merged"
-
-## done
-python src/tools/make_counterfactuals.py \
-  --dataset-path SwetieePawsss/DUET \
-  --split 'city_forget_rare_5+city_forget_popular_5' \
-  --output-path "${ART_PREFIX}_step1.jsonl" \
-  --question-key question \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --max-new-tokens 32
-
-## done
-python src/tools/score_difficulty.py \
-  --dataset-path json \
-  --split train \
-  --data-files "${ART_PREFIX}_step1.jsonl" \
-  --output-path "${ART_PREFIX}_step2.jsonl" \
-  --question-key question \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$SFT_MODEL_PATH" \
-  --tokenizer-path "$SFT_MODEL_PATH" \
-  --model-subfolder "$SFT_SUBFOLDER" \
-  --tokenizer-subfolder "$SFT_SUBFOLDER" \
-  --popularity-column pop_sum \
-  --w-pop 1.0 \
-  --w-conf 1.0 \
-  --w-mrd 0.0 \
-  --w-stage 0.0 \
-  --batch-size 32
-
-## done
-python src/tools/score_attribution.py \
-  --model-cfg "$LORA_MODEL_CFG" \
-  --model-path "$SFT_MODEL_PATH" \
-  --tokenizer-path "$SFT_MODEL_PATH" \
-  --model-subfolder "$SFT_SUBFOLDER" \
-  --tokenizer-subfolder "$SFT_SUBFOLDER" \
-  --forget-dataset-path json \
-  --forget-split train \
-  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
-  --retain-dataset-path SwetieePawsss/DUET \
-  --retain-split city_fast_retain_500 \
-  --output-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key question \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
-  --lora-r 32 \
-  --lora-alpha 64 \
-  --lora-dropout 0.0 \
-  --lora-only
-
-python src/tools/validate_dual_cf_artifact.py \
-  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key question
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
-### Qwen - DUET merged artifact
+Merged:
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=6
+export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/merged_llama_v2/dualcf_merged_v2.jsonl
+export METHOD_VARIANT=full
+export FORGET_LABEL=merged
 
-ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/duet
-mkdir -p "$ART_ROOT"
-
-MODEL_CFG=configs/model/Qwen2.5-7B-Instruct.yaml
-LORA_MODEL_CFG=configs/model/Qwen2.5-7B-Instruct-lora.yaml
-BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct
-SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
-SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft
-ART_PREFIX="$ART_ROOT/duet_qwen_merged"
-
-python src/tools/make_counterfactuals.py \
-  --dataset-path SwetieePawsss/DUET \
-  --split 'city_forget_rare_5+city_forget_popular_5' \
-  --output-path "${ART_PREFIX}_step1.jsonl" \
-  --question-key question \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --max-new-tokens 32
-
-python src/tools/score_difficulty.py \
-  --dataset-path json \
-  --split train \
-  --data-files "${ART_PREFIX}_step1.jsonl" \
-  --output-path "${ART_PREFIX}_step2.jsonl" \
-  --question-key question \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$SFT_MODEL_PATH" \
-  --tokenizer-path "$SFT_MODEL_PATH" \
-  --model-subfolder "$SFT_SUBFOLDER" \
-  --tokenizer-subfolder "$SFT_SUBFOLDER" \
-  --popularity-column pop_sum \
-  --w-pop 1.0 \
-  --w-conf 1.0 \
-  --w-mrd 0.0 \
-  --w-stage 0.0 \
-  --batch-size 32
-
-python src/tools/score_attribution.py \
-  --model-cfg "$LORA_MODEL_CFG" \
-  --model-path "$SFT_MODEL_PATH" \
-  --tokenizer-path "$SFT_MODEL_PATH" \
-  --model-subfolder "$SFT_SUBFOLDER" \
-  --tokenizer-subfolder "$SFT_SUBFOLDER" \
-  --forget-dataset-path json \
-  --forget-split train \
-  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
-  --retain-dataset-path SwetieePawsss/DUET \
-  --retain-split city_fast_retain_500 \
-  --output-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key question \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
-  --lora-r 32 \
-  --lora-alpha 64 \
-  --lora-dropout 0.0 \
-  --lora-only
-
-python src/tools/validate_dual_cf_artifact.py \
-  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key question
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
-### Gemma - DUET merged artifact
+### Required ablations
+
+Difficulty-only:
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4
-
-ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/duet
-mkdir -p "$ART_ROOT"
-
-MODEL_CFG=configs/model/gemma-7b-it.yaml
-LORA_MODEL_CFG=configs/model/gemma-7b-it-lora.yaml
-BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it
-SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
-SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft
-ART_PREFIX="$ART_ROOT/duet_gemma_merged"
-
-python src/tools/make_counterfactuals.py \
-  --dataset-path SwetieePawsss/DUET \
-  --split 'city_forget_rare_5+city_forget_popular_5' \
-  --output-path "${ART_PREFIX}_step1.jsonl" \
-  --question-key question \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --max-new-tokens 32
-
-python src/tools/score_difficulty.py \
-  --dataset-path json \
-  --split train \
-  --data-files "${ART_PREFIX}_step1.jsonl" \
-  --output-path "${ART_PREFIX}_step2.jsonl" \
-  --question-key question \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$SFT_MODEL_PATH" \
-  --tokenizer-path "$SFT_MODEL_PATH" \
-  --model-subfolder "$SFT_SUBFOLDER" \
-  --tokenizer-subfolder "$SFT_SUBFOLDER" \
-  --popularity-column pop_sum \
-  --w-pop 1.0 \
-  --w-conf 1.0 \
-  --w-mrd 0.0 \
-  --w-stage 0.0 \
-  --batch-size 32
-
-python src/tools/score_attribution.py \
-  --model-cfg "$LORA_MODEL_CFG" \
-  --model-path "$SFT_MODEL_PATH" \
-  --tokenizer-path "$SFT_MODEL_PATH" \
-  --model-subfolder "$SFT_SUBFOLDER" \
-  --tokenizer-subfolder "$SFT_SUBFOLDER" \
-  --forget-dataset-path json \
-  --forget-split train \
-  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
-  --retain-dataset-path SwetieePawsss/DUET \
-  --retain-split city_fast_retain_500 \
-  --output-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key question \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
-  --lora-r 32 \
-  --lora-alpha 64 \
-  --lora-dropout 0.0 \
-  --lora-only
-
-python src/tools/validate_dual_cf_artifact.py \
-  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key question
+export METHOD_VARIANT=d_only
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
-## RWKU artifacts
-
-Use the benchmark forget/retain banks directly:
-
-- forget: `forget_level2`
-- retain: `neighbor_level2`
-
-### Llama - RWKU artifact
+Attribution-only:
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4
-
-ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku
-mkdir -p "$ART_ROOT"
-
-MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
-LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
-BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
-ART_PREFIX="$ART_ROOT/rwku_llama"
-
-##done
-python src/tools/make_counterfactuals.py \
-  --dataset-path SwetieePawsss/exp_r \
-  --dataset-name forget_level2 \
-  --split test \
-  --output-path "${ART_PREFIX}_step1.jsonl" \
-  --question-key query \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --max-new-tokens 32
-
-##done
-python src/tools/score_difficulty.py \
-  --dataset-path json \
-  --split train \
-  --data-files "${ART_PREFIX}_step1.jsonl" \
-  --output-path "${ART_PREFIX}_step2.jsonl" \
-  --question-key query \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --popularity-column pop_sum \
-  --w-pop 1.0 \
-  --w-conf 1.0 \
-  --w-mrd 0.0 \
-  --w-stage 0.0 \
-  --batch-size 32
-
-##done
-python src/tools/score_attribution.py \
-  --model-cfg "$LORA_MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --forget-dataset-path json \
-  --forget-split train \
-  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
-  --retain-dataset-path SwetieePawsss/exp_r \
-  --retain-dataset-name neighbor_level2 \
-  --retain-split test \
-  --output-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key query \
-  --retain-question-key query \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
-  --lora-r 32 \
-  --lora-alpha 64 \
-  --lora-dropout 0.0 \
-  --lora-only
-
-##done
-python src/tools/validate_dual_cf_artifact.py \
-  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key query
+export METHOD_VARIANT=a_only
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
-### Qwen - RWKU artifact
+Uniform counterfactual DPO:
 
 ```bash
-export CUDA_VISIBLE_DEVICES=2
-
-ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku
-mkdir -p "$ART_ROOT"
-
-MODEL_CFG=configs/model/Qwen2.5-7B-Instruct.yaml
-LORA_MODEL_CFG=configs/model/Qwen2.5-7B-Instruct-lora.yaml
-BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct
-ART_PREFIX="$ART_ROOT/rwku_qwen"
-
-python src/tools/make_counterfactuals.py \
-  --dataset-path SwetieePawsss/exp_r \
-  --dataset-name forget_level2 \
-  --split test \
-  --output-path "${ART_PREFIX}_step1.jsonl" \
-  --question-key query \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --max-new-tokens 32
-
-python src/tools/score_difficulty.py \
-  --dataset-path json \
-  --split train \
-  --data-files "${ART_PREFIX}_step1.jsonl" \
-  --output-path "${ART_PREFIX}_step2.jsonl" \
-  --question-key query \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --popularity-column pop_sum \
-  --w-pop 1.0 \
-  --w-conf 1.0 \
-  --w-mrd 0.0 \
-  --w-stage 0.0 \
-  --batch-size 32
-
-python src/tools/score_attribution.py \
-  --model-cfg "$LORA_MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --forget-dataset-path json \
-  --forget-split train \
-  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
-  --retain-dataset-path SwetieePawsss/exp_r \
-  --retain-dataset-name neighbor_level2 \
-  --retain-split test \
-  --output-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key query \
-  --retain-question-key query \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
-  --lora-r 32 \
-  --lora-alpha 64 \
-  --lora-dropout 0.0 \
-  --lora-only
-
-python src/tools/validate_dual_cf_artifact.py \
-  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key query
+export METHOD_VARIANT=dpo
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
-### Gemma - RWKU artifact
+Baselines:
 
 ```bash
-export CUDA_VISIBLE_DEVICES=5
+export METHOD_VARIANT=ga
+scripts/duet/run_dualcf_ablation_v2.sh
 
-ART_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku
-mkdir -p "$ART_ROOT"
+export METHOD_VARIANT=npo
+scripts/duet/run_dualcf_ablation_v2.sh
 
-MODEL_CFG=configs/model/gemma-7b-it.yaml
-LORA_MODEL_CFG=configs/model/gemma-7b-it-lora.yaml
-BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it
-ART_PREFIX="$ART_ROOT/rwku_gemma"
+export METHOD_VARIANT=npo_sam
+scripts/duet/run_dualcf_ablation_v2.sh
 
-python src/tools/make_counterfactuals.py \
-  --dataset-path SwetieePawsss/exp_r \
-  --dataset-name forget_level2 \
-  --split test \
-  --output-path "${ART_PREFIX}_step1.jsonl" \
-  --question-key query \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --max-new-tokens 32
-
-python src/tools/score_difficulty.py \
-  --dataset-path json \
-  --split train \
-  --data-files "${ART_PREFIX}_step1.jsonl" \
-  --output-path "${ART_PREFIX}_step2.jsonl" \
-  --question-key query \
-  --answer-key answer \
-  --model-cfg "$MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --popularity-column pop_sum \
-  --w-pop 1.0 \
-  --w-conf 1.0 \
-  --w-mrd 0.0 \
-  --w-stage 0.0 \
-  --batch-size 32
-
-python src/tools/score_attribution.py \
-  --model-cfg "$LORA_MODEL_CFG" \
-  --model-path "$BASE_MODEL_PATH" \
-  --tokenizer-path "$BASE_MODEL_PATH" \
-  --forget-dataset-path json \
-  --forget-split train \
-  --forget-data-files "${ART_PREFIX}_step2.jsonl" \
-  --retain-dataset-path SwetieePawsss/exp_r \
-  --retain-dataset-name neighbor_level2 \
-  --retain-split test \
-  --output-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key query \
-  --retain-question-key query \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
-  --lora-r 32 \
-  --lora-alpha 64 \
-  --lora-dropout 0.0 \
-  --lora-only
-
-python src/tools/validate_dual_cf_artifact.py \
-  --artifact-path "${ART_PREFIX}_dualcf.jsonl" \
-  --question-key query
+export METHOD_VARIANT=loku
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
-## Training launches
+Every method variant above now uses the same trajectory-saving behavior:
 
-These launches assume the validated artifacts above already exist.
+- half-epoch `checkpoint-*` saves
+- endpoint eval into `run_dir/evals`
+- training trace in `run_dir/dualcf_trace.jsonl`
+- top-level adapter safetensor cleanup after endpoint eval
 
-### Llama - DUET (done)
+## RWKU training
 
 ```bash
-CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=5 \
-BASE_MODEL=Llama-3.1-8B-Instruct \
-MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
-HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-USE_SFT_BASE=1 \
-LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
-SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft \
-MERGE_POPULARITY_FORGET=1 \
-CF_DATASET_PATH=json \
-CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/duet_llama_merged_dualcf.jsonl \
-CF_DATASET_SPLIT=train \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
-NUM_EPOCHS=2 \
-LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
-BETAS=0.5 \
-TAU_DS=0.5 \
-TAU_AS=0.5 \
-TEMP_DS=0.25 \
-TEMP_AS=0.25 \
-LAMBDA_NEG_MAXS=1.0 \
-LAMBDA_RET_LOS=1.0 \
-LAMBDA_RET_HIS=2.0 \
-CF_WEIGHTS=1.0 \
-RISK_FORGET_SCALES=0.5 \
-EVAL_BATCH_SIZE=64 \
-DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
-bash scripts/duet/dual_cf_duet.sh
+export CUDA_VISIBLE_DEVICES=7
+export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama_level2_v2/dualcf_forget_level2_v2.jsonl
+export METHOD_VARIANT=full
+
+scripts/rwku/run_dualcf_ablation_v2.sh
 ```
 
-### Qwen - DUET
+Run the same ablation variants on RWKU after DUET rare/popular are stable.
+
+## Checkpoint evaluation
+
+DUET:
 
 ```bash
-CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=4 \
-BASE_MODEL=Qwen2.5-7B-Instruct \
-MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
-HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
-USE_SFT_BASE=1 \
-LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
-SFT_SUBFOLDER=qwen2.5-7b-instruct-tripunlamb-ft \
-MERGE_POPULARITY_FORGET=1 \
-CF_DATASET_PATH=json \
-CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/duet_qwen_merged_dualcf.jsonl \
-CF_DATASET_SPLIT=train \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
-NUM_EPOCHS=2 \
-LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
-BETAS=0.5 \
-TAU_DS=0.5 \
-TAU_AS=0.5 \
-TEMP_DS=0.25 \
-TEMP_AS=0.25 \
-LAMBDA_NEG_MAXS=1.0 \
-LAMBDA_RET_LOS=1.0 \
-LAMBDA_RET_HIS=2.0 \
-CF_WEIGHTS=1.0 \
-RISK_FORGET_SCALES=0.5 \
-EVAL_BATCH_SIZE=64 \
-DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
-bash scripts/duet/dual_cf_duet.sh
+scripts/duet/eval_checkpoints_duet.sh \
+  /path/to/run_dir \
+  city_forget_rare_5 \
+  city_fast_retain_500 \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
 ```
 
-### Gemma - DUET
+For LoKU, the checkpoint evaluator auto-detects `run_dir/base_model` and uses it
+instead of the original base path. To clean that FILA base after trajectory eval:
 
 ```bash
-CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=4 \
-BASE_MODEL=gemma-7b-it \
-MODEL_CONFIG=gemma-7b-it-lora \
-HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
-USE_SFT_BASE=1 \
-LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models \
-SFT_SUBFOLDER=gemma-7b-it-tripunlamb-ft \
-MERGE_POPULARITY_FORGET=1 \
-CF_DATASET_PATH=json \
-CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/duet_gemma_merged_dualcf.jsonl \
-CF_DATASET_SPLIT=train \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
-NUM_EPOCHS=2 \
-LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
-BETAS=0.5 \
-TAU_DS=0.5 \
-TAU_AS=0.5 \
-TEMP_DS=0.25 \
-TEMP_AS=0.25 \
-LAMBDA_NEG_MAXS=1.0 \
-LAMBDA_RET_LOS=1.0 \
-LAMBDA_RET_HIS=2.0 \
-CF_WEIGHTS=1.0 \
-RISK_FORGET_SCALES=0.5 \
-EVAL_BATCH_SIZE=64 \
-DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
-bash scripts/duet/dual_cf_duet.sh
+DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/duet/eval_checkpoints_duet.sh \
+  /path/to/loku_run_dir \
+  city_forget_rare_5 \
+  city_fast_retain_500 \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
 ```
 
-### Llama - RWKU
+RWKU:
 
 ```bash
-CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=4 \
-BASE_MODEL=Llama-3.1-8B-Instruct \
-MODEL_CONFIG=Llama-3.1-8B-Instruct-lora \
-HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-CF_DATASET_PATH=json \
-CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/rwku_llama_dualcf.jsonl \
-CF_DATASET_NAME=null \
-CF_DATASET_SPLIT=train \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
-NUM_EPOCHS=2 \
-LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
-BETAS=0.5 \
-TAU_DS=0.5 \
-TAU_AS=0.5 \
-TEMP_DS=0.25 \
-TEMP_AS=0.25 \
-LAMBDA_NEG_MAXS=1.0 \
-LAMBDA_RET_LOS=1.0 \
-LAMBDA_RET_HIS=2.0 \
-CF_WEIGHTS=1.0 \
-RISK_FORGET_SCALES=0.5 \
-EVAL_BATCH_SIZE=64 \
-DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
-bash scripts/rwku/dual_cf_rwku.sh
+scripts/rwku/eval_checkpoints_rwku.sh \
+  /path/to/run_dir \
+  forget_level2 \
+  neighbor_level2 \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
 ```
 
-### Qwen - RWKU
+For LoKU on RWKU, the same cleanup pattern works:
 
 ```bash
-CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=2 \
-BASE_MODEL=Qwen2.5-7B-Instruct \
-MODEL_CONFIG=Qwen2.5-7B-Instruct-lora \
-HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
-TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Qwen2.5-7B-Instruct \
-CF_DATASET_PATH=json \
-CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/rwku_qwen_dualcf.jsonl \
-CF_DATASET_NAME=null \
-CF_DATASET_SPLIT=train \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
-NUM_EPOCHS=2 \
-LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
-BETAS=0.5 \
-TAU_DS=0.5 \
-TAU_AS=0.5 \
-TEMP_DS=0.25 \
-TEMP_AS=0.25 \
-LAMBDA_NEG_MAXS=1.0 \
-LAMBDA_RET_LOS=1.0 \
-LAMBDA_RET_HIS=2.0 \
-CF_WEIGHTS=1.0 \
-RISK_FORGET_SCALES=0.5 \
-EVAL_BATCH_SIZE=64 \
-DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
-bash scripts/rwku/dual_cf_rwku.sh
+DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/rwku/eval_checkpoints_rwku.sh \
+  /path/to/loku_run_dir \
+  forget_level2 \
+  neighbor_level2 \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
+  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
 ```
 
-### Gemma - RWKU
+Each script writes:
 
-```bash
-CUDA_DEVICE_ORDER=PCI_BUS_ID \
-CUDA_VISIBLE_DEVICES=5 \
-BASE_MODEL=gemma-7b-it \
-MODEL_CONFIG=gemma-7b-it-lora \
-HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
-TOKENIZER_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/gemma-7b-it \
-CF_DATASET_PATH=json \
-CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/rwku_gemma_dualcf.jsonl \
-CF_DATASET_NAME=null \
-CF_DATASET_SPLIT=train \
-PER_DEVICE_TRAIN_BS=16 \
-GRAD_ACCUM=2 \
-NUM_EPOCHS=2 \
-LRS="1e-6 5e-6 1e-5 5e-5 1e-4" \
-BETAS=0.5 \
-TAU_DS=0.5 \
-TAU_AS=0.5 \
-TEMP_DS=0.25 \
-TEMP_AS=0.25 \
-LAMBDA_NEG_MAXS=1.0 \
-LAMBDA_RET_LOS=1.0 \
-LAMBDA_RET_HIS=2.0 \
-CF_WEIGHTS=1.0 \
-RISK_FORGET_SCALES=0.5 \
-EVAL_BATCH_SIZE=64 \
-DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1 \
-bash scripts/rwku/dual_cf_rwku.sh
-```
+- per-checkpoint eval folders under `checkpoint_evals/`
+- `checkpoint_evals/summary.tsv`
+
+## Campaign order
+
+1. DUET rare, full + ablations.
+2. DUET popular, full + ablations.
+3. DUET merged, full only after split runs are clean.
+4. RWKU with the hybrid proxy retain map.
+5. Expand to Qwen only after the Llama path is stable.

@@ -7,10 +7,11 @@ import argparse
 import math
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data import Subset
 from tqdm.auto import tqdm
 
 SRC_ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +22,7 @@ from data.collators import DataCollatorForSupervisedDataset
 from tools.dual_cf_artifact_utils import (
     build_qa_dataset,
     load_dataset_split,
+    load_keyed_jsonish,
     load_model_bundle,
     normalize_minmax,
     resolve_answer,
@@ -63,6 +65,13 @@ def parse_args():
     parser.add_argument("--device", default=None)
     parser.add_argument("--lora-only", action="store_true")
     parser.add_argument("--alignment", choices=("dot", "cosine"), default="dot")
+    parser.add_argument(
+        "--retain-proxy-mode",
+        choices=("global", "template_local", "hybrid"),
+        default="global",
+    )
+    parser.add_argument("--retain-proxy-map", default=None)
+    parser.add_argument("--hybrid-rho", type=float, default=0.7)
     parser.add_argument("--lora-r", type=int, default=None)
     parser.add_argument("--lora-alpha", type=int, default=None)
     parser.add_argument("--lora-dropout", type=float, default=None)
@@ -133,6 +142,32 @@ def accumulate_retain_gradient(
         sum(float((grad * grad).sum().item()) for grad in retain_grad.values())
     )
     return retain_grad, retain_norm, steps
+
+
+def measure_alignment(
+    forget_grads: Dict[str, torch.Tensor],
+    retain_grad: Dict[str, torch.Tensor],
+    retain_norm: float,
+) -> Tuple[float, float]:
+    dot_value = 0.0
+    forget_norm_sq = 0.0
+    for name, forget_grad in forget_grads.items():
+        retain_component = retain_grad[name]
+        dot_value += float((forget_grad * retain_component).sum().item())
+        forget_norm_sq += float((forget_grad * forget_grad).sum().item())
+    forget_norm = math.sqrt(forget_norm_sq)
+    cosine_value = dot_value / max(forget_norm * max(retain_norm, 1e-12), 1e-12)
+    return dot_value, cosine_value
+
+
+def build_subset_loader(dataset, positions, batch_size, collator):
+    subset = Subset(dataset, positions)
+    return DataLoader(
+        subset,
+        batch_size=max(1, int(batch_size)),
+        shuffle=False,
+        collate_fn=collator,
+    )
 
 
 def main():
@@ -208,6 +243,15 @@ def main():
             max_examples=forget_limit,
         )
     ]
+    retain_rows = [
+        dict(row)
+        for row in load_dataset_split(
+            path=args.retain_dataset_path,
+            split=args.retain_split,
+            name=args.retain_dataset_name,
+            data_files=args.retain_data_files,
+        )
+    ]
     if forget_limit > 0:
         forget_dataset = torch.utils.data.Subset(
             forget_dataset,
@@ -234,6 +278,17 @@ def main():
         shuffle=False,
         collate_fn=collator,
     )
+    retain_position_by_index = {int(row["index"]): pos for pos, row in enumerate(retain_rows)}
+    proxy_map = {}
+    if args.retain_proxy_mode != "global":
+        if args.retain_proxy_map in (None, "", "null", "None"):
+            raise ValueError(
+                "--retain-proxy-map is required when --retain-proxy-mode is not global"
+            )
+        proxy_map = load_keyed_jsonish(args.retain_proxy_map, key_field="index")
+        log(
+            f"Loaded retain proxy map rows={len(proxy_map)} mode={args.retain_proxy_mode}"
+        )
 
     selected_params = list(iter_selected_params(model, lora_only=args.lora_only))
     if not selected_params:
@@ -258,6 +313,7 @@ def main():
     )
 
     grad_by_index: Dict[int, Dict[str, float]] = {}
+    local_grad_cache: Dict[str, Tuple[Dict[str, torch.Tensor], float, int]] = {}
     forget_iter = tqdm(
         forget_loader,
         total=len(forget_loader),
@@ -272,23 +328,93 @@ def main():
             outputs = model(**to_model_inputs(batch, device=device, move_to_device=move_to_device))
             outputs.loss.backward()
 
-            dot_value = 0.0
-            forget_norm_sq = 0.0
+            forget_grads = {}
             for name, param in selected_params:
                 if param.grad is None:
                     continue
-                forget_grad = param.grad.detach().float().cpu()
-                retain_component = retain_grad[name]
-                dot_value += float((forget_grad * retain_component).sum().item())
-                forget_norm_sq += float((forget_grad * forget_grad).sum().item())
+                forget_grads[name] = param.grad.detach().float().cpu()
 
-            forget_norm = math.sqrt(forget_norm_sq)
-            cosine_value = dot_value / max(forget_norm * max(retain_norm, 1e-12), 1e-12)
-            score_value = cosine_value if args.alignment == "cosine" else dot_value
+            global_dot, global_cosine = measure_alignment(
+                forget_grads=forget_grads,
+                retain_grad=retain_grad,
+                retain_norm=retain_norm,
+            )
+            global_raw = max(0.0, global_cosine if args.alignment == "cosine" else global_dot)
+
+            local_dot = global_dot
+            local_cosine = global_cosine
+            local_raw = global_raw
+            proxy_mode = "global"
+            proxy_size = len(retain_rows)
+            proxy_key = None
+            if args.retain_proxy_mode != "global":
+                proxy_row = proxy_map.get(str(row_index), {})
+                retain_indices = [
+                    idx
+                    for idx in proxy_row.get("retain_indices", [])
+                    if int(idx) in retain_position_by_index
+                ]
+                proxy_key = str(proxy_row.get("template_key") or row_index)
+                proxy_mode = str(proxy_row.get("proxy_mode", args.retain_proxy_mode))
+                if retain_indices:
+                    proxy_size = len(retain_indices)
+                    if proxy_key not in local_grad_cache:
+                        positions = [retain_position_by_index[int(idx)] for idx in retain_indices]
+                        local_loader = build_subset_loader(
+                            dataset=retain_dataset,
+                            positions=positions,
+                            batch_size=args.retain_batch_size,
+                            collator=collator,
+                        )
+                        local_grad_cache[proxy_key] = accumulate_retain_gradient(
+                            model=model,
+                            dataloader=local_loader,
+                            selected_params=selected_params,
+                            device=device,
+                            move_to_device=move_to_device,
+                            max_steps=int(args.retain_max_steps),
+                        )
+                    local_grad, local_norm, local_steps = local_grad_cache[proxy_key]
+                    local_dot, local_cosine = measure_alignment(
+                        forget_grads=forget_grads,
+                        retain_grad=local_grad,
+                        retain_norm=local_norm,
+                    )
+                    local_raw = max(
+                        0.0,
+                        local_cosine if args.alignment == "cosine" else local_dot,
+                    )
+
+            if args.retain_proxy_mode == "global":
+                score_value = global_raw
+                chosen_dot = global_dot
+                chosen_cosine = global_cosine
+            elif args.retain_proxy_mode == "template_local":
+                score_value = local_raw
+                chosen_dot = local_dot
+                chosen_cosine = local_cosine
+            else:
+                score_value = float(args.hybrid_rho) * local_raw + (
+                    1.0 - float(args.hybrid_rho)
+                ) * global_raw
+                chosen_dot = float(args.hybrid_rho) * local_dot + (
+                    1.0 - float(args.hybrid_rho)
+                ) * global_dot
+                chosen_cosine = float(args.hybrid_rho) * local_cosine + (
+                    1.0 - float(args.hybrid_rho)
+                ) * global_cosine
+
             grad_by_index[row_index] = {
-                "grad_align": dot_value,
-                "grad_align_cosine": cosine_value,
+                "grad_align": chosen_dot,
+                "grad_align_cosine": chosen_cosine,
+                "global_grad_align": global_dot,
+                "global_grad_align_cosine": global_cosine,
+                "local_grad_align": local_dot,
+                "local_grad_align_cosine": local_cosine,
                 "risk_raw": max(0.0, score_value),
+                "proxy_mode": proxy_mode,
+                "proxy_key": proxy_key,
+                "proxy_size": proxy_size,
             }
         except Exception as exc:
             raise RuntimeError(f"Failed attribution scoring for forget index={row_index}") from exc
@@ -316,6 +442,16 @@ def main():
             updated["answer"] = answer
             updated["grad_align"] = grad_by_index[row_index]["grad_align"]
             updated["grad_align_cosine"] = grad_by_index[row_index]["grad_align_cosine"]
+            updated["attribution_components"] = {
+                "global_align": grad_by_index[row_index]["global_grad_align"],
+                "global_align_cosine": grad_by_index[row_index]["global_grad_align_cosine"],
+                "local_align": grad_by_index[row_index]["local_grad_align"],
+                "local_align_cosine": grad_by_index[row_index]["local_grad_align_cosine"],
+                "proxy_mode": grad_by_index[row_index]["proxy_mode"],
+                "proxy_key": grad_by_index[row_index]["proxy_key"],
+                "proxy_size": grad_by_index[row_index]["proxy_size"],
+            }
+            updated["attribution_score_raw"] = grad_by_index[row_index]["risk_raw"]
             updated["attribution_score"] = norm_score
             output_rows.append(updated)
         except Exception as exc:

@@ -6,6 +6,16 @@ script_dir=$(dirname "$(realpath "$0")")
 repo_root=$(realpath "${script_dir}/../..")
 source "${script_dir}/_splits.sh"
 
+resolve_num_rows() {
+    local split="$1"
+    python - <<PY
+import datasets
+split = ${split@Q}
+ds = datasets.load_dataset("SwetieePawsss/DUET", split=split)
+print(len(ds))
+PY
+}
+
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
@@ -41,7 +51,7 @@ fi
 experiment="unlearn/duet/grad_ascent_lora.yaml"
 trainer="GradAscent"
 
-output_root="${repo_root}/saves/unlearn/duet/ga"
+output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/duet/ga}"
 mkdir -p "${output_root}"
 
 set_forget_retain_splits
@@ -50,6 +60,9 @@ per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
 eval_batch_size=${EVAL_BATCH_SIZE:-8}
 num_train_epochs=${NUM_EPOCHS:-2}
+max_steps="${MAX_STEPS:-0}"
+checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -90,27 +103,56 @@ for split in "${forget_retain_splits[@]}"; do
                     adapter_path=${run_dir}/adapter_model.safetensors
                     if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                         mkdir -p "${run_dir}"
-                        python src/train.py --config-name=unlearn.yaml \
-                            experiment=${experiment} \
-                            trainer=${trainer} \
-                            task_name=${task_name} \
-                            model=${lora_model} \
-                            forget_split=${forget_split} \
-                            retain_split=${retain_split} \
-                            model.model_args.pretrained_model_name_or_path=${base_model_path} \
-                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} \
-                            model.model_args.device_map="auto" \
-                            model.model_args.low_cpu_mem_usage=true \
-                            model.lora_config.r=${lora_r} \
-                            model.lora_config.lora_alpha=${lora_alpha} \
-                            model.lora_config.lora_dropout=${lora_dropout} \
-                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size} \
-                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} \
-                            trainer.args.num_train_epochs=${num_train_epochs} \
-                            trainer.args.learning_rate=${lr} \
-                            retain_logs_path=null \
-                            "${extra_train_args[@]}" \
+                        extra_schedule_args=()
+                        if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                            num_rows=$(resolve_num_rows "${forget_split}")
+                            global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
+                            steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
+                            half_epoch_steps=$(( (steps_per_epoch + 1) / 2 ))
+                            logging_steps=$(( half_epoch_steps / 2 ))
+                            if [[ "${logging_steps}" -lt 1 ]]; then
+                                logging_steps=1
+                            fi
+                            extra_schedule_args+=(
+                                trainer.args.save_strategy=steps
+                                trainer.args.save_steps=${half_epoch_steps}
+                                trainer.args.save_total_limit=${save_total_limit}
+                                trainer.args.logging_strategy=steps
+                                trainer.args.logging_steps=${logging_steps}
+                                trainer.args.save_safetensors=true
+                                trainer.args.load_best_model_at_end=false
+                            )
+                        fi
+                        train_cmd=(
+                            src/train.py
+                            --config-name=unlearn.yaml
+                            experiment=${experiment}
+                            trainer=${trainer}
+                            task_name=${task_name}
+                            model=${lora_model}
+                            forget_split=${forget_split}
+                            retain_split=${retain_split}
+                            model.model_args.pretrained_model_name_or_path=${base_model_path}
+                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
+                            model.model_args.device_map="auto"
+                            model.model_args.low_cpu_mem_usage=true
+                            model.lora_config.r=${lora_r}
+                            model.lora_config.lora_alpha=${lora_alpha}
+                            model.lora_config.lora_dropout=${lora_dropout}
+                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
+                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
+                            trainer.args.num_train_epochs=${num_train_epochs}
+                            trainer.args.learning_rate=${lr}
+                            trainer.trace_jsonl=true
+                            retain_logs_path=null
+                            "${extra_schedule_args[@]}"
+                            "${extra_train_args[@]}"
                             paths.output_dir=${run_dir}
+                        )
+                        if [[ "${max_steps}" != "0" ]]; then
+                            train_cmd+=(+trainer.args.max_steps=${max_steps})
+                        fi
+                        python "${train_cmd[@]}"
                     fi
 
                     mkdir -p "${eval_dir}"
