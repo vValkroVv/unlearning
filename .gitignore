@@ -150,6 +150,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-vllm/
 env/
 venv/
 ENV/
@@ -193,3 +194,8 @@ cython_debug/
 AGENTS.md
 experiments_visualization.ipynb
 scripts/recalc_duet_rouge_recall.py
+
+# Local runtime caches
+.hf_home/
+.hf_datasets_cache/
+.triton/

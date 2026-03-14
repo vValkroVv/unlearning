@@ -1,0 +1,428 @@
+# Production DualCF GPU Runs (v2)
+
+This runbook is for the DualCF v2 iteration:
+
+- clean counterfactuals first
+- percentile-calibrate routing offline
+- use hybrid retain attribution
+- run DUET `rare -> popular -> merged`
+- save / evaluate half-epoch checkpoints
+
+The validation profile below is the workspace-tested small-model setup:
+
+- main model: `meta-llama/Llama-3.2-1B-Instruct`
+- LoRA config: `configs/model/Llama-3.2-1B-Instruct-lora.yaml`
+- vLLM generator: `Qwen/Qwen3-1.7B`
+- epochs: `1`
+
+After validation, switch the env vars back to your production values
+(`Llama-3.1-8B-Instruct`, DUET SFT base if needed, larger Qwen3 generator,
+`NUM_EPOCHS=5`).
+
+## Common setup
+
+Use explicit repo / data roots so the same commands work both here and on the
+production box.
+
+- workspace validation:
+  - `REPO_ROOT=/workspace/unlearning`
+  - `DATA_ROOT=/workspace/data/unlearning`
+- production box:
+  - `REPO_ROOT=/home/vkropoti/unlearning`
+  - `DATA_ROOT=/data/home/vkropoti/unlearning`
+
+```bash
+export REPO_ROOT=${REPO_ROOT:-/workspace/unlearning}
+export DATA_ROOT=${DATA_ROOT:-/workspace/data/unlearning}
+export VENV_PATH=${VENV_PATH:-${REPO_ROOT}/.venv}
+export VLLM_VENV_PATH=${VLLM_VENV_PATH:-${REPO_ROOT}/.venv-vllm}
+
+cd "${REPO_ROOT}"
+source "${VENV_PATH}/bin/activate"
+
+export HF_TOKEN=${HF_TOKEN:?set HF_TOKEN in the shell first}
+export HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN:-${HF_TOKEN}}
+
+export HF_HOME=${DATA_ROOT}/.hf_home
+export HF_DATASETS_CACHE=${DATA_ROOT}/.hf_datasets_cache
+export TRITON_CACHE_DIR=${DATA_ROOT}/.triton
+export ARTIFACT_ROOT=${DATA_ROOT}/artifacts/dualcf
+export OUTPUT_ROOT=${DATA_ROOT}/saves/unlearn
+mkdir -p "${HF_HOME}" "${HF_DATASETS_CACHE}" "${TRITON_CACHE_DIR}" \
+  "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}"
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+export BASE_MODEL=Llama-3.2-1B-Instruct
+export MODEL_CONFIG=Llama-3.2-1B-Instruct-lora
+export MODEL_CFG=configs/model/Llama-3.2-1B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.2-1B-Instruct-lora.yaml
+export HF_BASE_MODEL_PATH=meta-llama/Llama-3.2-1B-Instruct
+export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
+export SFT_MODEL_PATH=${HF_BASE_MODEL_PATH}
+export SFT_SUBFOLDER=
+export USE_SFT_BASE=0
+
+export VLLM_MODEL=Qwen/Qwen3-1.7B
+
+export PER_DEVICE_TRAIN_BS=${PER_DEVICE_TRAIN_BS:-8}
+export GRAD_ACCUM=${GRAD_ACCUM:-2}
+export NUM_EPOCHS=${NUM_EPOCHS:-1}
+export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-32}
+export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-1}
+export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-1}
+export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-12}
+
+export LRS="${LRS:-1e-5}"
+export TAU_DS="${TAU_DS:-0.5}"
+export TAU_AS="${TAU_AS:-0.5}"
+export TEMP_DS="${TEMP_DS:-0.2}"
+export TEMP_AS="${TEMP_AS:-0.2}"
+export RISK_FORGET_SCALES="${RISK_FORGET_SCALES:-0.5}"
+export LAMBDA_RET_HIS="${LAMBDA_RET_HIS:-3.0}"
+export ALPHA_EFF_STATS="${ALPHA_EFF_STATS:-topk_mean}"
+export ALPHA_EFF_TOPK_FRACS="${ALPHA_EFF_TOPK_FRACS:-0.25}"
+
+export GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-4}
+export GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-8}
+export DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
+export ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
+export ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
+export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
+```
+
+`OUTPUT_ROOT` is respected by:
+
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/duet/ga_duet.sh`
+- `scripts/duet/npo_duet.sh`
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/loku_duet.sh`
+- `scripts/rwku/ga_rwku.sh`
+- `scripts/rwku/npo_rwku.sh`
+- `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/loku_rwku.sh`
+
+So the run directories land under:
+
+- `${OUTPUT_ROOT}/<task_name>`
+
+For `LoKU`, importance files also move out of the repo and default to:
+
+- `${DATA_ROOT}/saves/importances/duet/loku`
+- `${DATA_ROOT}/saves/importances/rwku/loku`
+
+Half-epoch note for the `NUM_EPOCHS=1` validation profile:
+
+- keep `MAX_STEPS=0`
+- launchers compute `save_steps = ceil(steps_per_epoch / 2)`
+- expect one `checkpoint-*` around half an epoch plus the final run directory
+
+## vLLM generator
+
+Run the Qwen3 generator in a separate env, build all Qwen-dependent
+counterfactual files first, then stop the server before any Llama scoring or
+training.
+
+```bash
+cd "${REPO_ROOT}"
+source "${VLLM_VENV_PATH}/bin/activate"
+
+export HF_TOKEN=${HF_TOKEN:?set HF_TOKEN in the shell first}
+export HUGGINGFACE_HUB_TOKEN=${HUGGINGFACE_HUB_TOKEN:-${HF_TOKEN}}
+export HF_HOME=${DATA_ROOT}/.hf_home
+
+export CUDA_VISIBLE_DEVICES=0
+export MODEL=${VLLM_MODEL}
+export TP=1
+export MAX_LEN=2048
+export PORT=8000
+export GPU_UTIL=0.25
+
+scripts/vllm/start_qwen3_cf_server.sh
+```
+
+In the training shell:
+
+```bash
+export VLLM_BASE_URL=http://127.0.0.1:8000/v1
+export VLLM_API_KEY=EMPTY
+export VLLM_MODEL=Qwen/Qwen3-1.7B
+```
+
+After all `step1b_counterfactuals_clean.jsonl` files are ready, stop the vLLM
+server to free GPU memory before the Llama scoring / training steps.
+
+## Artifact prep
+
+Each prep script now supports a two-phase flow:
+
+- `STOP_AFTER_CLEAN_CF=1`:
+  build / clean the Qwen counterfactual file only
+- `SKIP_CF_GENERATION=1`:
+  reuse the cleaned counterfactual file and run the Llama scoring stages
+- `REBUILD_CLEAN_CF=1`:
+  rebuild `step1b_counterfactuals_clean.jsonl` from the saved raw Qwen output
+  before scoring
+
+`DROP_INVALID_AFTER_CLEAN=1` is the default and should be left on for the
+validation profile. This drops rows that still fail strict alternate-answer
+validation after repair.
+
+### Phase A: Qwen clean counterfactuals only
+
+Run these while the vLLM server is up.
+
+### DUET rare
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export FORGET_LABEL=rare
+export OUT_DIR=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2
+export STOP_AFTER_CLEAN_CF=1
+unset SKIP_CF_GENERATION
+
+scripts/duet/prepare_dual_cf_duet_v2.sh
+```
+
+### DUET popular
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export FORGET_LABEL=popular
+export OUT_DIR=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v2
+export STOP_AFTER_CLEAN_CF=1
+unset SKIP_CF_GENERATION
+
+scripts/duet/prepare_dual_cf_duet_v2.sh
+```
+
+### DUET merged
+
+Run this only after rare and popular are clean.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export FORGET_LABEL=merged
+export OUT_DIR=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v2
+export STOP_AFTER_CLEAN_CF=1
+unset SKIP_CF_GENERATION
+
+scripts/duet/prepare_dual_cf_duet_v2.sh
+```
+
+### RWKU
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export FORGET_SPLIT=forget_level2
+export RETAIN_SPLIT=neighbor_level2
+export OUT_DIR=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2
+export STOP_AFTER_CLEAN_CF=1
+unset SKIP_CF_GENERATION
+
+scripts/rwku/prepare_dual_cf_rwku_v2.sh
+```
+
+After all `step1b_counterfactuals_clean.jsonl` files are written, stop the vLLM
+server and confirm the GPU is free before continuing.
+
+### Phase B: Llama scoring / calibration only
+
+Run the same prep commands again with the generator stage disabled:
+
+```bash
+unset STOP_AFTER_CLEAN_CF
+export SKIP_CF_GENERATION=1
+export DROP_INVALID_AFTER_CLEAN=1
+```
+
+Then rerun the same four commands above for:
+
+- DUET rare
+- DUET popular
+- DUET merged
+- RWKU
+
+The scoring stages use:
+
+- `DIFFICULTY_BATCH_SIZE` for `score_difficulty.py`
+- `ATTR_RETAIN_BATCH_SIZE` for `score_attribution.py`
+- `ATTR_RETAIN_MAX_STEPS` / `ATTR_FORGET_MAX_STEPS` only for bounded local
+  validation; leave both at `0` for production artifacts
+
+## DUET training
+
+### Full DualCF
+
+Rare:
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=full
+export FORGET_LABEL=rare
+export MAX_STEPS=0
+
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Popular:
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v2/dualcf_popular_v2.jsonl
+export METHOD_VARIANT=full
+export FORGET_LABEL=popular
+export MAX_STEPS=0
+
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Merged:
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v2/dualcf_merged_v2.jsonl
+export METHOD_VARIANT=full
+export FORGET_LABEL=merged
+export MAX_STEPS=0
+
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+### Required ablations
+
+Difficulty-only:
+
+```bash
+export METHOD_VARIANT=d_only
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Attribution-only:
+
+```bash
+export METHOD_VARIANT=a_only
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Uniform counterfactual DPO:
+
+```bash
+export METHOD_VARIANT=dpo
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Baselines:
+
+```bash
+export METHOD_VARIANT=ga
+scripts/duet/run_dualcf_ablation_v2.sh
+
+export METHOD_VARIANT=npo
+scripts/duet/run_dualcf_ablation_v2.sh
+
+export METHOD_VARIANT=npo_sam
+scripts/duet/run_dualcf_ablation_v2.sh
+
+export METHOD_VARIANT=loku
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
+Every method variant above uses the same trajectory-saving behavior:
+
+- half-epoch `checkpoint-*` saves when `CHECKPOINT_EVERY_HALF_EPOCH=1`
+- endpoint eval into `run_dir/evals`
+- training trace in `run_dir/dualcf_trace.jsonl`
+- top-level adapter safetensor cleanup after endpoint eval
+
+## RWKU training
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2/dualcf_forget_level2_v2.jsonl
+export METHOD_VARIANT=full
+export MAX_STEPS=0
+
+scripts/rwku/run_dualcf_ablation_v2.sh
+```
+
+Run the same ablation variants on RWKU after DUET rare / popular are stable.
+
+## Checkpoint evaluation
+
+DUET:
+
+```bash
+scripts/duet/eval_checkpoints_duet.sh \
+  /path/to/run_dir \
+  city_forget_rare_5 \
+  city_fast_retain_500 \
+  ${HF_BASE_MODEL_PATH} \
+  ${HF_BASE_MODEL_PATH} \
+  ${MODEL_CONFIG}
+```
+
+For LoKU, the checkpoint evaluator auto-detects `run_dir/base_model` and uses
+it instead of the original base path. To clean that FILA base after trajectory
+eval:
+
+```bash
+DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/duet/eval_checkpoints_duet.sh \
+  /path/to/loku_run_dir \
+  city_forget_rare_5 \
+  city_fast_retain_500 \
+  ${HF_BASE_MODEL_PATH} \
+  ${HF_BASE_MODEL_PATH} \
+  ${MODEL_CONFIG}
+```
+
+RWKU:
+
+```bash
+scripts/rwku/eval_checkpoints_rwku.sh \
+  /path/to/run_dir \
+  forget_level2 \
+  neighbor_level2 \
+  ${HF_BASE_MODEL_PATH} \
+  ${HF_BASE_MODEL_PATH} \
+  ${MODEL_CONFIG}
+```
+
+For LoKU on RWKU, the same cleanup pattern works:
+
+```bash
+DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/rwku/eval_checkpoints_rwku.sh \
+  /path/to/loku_run_dir \
+  forget_level2 \
+  neighbor_level2 \
+  ${HF_BASE_MODEL_PATH} \
+  ${HF_BASE_MODEL_PATH} \
+  ${MODEL_CONFIG}
+```
+
+Each script writes:
+
+- per-checkpoint eval folders under `checkpoint_evals/`
+- `checkpoint_evals/summary.tsv`
+
+If the top-level run directory was already cleaned by
+`DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`, the checkpoint-eval scripts skip
+reloading that endpoint adapter and reuse the existing `run_dir/evals`
+summary instead.
+
+By default, the checkpoint-eval scripts also delete
+`checkpoint-*/adapter_model.safetensors` after successful trajectory eval.
+Set `DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=0` if you need to keep
+them for a rerun.
+
+## Campaign order
+
+1. Start vLLM and run all prep scripts with `STOP_AFTER_CLEAN_CF=1`.
+2. Stop vLLM and confirm GPU memory is free.
+3. Rerun all prep scripts with `SKIP_CF_GENERATION=1` for Llama scoring / calibration.
+4. Train DUET rare full + ablations.
+5. Train DUET popular, then merged.
+6. Run RWKU training / ablations.

@@ -193,6 +193,7 @@ mkdir -p "$HF_HOME/hub" "$TRITON_CACHE_DIR"
 ## Notes
 - `setup.py` currently uses `find_packages()` but repo code lives under `src/` without package discovery metadata, so direct entry scripts (`python src/train.py ...`, `python src/eval.py ...`) are the reliable path.
 - In restricted sandbox contexts, CUDA visibility checks can report false negatives. GPU checks above were validated in full GPU-visible execution context.
+- The import sweep covers `src/tools/` as well as training code, so the environment also needs `openai` for `src/tools/vllm_cf_client.py` and `src/tools/make_counterfactuals.py`.
 
 ## 8) Extra packages required specifically for `scripts/duet/npo_duet.sh`
 
@@ -217,6 +218,29 @@ python -m bitsandbytes
 Result:
 - `pip check` passed with no broken requirements.
 - `python -m bitsandbytes` ended with `SUCCESS! Installation was successful!` in GPU-visible context.
+
+## 9) 2026-03-14 verification fix
+
+While rerunning `setup_vast_env.sh`, the scripted import sweep initially failed with:
+
+```text
+tools.make_counterfactuals::ModuleNotFoundError::No module named 'openai'
+tools.vllm_cf_client::ModuleNotFoundError::No module named 'openai'
+```
+
+Fix applied:
+
+```bash
+pip install openai==1.109.1
+```
+
+The setup script was updated so future runs install `openai` during the main dependency step. After that change:
+
+- `pip check` passed.
+- Full `src/` import sweep passed (`TOTAL_MODULES 71`, `FAILED 0`).
+- `python src/train.py --help`, `python src/eval.py --help`, and `python setup_data.py --help` passed.
+- `python -m bitsandbytes` ended with `SUCCESS! Installation was successful!`.
+- FlashAttention GPU smoke test passed on `NVIDIA RTX A5000` with `torch 2.4.1+cu124` and `flash-attn 2.6.3`.
 
 Targeted optimizer/reporting smoke test:
 

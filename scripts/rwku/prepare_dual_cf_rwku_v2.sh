@@ -5,6 +5,14 @@ set -euo pipefail
 script_dir=$(dirname "$(realpath "$0")")
 repo_root=$(realpath "${script_dir}/../..")
 
+require_file() {
+  local path="$1"
+  if [[ ! -f "${path}" ]]; then
+    echo "[prepare_dual_cf_rwku_v2] Missing required file: ${path}" >&2
+    exit 1
+  fi
+}
+
 FORGET_SPLIT=${FORGET_SPLIT:-forget_level2}
 RETAIN_SPLIT=${RETAIN_SPLIT:-neighbor_level2}
 DATASET_PATH=${DATASET_PATH:-SwetieePawsss/exp_r}
@@ -19,6 +27,10 @@ VLLM_API_KEY=${VLLM_API_KEY:-EMPTY}
 VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-64}
 GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-256}
+DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
+ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
+ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
+ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 
 MODEL_CFG=${MODEL_CFG:-configs/model/Llama-3.1-8B-Instruct.yaml}
 LORA_MODEL_CFG=${LORA_MODEL_CFG:-configs/model/Llama-3.1-8B-Instruct-lora.yaml}
@@ -35,39 +47,75 @@ PROXY_MAP_JSONL=${OUT_DIR}/step2b_proxy_map.jsonl
 ATTR_JSONL=${OUT_DIR}/step3_attribution_raw.jsonl
 FINAL_JSONL=${OUT_DIR}/dualcf_${FORGET_SPLIT}_v2.jsonl
 
-python "${repo_root}/src/tools/make_counterfactuals.py" \
-  --dataset-path "${DATASET_PATH}" \
-  --dataset-name "${FORGET_SPLIT}" \
-  --split test \
-  --output-path "${RAW_CF}" \
-  --question-key "${QUESTION_KEY}" \
-  --answer-key "${ANSWER_KEY}" \
-  --generator-backend "${GENERATOR_BACKEND}" \
-  --vllm-base-url "${VLLM_BASE_URL}" \
-  --vllm-api-key "${VLLM_API_KEY}" \
-  --vllm-model "${VLLM_MODEL}" \
-  --generator-concurrency "${GENERATOR_CONCURRENCY}" \
-  --generator-batch-size "${GENERATOR_BATCH_SIZE}" \
-  --repair-invalid \
-  --reject-gold-substring \
-  --require-short-answer \
-  --max-overlap-ratio 0.85 \
-  --max-alt-length-chars 128
+stop_after_clean_cf="${STOP_AFTER_CLEAN_CF:-0}"
+skip_cf_generation="${SKIP_CF_GENERATION:-0}"
+drop_invalid_after_clean="${DROP_INVALID_AFTER_CLEAN:-1}"
+rebuild_clean_cf="${REBUILD_CLEAN_CF:-0}"
 
-python "${repo_root}/src/tools/clean_counterfactuals.py" \
-  --input-path "${RAW_CF}" \
-  --output-path "${CLEAN_CF}" \
-  --repair-invalid \
-  --reject-gold-substring \
-  --require-short-answer \
-  --max-overlap-ratio 0.85 \
-  --max-alt-length-chars 128
+clean_extra_args=()
+if [[ "${drop_invalid_after_clean}" == "1" ]]; then
+  clean_extra_args+=(--drop-invalid)
+fi
+
+if [[ "${skip_cf_generation}" == "1" ]]; then
+  require_file "${RAW_CF}"
+  if [[ "${rebuild_clean_cf}" == "1" ]]; then
+    python "${repo_root}/src/tools/clean_counterfactuals.py" \
+      --input-path "${RAW_CF}" \
+      --output-path "${CLEAN_CF}" \
+      "${clean_extra_args[@]}" \
+      --repair-invalid \
+      --reject-gold-substring \
+      --require-short-answer \
+      --max-overlap-ratio 0.85 \
+      --max-alt-length-chars 128
+    echo "[prepare_dual_cf_rwku_v2] Rebuilt clean counterfactual file from raw output: ${CLEAN_CF}"
+  else
+    require_file "${CLEAN_CF}"
+    echo "[prepare_dual_cf_rwku_v2] Reusing existing raw / clean counterfactual files from ${OUT_DIR}"
+  fi
+else
+  python "${repo_root}/src/tools/make_counterfactuals.py" \
+    --dataset-path "${DATASET_PATH}" \
+    --dataset-name "${FORGET_SPLIT}" \
+    --split test \
+    --output-path "${RAW_CF}" \
+    --question-key "${QUESTION_KEY}" \
+    --answer-key "${ANSWER_KEY}" \
+    --generator-backend "${GENERATOR_BACKEND}" \
+    --vllm-base-url "${VLLM_BASE_URL}" \
+    --vllm-api-key "${VLLM_API_KEY}" \
+    --vllm-model "${VLLM_MODEL}" \
+    --generator-concurrency "${GENERATOR_CONCURRENCY}" \
+    --generator-batch-size "${GENERATOR_BATCH_SIZE}" \
+    --repair-invalid \
+    --reject-gold-substring \
+    --require-short-answer \
+    --max-overlap-ratio 0.85 \
+    --max-alt-length-chars 128
+
+  python "${repo_root}/src/tools/clean_counterfactuals.py" \
+    --input-path "${RAW_CF}" \
+    --output-path "${CLEAN_CF}" \
+    "${clean_extra_args[@]}" \
+    --repair-invalid \
+    --reject-gold-substring \
+    --require-short-answer \
+    --max-overlap-ratio 0.85 \
+    --max-alt-length-chars 128
+fi
+
+if [[ "${stop_after_clean_cf}" == "1" ]]; then
+  echo "[prepare_dual_cf_rwku_v2] Stopping after clean counterfactual stage: ${CLEAN_CF}"
+  exit 0
+fi
 
 python "${repo_root}/src/tools/score_difficulty.py" \
   --input-path "${CLEAN_CF}" \
   --output-path "${DIFF_JSONL}" \
   --question-key "${QUESTION_KEY}" \
   --answer-key "${ANSWER_KEY}" \
+  --batch-size "${DIFFICULTY_BATCH_SIZE}" \
   --model-cfg "${MODEL_CFG}" \
   --model-path "${BASE_MODEL_PATH}" \
   --tokenizer-path "${BASE_MODEL_PATH}" \
@@ -101,9 +149,9 @@ python "${repo_root}/src/tools/score_attribution.py" \
   --retain-split test \
   --output-path "${ATTR_JSONL}" \
   --question-key "${QUESTION_KEY}" \
-  --retain-batch-size 4 \
-  --retain-max-steps 0 \
-  --forget-max-steps 0 \
+  --retain-batch-size "${ATTR_RETAIN_BATCH_SIZE}" \
+  --retain-max-steps "${ATTR_RETAIN_MAX_STEPS}" \
+  --forget-max-steps "${ATTR_FORGET_MAX_STEPS}" \
   --retain-proxy-mode hybrid \
   --retain-proxy-map "${PROXY_MAP_JSONL}" \
   --hybrid-rho "${HYBRID_RHO}" \

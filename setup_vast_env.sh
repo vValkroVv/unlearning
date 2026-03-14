@@ -27,7 +27,7 @@ pip install \
   transformers==4.45.1 accelerate==0.34.2 datasets==3.0.1 peft==0.15.2 \
   deepspeed==0.15.4 scipy==1.14.1 tqdm==4.67.1 rouge-score==0.1.2 \
   scikit-learn==1.5.2 huggingface-hub==0.29.1 sentencepiece==0.2.1 \
-  evaluate==0.4.3 lm-eval==0.4.8 jsonlines==4.0.0 pytorch-revgrad==0.2.0 \
+  evaluate==0.4.3 lm-eval==0.4.8 jsonlines==4.0.0 openai==1.109.1 pytorch-revgrad==0.2.0 \
   einops==0.8.1 pandas==2.3.0
 
 echo "[setup] installing CUDA torch (cu124)"

@@ -38,11 +38,14 @@ class VLLMCFGenerator:
     timeout: float = 300.0
 
     def __post_init__(self) -> None:
-        self.client = AsyncOpenAI(
-            base_url=self.base_url,
-            api_key=self.api_key,
-            timeout=self.timeout,
-        )
+        # Qwen3 enables thinking traces by default unless the chat template is
+        # told otherwise. Disable them here so counterfactual generation stays a
+        # short JSON-only answer span.
+        self.extra_body = {
+            "chat_template_kwargs": {
+                "enable_thinking": False,
+            },
+        }
         self.response_format = {
             "type": "json_schema",
             "json_schema": {
@@ -50,6 +53,13 @@ class VLLMCFGenerator:
                 "schema": CounterfactualResponse.model_json_schema(),
             },
         }
+
+    def _make_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            timeout=self.timeout,
+        )
 
     def build_messages(
         self,
@@ -86,12 +96,13 @@ class VLLMCFGenerator:
 
     async def one(
         self,
+        client: AsyncOpenAI,
         *,
         question: str,
         answer: str,
         candidate_answers: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
-        response = await self.client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=self.model,
             messages=self.build_messages(
                 question=question,
@@ -102,6 +113,7 @@ class VLLMCFGenerator:
             top_p=self.top_p,
             max_tokens=self.max_tokens,
             response_format=self.response_format,
+            extra_body=self.extra_body,
         )
         content = response.choices[0].message.content
         payload = json.loads(_strip_json_fence(content))
@@ -109,17 +121,22 @@ class VLLMCFGenerator:
 
     async def many(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         semaphore = asyncio.Semaphore(max(1, int(self.concurrency)))
+        client = self._make_client()
 
         async def _bound(row: Dict[str, Any]) -> Dict[str, Any]:
             async with semaphore:
                 return await self.one(
+                    client,
                     question=str(row["question"]),
                     answer=str(row["answer"]),
                     candidate_answers=row.get("candidate_answers"),
                 )
 
-        tasks = [_bound(row) for row in rows]
-        return await asyncio.gather(*tasks)
+        try:
+            tasks = [_bound(row) for row in rows]
+            return await asyncio.gather(*tasks)
+        finally:
+            await client.close()
 
     def many_sync(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return asyncio.run(self.many(rows))

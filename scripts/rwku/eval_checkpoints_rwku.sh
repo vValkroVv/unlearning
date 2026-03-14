@@ -15,6 +15,33 @@ TOKENIZER_PATH=$5
 MODEL_CONFIG=${6:-Llama-3.1-8B-Instruct-lora}
 EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-64}
 DELETE_RUN_BASE_MODEL_AFTER_EVAL=${DELETE_RUN_BASE_MODEL_AFTER_EVAL:-0}
+DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL:-1}
+
+has_loadable_weights() {
+  local model_dir="$1"
+  [[ -f "${model_dir}/adapter_model.safetensors" ]] \
+    || [[ -f "${model_dir}/adapter_model.bin" ]] \
+    || [[ -f "${model_dir}/model.safetensors" ]] \
+    || [[ -f "${model_dir}/model.safetensors.index.json" ]] \
+    || [[ -f "${model_dir}/pytorch_model.bin" ]] \
+    || [[ -f "${model_dir}/pytorch_model.bin.index.json" ]]
+}
+
+delete_checkpoint_adapter_weights() {
+  local run_dir="$1"
+  local deleted=0
+  local ckpt=""
+  local weight_file=""
+  while IFS= read -r -d '' ckpt; do
+    for weight_file in "${ckpt}/adapter_model.safetensors" "${ckpt}/adapter_model.bin"; do
+      if [[ -f "${weight_file}" ]]; then
+        rm -f "${weight_file}"
+        deleted=$((deleted + 1))
+      fi
+    done
+  done < <(find "${run_dir}" -maxdepth 1 -type d -name 'checkpoint-*' -print0)
+  echo "[rwku][ckpt-eval] Removed ${deleted} checkpoint adapter weight files"
+}
 
 RESOLVED_BASE_MODEL_PATH=${FILA_BASE_PATH:-${BASE_MODEL_PATH}}
 if [[ -d "${RUN_DIR}/base_model" ]]; then
@@ -23,7 +50,13 @@ if [[ -d "${RUN_DIR}/base_model" ]]; then
 fi
 
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
-CKPTS+=("${RUN_DIR}")
+if has_loadable_weights "${RUN_DIR}"; then
+  CKPTS+=("${RUN_DIR}")
+elif [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
+  echo "[rwku][ckpt-eval] Skipping top-level run_dir re-eval because weights were cleaned after endpoint eval: ${RUN_DIR}"
+else
+  echo "[rwku][ckpt-eval] Skipping top-level run_dir because no loadable weights were found: ${RUN_DIR}"
+fi
 
 for ckpt in "${CKPTS[@]}"; do
   name=$(basename "${ckpt}")
@@ -47,6 +80,10 @@ done
 python src/tools/summarize_checkpoint_metrics.py \
   --run-dir "${RUN_DIR}" \
   --output-path "${RUN_DIR}/checkpoint_evals/summary.tsv"
+
+if [[ "${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL}" == "1" ]]; then
+  delete_checkpoint_adapter_weights "${RUN_DIR}"
+fi
 
 if [[ "${DELETE_RUN_BASE_MODEL_AFTER_EVAL}" == "1" && "${RESOLVED_BASE_MODEL_PATH}" == "${RUN_DIR}/base_model" ]]; then
   rm -rf "${RESOLVED_BASE_MODEL_PATH}"

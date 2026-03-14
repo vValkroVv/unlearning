@@ -61,7 +61,7 @@ with:
 
 ### Documentation / runbooks
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
 
 ### End-to-end runner scripts
 
@@ -831,3 +831,96 @@ Expected smoke-test checks:
 - `difficulty_score` and `attribution_score` reach `DualCF.compute_loss()`
 - `dualcf_*` logs appear
 - one adapter checkpoint is saved
+
+## Workspace validation update (2026-03-14)
+
+Changed files:
+
+- `src/tools/vllm_cf_client.py`
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/rwku/eval_checkpoints_rwku.sh`
+- `src/tools/summarize_checkpoint_metrics.py`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- the vLLM OpenAI client now sends
+  `chat_template_kwargs.enable_thinking=false` for Qwen3 chat requests and
+  creates a fresh async client per `asyncio.run(...)` call; this fixed repeated
+  generation calls hitting closed-event-loop / connection errors
+- the DUET and RWKU prep scripts now support the validated two-phase artifact
+  flow:
+  - `STOP_AFTER_CLEAN_CF=1`
+  - `SKIP_CF_GENERATION=1`
+  - `DROP_INVALID_AFTER_CLEAN=1`
+- the prep scripts also now expose throughput / bounded-test controls without
+  changing production defaults:
+  - `DIFFICULTY_BATCH_SIZE`
+  - `ATTR_RETAIN_BATCH_SIZE`
+  - `ATTR_RETAIN_MAX_STEPS`
+  - `ATTR_FORGET_MAX_STEPS`
+- `REBUILD_CLEAN_CF=1` was added so saved raw Qwen outputs can be re-cleaned
+  with the current strict validator after generation, without restarting vLLM
+- DUET prep keeps the empty-string `SFT_SUBFOLDER=` override instead of
+  silently falling back to the old TripUnLAMB subfolder when the 1B base model
+  is used directly
+- checkpoint-eval scripts now skip top-level re-evaluation when the launcher
+  already deleted endpoint adapter safetensors, and
+  `summarize_checkpoint_metrics.py` now still includes the existing endpoint
+  `evals/DUET_SUMMARY.json` in `checkpoint_evals/summary.tsv`
+- checkpoint-eval scripts now also delete checkpoint adapter weight files
+  (`checkpoint-*/adapter_model.safetensors`, with `.bin` fallback) after
+  successful trajectory evaluation unless
+  `DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=0` is set
+- the workspace-tested small-model validation runbook now lives in
+  `prod-run-dual-vast.md`; `prod-run-dual-gpu.md` was restored to the original
+  production-oriented version
+
+Validation results:
+
+- Qwen-first generation was run before any Llama scoring:
+  DUET rare, DUET popular, DUET merged, and RWKU raw/clean counterfactual files
+  were built with `Qwen/Qwen3-1.7B`; the vLLM server was then stopped and the
+  GPU was confirmed free before the Llama stages
+- DUET rare full offline artifact succeeded under the 1B test profile:
+  `artifacts/dualcf/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl`
+- DUET popular full offline artifact succeeded after the stricter cleaner
+  dropped the last invalid row:
+  `artifacts/dualcf/duet/popular_llama32_1b_v2/dualcf_popular_v2.jsonl`
+- DUET merged clean revalidation succeeded and reduced the clean set from 964 to
+  962 rows; the post-vLLM scoring path was revalidated, but the full merged
+  attribution sweep was not waited to completion because it is too slow for the
+  workspace validation target
+- RWKU raw re-cleaning on the saved Qwen output dropped 1330 invalid rows
+  (`2879 -> 1549` clean rows); a bounded 64-row attribution/calibration run then
+  completed end to end with strict validation:
+  `artifacts/dualcf/rwku/llama32_1b_level2_v2_test64/dualcf_forget_level2_v2.jsonl`
+- DUET rare one-epoch training succeeded with the small-model profile and saved
+  the expected half-epoch checkpoints `checkpoint-16` and `checkpoint-30`
+- DUET rare checkpoint evaluation succeeded after the script fix and produced
+  `checkpoint_evals/summary.tsv` including both checkpoints plus the existing
+  endpoint eval summary
+- RWKU bounded one-epoch training on the 64-row validation artifact succeeded,
+  saved `checkpoint-2` and `checkpoint-4`, and finished endpoint evaluation on
+  the real `forget_level2` / `neighbor_level2` benchmark splits
+
+Concrete outputs:
+
+- DUET rare training summary:
+  `saves/unlearn/duet/dual_cf/.../evals/DUET_SUMMARY.json`
+  with `forget_qa_rouge=0.07486168741355462`,
+  `holdout_qa_rouge=0.5786666666666667`
+- DUET rare checkpoint summary:
+  `saves/unlearn/duet/dual_cf/.../checkpoint_evals/summary.tsv`
+- RWKU bounded training summary:
+  `saves/unlearn/rwku/dual_cf_test64/rwku_Llama-3.2-1B-Instruct_forget_level2_dual_cf_lora_r32_lalpha64_ldrop0p0_lr1e-6_beta0p5_alpha1p0_gamma1p0_td0p6_ta0p6_sd0p15_sa0p15_ln1p0_rlo1p0_rhi3p0_cf1p0_rf0p5_aetopk_mean_atk0p25_rp1p0_np1p0_dOn_aOn/evals/DUET_SUMMARY.json`
+  with `forget_qa_rouge=0.3808967459540575`,
+  `holdout_qa_rouge=0.437477228978223`
+
+Residual note:
+
+- full RWKU checkpoint-trajectory evaluation was not rerun because it would
+  repeat full benchmark eval over all saved checkpoints; the script fix itself
+  was validated on DUET and is shared with RWKU

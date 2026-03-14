@@ -135,13 +135,13 @@ for lr in "${lrs[@]}"; do
                                                 logging_steps=1
                                             fi
                                             extra_schedule_args+=(
-                                                trainer.args.save_strategy=steps
-                                                trainer.args.save_steps=${half_epoch_steps}
-                                                trainer.args.save_total_limit=${save_total_limit}
-                                                trainer.args.logging_strategy=steps
-                                                trainer.args.logging_steps=${logging_steps}
-                                                trainer.args.save_safetensors=true
-                                                trainer.args.load_best_model_at_end=false
+                                                ++trainer.args.save_strategy=steps
+                                                ++trainer.args.save_steps=${half_epoch_steps}
+                                                ++trainer.args.save_total_limit=${save_total_limit}
+                                                ++trainer.args.logging_strategy=steps
+                                                ++trainer.args.logging_steps=${logging_steps}
+                                                ++trainer.args.save_safetensors=true
+                                                ++trainer.args.load_best_model_at_end=false
                                             )
                                         fi
                                         train_cmd=(

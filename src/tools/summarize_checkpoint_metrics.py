@@ -31,6 +31,7 @@ def main():
         raise FileNotFoundError(run_dir)
 
     eval_dirs = []
+    seen = set()
 
     checkpoint_eval_root = run_dir / "checkpoint_evals"
     if checkpoint_eval_root.exists():
@@ -38,14 +39,17 @@ def main():
             summary_path = candidate / args.summary_name
             if summary_path.exists():
                 eval_dirs.append((candidate, summary_path))
+                seen.add(candidate.resolve())
     else:
         for candidate in run_dir.glob("checkpoint-*"):
             summary_path = candidate / "evals" / args.summary_name
             if summary_path.exists():
                 eval_dirs.append((candidate, summary_path))
-        final_summary = run_dir / "evals" / args.summary_name
-        if final_summary.exists():
-            eval_dirs.append((run_dir, final_summary))
+                seen.add(candidate.resolve())
+
+    final_summary = run_dir / "evals" / args.summary_name
+    if final_summary.exists() and run_dir.resolve() not in seen:
+        eval_dirs.append((run_dir, final_summary))
 
     rows = []
     for ckpt_dir, summary_path in sorted(eval_dirs, key=lambda item: checkpoint_sort_key(item[0])):
