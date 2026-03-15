@@ -16,9 +16,13 @@ LORA_MODEL_CFG_RAW=$3
 BASE_MODEL_PATH=$4
 TOKENIZER_PATH=$5
 LORA_BASE_MODEL_PATH=${LORA_BASE_MODEL_PATH:-${BASE_MODEL_PATH}}
+BASE_MODEL_SUBFOLDER=${BASE_MODEL_SUBFOLDER:-}
+LORA_BASE_MODEL_SUBFOLDER=${LORA_BASE_MODEL_SUBFOLDER:-${BASE_MODEL_SUBFOLDER}}
+BASE_TOKENIZER_SUBFOLDER=${BASE_TOKENIZER_SUBFOLDER:-}
+LORA_TOKENIZER_SUBFOLDER=${LORA_TOKENIZER_SUBFOLDER:-${BASE_TOKENIZER_SUBFOLDER}}
 
 UTILITY_ROOT=${UTILITY_ROOT:-${repo_root}/artifacts/evals/utility_1k_v1}
-UTILITY_EVAL_BATCH_SIZE=${UTILITY_EVAL_BATCH_SIZE:-16}
+UTILITY_EVAL_BATCH_SIZE=${UTILITY_EVAL_BATCH_SIZE:-64}
 UTILITY_NUM_FEWSHOT=${UTILITY_NUM_FEWSHOT:-0}
 UTILITY_APPLY_CHAT_TEMPLATE=${UTILITY_APPLY_CHAT_TEMPLATE:-true}
 UTILITY_SYSTEM_INSTRUCTION=${UTILITY_SYSTEM_INSTRUCTION:-null}
@@ -40,6 +44,11 @@ has_loadable_weights() {
     || [[ -f "${model_dir}/model.safetensors.index.json" ]] \
     || [[ -f "${model_dir}/pytorch_model.bin" ]] \
     || [[ -f "${model_dir}/pytorch_model.bin.index.json" ]]
+}
+
+has_loadable_base_model() {
+  local model_dir="$1"
+  [[ -f "${model_dir}/config.json" ]] && has_loadable_weights "${model_dir}"
 }
 
 render_task_configs() {
@@ -82,6 +91,8 @@ evaluate_label() {
   local out_dir="$4"
   local base_model_override="${5:-}"
   local use_baseline_cache="${6:-0}"
+  local model_subfolder="${7:-}"
+  local tokenizer_subfolder="${8:-}"
 
   local cache_dir=""
   if [[ "${use_baseline_cache}" == "1" && -n "${BASELINE_CACHE_ROOT}" ]]; then
@@ -108,6 +119,8 @@ evaluate_label() {
     task_name="${task_name}"
     model.model_args.pretrained_model_name_or_path="${model_path}"
     model.tokenizer_args.pretrained_model_name_or_path="${TOKENIZER_PATH}"
+    model.model_args.device_map=auto
+    ++model.model_args.low_cpu_mem_usage=true
     eval.lm_eval.include_path="${rendered_task_dir}"
     eval.lm_eval.simple_evaluate_args.batch_size="${UTILITY_EVAL_BATCH_SIZE}"
     eval.lm_eval.simple_evaluate_args.num_fewshot="${UTILITY_NUM_FEWSHOT}"
@@ -117,6 +130,12 @@ evaluate_label() {
   )
   if [[ -n "${base_model_override}" ]]; then
     cmd+=(++model.model_args.base_model_name_or_path="${base_model_override}")
+  fi
+  if [[ -n "${model_subfolder}" ]]; then
+    cmd+=(++model.model_args.subfolder="${model_subfolder}")
+  fi
+  if [[ -n "${tokenizer_subfolder}" ]]; then
+    cmd+=(++model.tokenizer_args.subfolder="${tokenizer_subfolder}")
   fi
   "${cmd[@]}"
 
@@ -129,6 +148,13 @@ evaluate_label() {
 BASE_MODEL_CFG=$(normalize_model_config_name "${BASE_MODEL_CFG_RAW}")
 LORA_MODEL_CFG=$(normalize_model_config_name "${LORA_MODEL_CFG_RAW}")
 UTILITY_ROOT=$(realpath -m "${UTILITY_ROOT}")
+LORA_MODEL_SUBFOLDER_VALUE=${LORA_BASE_MODEL_SUBFOLDER}
+
+if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then
+  # LoKU can pass a flattened saved model under run_dir/base_model. That model
+  # should be loaded directly without any inherited SFT subfolder override.
+  LORA_MODEL_SUBFOLDER_VALUE=""
+fi
 
 for required_file in \
   "${UTILITY_ROOT}/utility_mmlu_pro_400.jsonl" \
@@ -152,14 +178,20 @@ evaluate_label \
   "${BASE_MODEL_PATH}" \
   "${summary_root}/base_model_orig" \
   "" \
-  "1"
+  "1" \
+  "${BASE_MODEL_SUBFOLDER}" \
+  "${BASE_TOKENIZER_SUBFOLDER}"
 
 if [[ "${EVAL_RUN_BASE_MODEL}" == "1" && -d "${RUN_DIR}/base_model" ]] && has_loadable_weights "${RUN_DIR}/base_model"; then
   evaluate_label \
     "base_model_run" \
     "${BASE_MODEL_CFG}" \
     "${RUN_DIR}/base_model" \
-    "${summary_root}/base_model_run"
+    "${summary_root}/base_model_run" \
+    "" \
+    "0" \
+    "" \
+    ""
 fi
 
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
@@ -174,7 +206,10 @@ for ckpt in "${CKPTS[@]}"; do
     "${LORA_MODEL_CFG}" \
     "${ckpt}" \
     "${summary_root}/${label}" \
-    "${LORA_BASE_MODEL_PATH}"
+    "${LORA_BASE_MODEL_PATH}" \
+    "0" \
+    "${LORA_MODEL_SUBFOLDER_VALUE}" \
+    "${LORA_TOKENIZER_SUBFOLDER}"
 done
 
 if has_loadable_weights "${RUN_DIR}"; then
@@ -183,7 +218,10 @@ if has_loadable_weights "${RUN_DIR}"; then
     "${LORA_MODEL_CFG}" \
     "${RUN_DIR}" \
     "${summary_root}/final" \
-    "${LORA_BASE_MODEL_PATH}"
+    "${LORA_BASE_MODEL_PATH}" \
+    "0" \
+    "${LORA_MODEL_SUBFOLDER_VALUE}" \
+    "${LORA_TOKENIZER_SUBFOLDER}"
 elif [[ ${#CKPTS[@]} -gt 0 ]]; then
   last_label=$(basename "${CKPTS[-1]}")
   echo "[utility][ckpt-eval] Final adapter weights were removed; using ${last_label} as the endpoint proxy."

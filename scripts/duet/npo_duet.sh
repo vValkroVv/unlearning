@@ -56,9 +56,9 @@ mkdir -p "${output_root}"
 
 set_forget_retain_splits
 
-per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
-gradient_accumulation_steps=${GRAD_ACCUM:-32}
-eval_batch_size=${EVAL_BATCH_SIZE:-8}
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
 num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"

@@ -18,7 +18,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from data.qa import QADataset, QAAnswerIndexDataset
-from data.utils import add_dataset_index
+from data.utils import add_dataset_index, load_hf_dataset
 from model import get_model
 
 
@@ -30,6 +30,15 @@ BAD_CF_PREFIXES = (
     "counterfactual answer:",
     "alternate answer:",
 )
+
+DATASET_OWNER_ALIASES = (
+    "SwetieePawsss",
+    "SweetieePawsss",
+    "SweetiePawsss",
+)
+CANONICAL_DATASET_OWNER = "SwetieePawsss"
+DATASET_SUFFIXES = {"DUET", "exp_r"}
+DEFAULT_LOCAL_DATA_ROOT = Path("/data/home/vkropoti/unlearning")
 
 
 def _normalize_optional_arg(value: Optional[str]):
@@ -46,6 +55,132 @@ def _hf_token():
     )
 
 
+def _dataset_suffix(path: str) -> Optional[str]:
+    suffix = Path(path).name
+    if suffix in DATASET_SUFFIXES:
+        return suffix
+    return None
+
+
+def _local_dataset_roots() -> list[Path]:
+    roots: list[Path] = []
+    for env_var in ("DUALCF_DATA_ROOT", "UNLEARNING_DATA_ROOT", "DATA_ROOT", "DATASET_ROOT"):
+        value = os.environ.get(env_var)
+        if value:
+            roots.append(Path(value).expanduser())
+    roots.extend([SRC_ROOT.parent, DEFAULT_LOCAL_DATA_ROOT])
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
+
+
+def _resolve_local_dataset_path(path: str) -> Optional[str]:
+    raw_path = Path(path).expanduser()
+    candidates: list[Path] = []
+
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+    else:
+        candidates.append(Path.cwd() / raw_path)
+        candidates.append(SRC_ROOT.parent / raw_path)
+
+    suffix = _dataset_suffix(path)
+    if suffix is not None:
+        for root in _local_dataset_roots():
+            root = root.expanduser()
+            candidates.append(root / suffix)
+            for owner in DATASET_OWNER_ALIASES:
+                candidates.append(root / owner / suffix)
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+        if candidate.exists():
+            return str(candidate.resolve())
+    return None
+
+
+def _is_saved_dataset_artifact(path: str) -> bool:
+    root = Path(path).expanduser()
+    if not root.exists() or not root.is_dir():
+        return False
+    if (root / "dataset_dict.json").exists():
+        return True
+    if (root / "dataset_info.json").exists() and (root / "state.json").exists():
+        return True
+    return False
+
+
+def _dataset_path_candidates(path: str) -> list[str]:
+    candidates: list[str] = []
+    suffix = _dataset_suffix(path)
+    local_path = _resolve_local_dataset_path(path)
+    if local_path is not None and _is_saved_dataset_artifact(local_path):
+        candidates.append(local_path)
+
+    if suffix is None:
+        candidates.append(path)
+    else:
+        candidates.append(f"{CANONICAL_DATASET_OWNER}/{suffix}")
+        if path not in ("", f"{CANONICAL_DATASET_OWNER}/{suffix}"):
+            raw_path = Path(path).expanduser()
+            if raw_path.is_absolute() and _is_saved_dataset_artifact(str(raw_path)):
+                candidates.append(str(raw_path))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def _maybe_load_from_disk(
+    path: str,
+    split: str,
+    name: Optional[str] = None,
+):
+    root = Path(path).expanduser()
+    if not root.exists():
+        return None
+
+    candidates: list[Path] = []
+    if name:
+        candidates.append(root / name)
+    candidates.append(root)
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            dataset_obj = datasets.load_from_disk(str(candidate))
+        except Exception:
+            continue
+
+        if isinstance(dataset_obj, datasets.DatasetDict):
+            if split not in dataset_obj:
+                raise KeyError(
+                    f"Local dataset at {candidate} does not contain split `{split}`. "
+                    f"Available splits: {list(dataset_obj.keys())}"
+                )
+            return dataset_obj[split]
+        return dataset_obj
+
+    return None
+
+
 def load_dataset_split(
     path: str,
     split: str,
@@ -53,9 +188,10 @@ def load_dataset_split(
     data_files: Optional[str] = None,
     max_examples: int = 0,
 ):
-    kwargs: Dict[str, Any] = {"split": split}
     name = _normalize_optional_arg(name)
     data_files = _normalize_optional_arg(data_files)
+
+    kwargs: Dict[str, Any] = {"split": split}
     if name is not None:
         kwargs["name"] = name
     if data_files is not None:
@@ -64,11 +200,31 @@ def load_dataset_split(
     if token and "token" not in kwargs:
         kwargs["token"] = token
 
-    dataset = datasets.load_dataset(path, **kwargs)
-    dataset = add_dataset_index(dataset)
-    if max_examples and max_examples > 0:
-        dataset = dataset.select(range(min(int(max_examples), len(dataset))))
-    return dataset
+    last_error: Optional[Exception] = None
+    for candidate_path in _dataset_path_candidates(path):
+        local_dataset = None
+        if data_files is None:
+            local_dataset = _maybe_load_from_disk(path=candidate_path, split=split, name=name)
+        if local_dataset is not None:
+            dataset = add_dataset_index(local_dataset)
+            if max_examples and max_examples > 0:
+                dataset = dataset.select(range(min(int(max_examples), len(dataset))))
+            return dataset
+
+        try:
+            dataset = load_hf_dataset(candidate_path, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            continue
+
+        dataset = add_dataset_index(dataset)
+        if max_examples and max_examples > 0:
+            dataset = dataset.select(range(min(int(max_examples), len(dataset))))
+        return dataset
+
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(f"Unable to resolve dataset path: {path}")
 
 
 def resolve_answer(row: Dict[str, Any], answer_key: str, answer_index: Optional[int]):
@@ -142,7 +298,10 @@ def clean_counterfactual_text(text: Any, keep_first_line: bool = True) -> str:
         if cleaned_lower.startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
             break
-    cleaned = re.sub(r"^[\-\*\d\.\)\s]+", "", cleaned).strip()
+    # Strip common bullet/list prefixes without destroying standalone numeric
+    # answers like `2003`, `19th`, `3.14`, or `2000s`.
+    cleaned = re.sub(r"^(?:[-*•]\s+)", "", cleaned).strip()
+    cleaned = re.sub(r"^(?:\d+[\.\)]\s+)", "", cleaned).strip()
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned
 

@@ -199,6 +199,49 @@ Operational update:
   `CF_DATASET_PATH` is overridden away from `json`
 - RWKU local JSON mode defaults to `cf_dataset_name=null` and
   `cf_dataset_split=train`
+
+## Post-integration fixes
+
+- `scripts/duet/dual_cf_duet.sh` and `scripts/rwku/dual_cf_rwku.sh` no longer
+  unconditionally append DualCF-only Hydra overrides when `TRAINER=DPO`.
+  `DPO` now only receives `beta`, `alpha`, `gamma`, and `retain_loss_type`,
+  which matches `configs/trainer/DPO.yaml` and avoids Hydra struct errors such
+  as `Key 'tau_d' is not in struct`.
+- `scripts/duet/eval_checkpoints_duet.sh` and
+  `scripts/rwku/eval_checkpoints_rwku.sh` now treat `run_dir/base_model` as a
+  standalone LoKU FILA base model:
+  - they only use it when it has `config.json` plus model weights
+  - they stop inheriting the DUET SFT `MODEL_SUBFOLDER` for LoKU checkpoint and
+    utility evals
+  - otherwise they fall back to the original base model path instead of failing
+    on an incomplete `base_model` directory
+- `scripts/utility/eval_checkpoints_utility.sh` now mirrors that LoKU behavior
+  for checkpoint/final adapter utility evals: if `LORA_BASE_MODEL_PATH` points
+  at a standalone saved `base_model`, it clears only the model subfolder while
+  keeping the tokenizer subfolder intact.
+- `scripts/dualcf/run_campaign_one_lr.sh` now exports
+  more aggressive H100 throughput defaults:
+  - `IMPORTANCE_BATCH_SIZE=32`
+  - `EVAL_BATCH_SIZE=128`
+  - `UTILITY_EVAL_BATCH_SIZE=64`
+  instead of inheriting the older lower-throughput values.
+- `scripts/duet/loku_duet.sh` and `scripts/rwku/loku_rwku.sh` now use less
+  antiquated standalone defaults when unset explicitly:
+  - `IMPORTANCE_BATCH_SIZE=32`
+  - `EVAL_BATCH_SIZE=128`
+  instead of `1` / `8`.
+- DUET and RWKU endpoint / checkpoint eval defaults are now normalized across
+  the main launcher scripts:
+  - `EVAL_BATCH_SIZE=128` for DUET/RWKU training-side evals and checkpoint evals
+  - `UTILITY_EVAL_BATCH_SIZE=64` for Utility-1K sweeps
+  replacing the previous mixed `8` / `64` defaults.
+- The H100 production profile used by the DualCF v2 campaign was then raised
+  again for the main ablation tree (`dual`, `ga`, `npo`, `npo_sam`, `loku`):
+  - `PER_DEVICE_TRAIN_BS=32`
+  - `GRAD_ACCUM=1`
+  - `EVAL_BATCH_SIZE=192`
+  in both the shared campaign wrapper and the direct DUET/RWKU launcher
+  defaults, so direct reruns and campaign runs stay aligned.
 - the GPU validation playbook now lives in `plan-test-dual.md`, including:
   - explicit split-matched artifact preparation for DUET rare / popular / merged
   - stronger artifact validation and provenance requirements
@@ -1068,3 +1111,466 @@ RWKU compatibility follow-up:
 - these RWKU scripts were patched to match the DUET fixes, but they have not yet
   been validated with the same real multi-method smoke sweep that was run for
   DUET
+
+## Offline production runbook realignment (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- the offline GPU runbook now mirrors the validated v2 campaign structure from
+  `prod-run-dual-vast.md`, but keeps the production offline roots under
+  `/home/vkropoti/...` and `/data/home/vkropoti/...`
+- the file is now explicitly scoped to `Llama-3.1-8B-Instruct` with:
+  - `NUM_EPOCHS=5`
+  - half-epoch checkpoints
+  - LoRA parity `r=32`, `alpha=64`, `dropout=0.0`
+  - calibrated routing defaults
+- Utility-1K is now part of the GPU production runbook end to end:
+  - one-time panel build
+  - explicit checkpoint plus utility sweep commands
+  - merged trajectory outputs
+- the artifact flow in the GPU runbook now follows the real two-phase v2 path:
+  - DUET clean counterfactual generation first
+  - then DUET Llama scoring and calibration
+  - merged kept after split-first DUET
+  - RWKU kept as phase 2
+- unlike the VAST validation runbook, the GPU production runbook now uses
+  sequential single-shell command blocks instead of pre-splitting work across
+  H100 and L40S devices; hardware profiles stay documented, but device sharding
+  is deferred to a later pass
+
+## Train -> Eval -> Cleanup alignment (2026-03-15)
+
+Changed files:
+
+- `scripts/duet/dual_cf_duet.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- `scripts/duet/dual_cf_duet.sh` now matches the RWKU and older DUET baseline
+  launchers:
+  - it honors `RUN_CHECKPOINT_EVAL`
+  - it falls back to `RUN_UTILITY_EVAL` when `RUN_CHECKPOINT_EVAL` is unset
+  - it runs `eval_checkpoints_duet.sh` before any top-level safetensor cleanup
+- `prod-run-dual-gpu.md` now defaults the production path to:
+  - `RUN_CHECKPOINT_EVAL=1`
+  - `RUN_UTILITY_EVAL=1`
+  - `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
+  - `DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=1`
+- with that default combination, both DUET and RWKU now follow the same
+  per-run cadence:
+  - training
+  - endpoint eval
+  - checkpoint eval
+  - Utility-1K eval
+  - checkpoint adapter cleanup
+  - top-level run safetensor cleanup
+
+## Production LR shortlist update (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- the offline production runbook now defaults `LRS` to the four-value ablation
+  shortlist:
+  - `5e-6`
+  - `1e-5`
+  - `5e-5`
+  - `1e-4`
+- with the current method set in the runbook
+  (`full`, `d_only`, `a_only`, `dpo`, `ga`, `npo`, `npo_sam`, `loku`), this
+  means:
+  - `32` runs per split block
+  - `64` runs for DUET `rare + popular`
+  - `96` runs for DUET `rare + popular + merged`
+  - `128` runs for the full file including RWKU phase 2
+
+## One-LR campaign wrapper (2026-03-15)
+
+Changed files:
+
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- added `scripts/dualcf/run_campaign_one_lr.sh`, a production wrapper that:
+  - takes `GPU_ID` and a single `LR`
+  - applies the offline Llama 8B defaults from `prod-run-dual-gpu.md`
+  - keeps the automatic per-run cadence
+    `train -> eval -> Utility-1K -> cleanup`
+  - expects artifacts to be prebuilt under `ARTIFACT_ROOT`
+- the wrapper supports phase-gated execution:
+  - `duet_rare`
+  - `duet_popular`
+  - `duet_split_first`
+  - `duet_merged`
+  - `duet_all`
+  - `rwku`
+  - `all`
+- `prod-run-dual-gpu.md` now documents the balanced four-H100 usage pattern:
+  one GPU per LR, with the same phase on all four cards
+
+## vLLM device-order guardrail (2026-03-15)
+
+Changed files:
+
+- `scripts/vllm/start_qwen3_cf_server.sh`
+
+Updates:
+
+- the vLLM launcher now exports `CUDA_DEVICE_ORDER=PCI_BUS_ID` by default
+- if `VLLM_CUDA_VISIBLE_DEVICES` is set, the launcher now copies it into
+  `CUDA_VISIBLE_DEVICES` itself before starting `vllm`
+- the launcher now prints the effective CUDA selection so mixed `L40S` / `H100`
+  hosts are easier to verify before model load begins
+
+## Offline dataset-cache alignment for artifact prep (2026-03-15)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+
+Updates:
+
+- the shared artifact loader now uses the repo’s cache-aware
+  `data.utils.load_hf_dataset(...)` wrapper instead of raw
+  `datasets.load_dataset(...)`
+- this makes the artifact-prep path honor `HF_DATASETS_CACHE` in the same way
+  as the rest of the repo
+- the DUET and RWKU prep scripts now also support explicit local offline
+  mirrors through:
+  - `DUET_DATASET_PATH_LOCAL`
+  - `RWKU_DATASET_PATH_LOCAL`
+- both prep scripts now print the effective dataset path and
+  `HF_DATASETS_CACHE`, so offline dataset resolution is easier to debug on GPU
+  boxes
+
+## Offline local-mirror alignment with GA runbooks (2026-03-15)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+
+Updates:
+
+- artifact prep now normalizes the common dataset-owner typo
+  `SweetieePawsss/... -> SwetieePawsss/...`
+- the DUET and RWKU prep scripts now mirror the working production GA setup:
+  when a local repo mirror like `${repo_root}/SwetieePawsss/DUET` or
+  `${repo_root}/SwetieePawsss/exp_r` exists, the scripts resolve to that local
+  path directly instead of trying to reach the Hub in offline mode
+- this matches the symlink-based offline layout documented in
+  `prod-gpu-runs-new.md`
+
+## Dataset alias fallback for offline v2 artifact prep (2026-03-15)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+
+Updates:
+
+- the shared artifact loader no longer treats the first owner alias miss as
+  final; it now tries local mirrors first and then falls back across the known
+  DUET / RWKU owner aliases for the same dataset suffix
+- this covers mixed offline environments where training scripts work with one
+  cached alias while the v2 artifact prep receives another alias through
+  `DATASET_PATH`
+- the prep wrappers now resolve any `*/DUET` or `*/exp_r` input to a real local
+  directory when present, and warn when they have to rely on loader-side alias
+  fallback instead
+- removed a stale `_canonicalize_dataset_path(...)` call left behind by the
+  alias-fallback refactor; without this fix, `build_duet_candidate_bank.py`
+  failed before dataset loading with a `NameError`
+
+## GPU runbook reduced to four prepare commands (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- removed the active training blocks from the lower-half operator command sheet
+- the runbook now exposes exactly four preparation commands:
+  - DUET Phase A
+  - DUET Phase B
+  - RWKU Phase A
+  - RWKU Phase B
+- DUET `rare`, `popular`, and `merged` are all handled inside the DUET Phase
+  A/B loops
+
+## Exposed vLLM decoding knobs for artifact prep (2026-03-15)
+
+Changed files:
+
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- DUET and RWKU Phase A prep now accept generation controls through env vars:
+  - `GENERATOR_TEMPERATURE`
+  - `GENERATOR_TOP_P`
+  - `GENERATOR_MAX_NEW_TOKENS`
+- both prep scripts forward those values into `src/tools/make_counterfactuals.py`
+- the GPU runbook now shows the recommended tighter defaults for generation:
+  `0.2 / 0.8 / 32`
+- the underlying CLI default in `src/tools/make_counterfactuals.py` was also
+  reduced from `64` to `32` max new tokens so the repo default matches the
+  prep-script defaults
+
+## Qwen3.5 vLLM launcher aligned with ttft_bench (2026-03-15)
+
+Changed files:
+
+- `scripts/vllm/start_qwen3_cf_server.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- the vLLM launcher now matches the working `ttft_bench` serving profile more
+  closely for Qwen3.5:
+  - `MAX_LEN=4096`
+  - `OMP_NUM_THREADS=1`
+  - `--trust-remote-code`
+  - `--kv-cache-dtype fp8`
+  - `--calculate-kv-scales`
+  - `--enable-chunked-prefill`
+  - `--async-scheduling`
+  - `--max-num-batched-tokens 16384`
+  - `--max-cudagraph-capture-size 32`
+- the runbook vLLM section now uses the same safer defaults and includes the
+  launcher call again
+
+## Structured-output stability guardrails for vLLM CF generation (2026-03-15)
+
+Changed files:
+
+- `scripts/vllm/start_qwen3_cf_server.sh`
+- `src/tools/vllm_cf_client.py`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- the vLLM launcher now defaults structured outputs to the `guidance` backend
+  instead of leaving backend selection on `auto`, which helps avoid xgrammar
+  failures on Qwen3.5 JSON-schema requests
+- `async-scheduling` is now disabled by default for this serving path because
+  structured-output stability matters more than peak throughput here
+- the client no longer aborts the entire generation batch when one response is
+  empty or malformed JSON; it now falls back to an invalid row payload so the
+  cleaner can drop it and the run can continue
+- the client now passes the schema through `extra_body.structured_outputs`
+  rather than relying on `response_format` translation in the OpenAI-compatible
+  server path
+- plain-text vLLM generation is now the default client mode
+  (`VLLM_USE_STRUCTURED_OUTPUTS=0`); structured outputs remain opt-in for cases
+  where the grammar backend is stable
+
+## Targeted retry path for invalid RWKU counterfactual rows (2026-03-15)
+
+Changed files:
+
+- `src/tools/retry_invalid_counterfactuals.py`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- added a retry tool that reloads the raw Phase A JSONL, identifies only the
+  rows whose alternates are still invalid under the current cleaner rules, and
+  reruns those rows through the vLLM generator
+- the tool keeps the first valid retry per row, preserves invalid rows that are
+  still bad after all retry passes, and writes the merged raw JSONL back out
+- RWKU Phase A now supports this path in-line through:
+  - `RETRY_INVALID_CF_PASSES`
+  - `RETRY_INVALID_CF_CONCURRENCY`
+  - `RETRY_INVALID_CF_BATCH_SIZE`
+- the runbook now shows a conservative default retry setup for RWKU:
+  `2` passes, concurrency `4`, batch size `16`
+
+## Numeric fallback repair for empty counterfactual rows (2026-03-15)
+
+Changed files:
+
+- `src/tools/fix_numeric_empty_counterfactuals.py`
+
+Updates:
+
+- added a narrow rule-based repair tool for raw counterfactual JSONL artifacts
+- it only patches rows whose current alternate is invalid for the specific
+  reason `empty`
+- when the gold answer is a simple numeric form, the tool fills in a nearby
+  deterministic value instead of making another model call
+- supported forms are:
+  - plain integers
+  - decimals
+  - decade forms like `2000s`
+  - ordinals like `19th`
+- patched rows are tagged with:
+  - `cf_source=numeric_rule_fallback`
+  - `cf_answer_type=numeric_rule_fallback`
+
+## Numeric alternates preserved by shared cleaner (2026-03-15)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+
+Updates:
+
+- fixed `clean_counterfactual_text()` so it no longer strips leading digits from
+  standalone numeric answers
+- the cleaner now removes only actual bullet/list prefixes such as:
+  - `- foo`
+  - `1. foo`
+  - `2) foo`
+- numeric answers like `2003`, `19`, `19th`, `3.14`, and `2000s` now survive
+  cleaning and validation instead of collapsing to empty strings
+
+## Canonical DUET and RWKU dataset refs restored for offline prep (2026-03-15)
+
+Changed files:
+
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+- `src/tools/dual_cf_artifact_utils.py`
+
+Updates:
+
+- known `DUET` and `exp_r` dataset refs are now canonicalized back to
+  `SwetieePawsss/DUET` and `SwetieePawsss/exp_r` instead of being rewritten to
+  `/data/home/...` mirrors that `datasets.load_dataset()` cannot treat as a
+  local dataset script repo
+- the shared Python loader now only prefers local paths for these datasets when
+  they look like a real `datasets.save_to_disk()` artifact
+- typo variants such as `SweetieePawsss/...` and `SweetiePawsss/...` are still
+  accepted as input, but they are mapped to the canonical owner before loading
+
+## GPU runbook now resets leaked dataset env before DUET prep (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- added the one-time `SwetieePawsss -> /data/home/vkropoti/unlearning/SwetieePawsss`
+  symlink step explicitly to the offline runbook
+- DUET Phase A and Phase B command blocks now clear leaked RWKU and manual
+  dataset overrides before running:
+  - `unset FORGET_SPLIT`
+  - `unset RETAIN_SPLIT`
+  - `unset RWKU_DATASET_PATH_LOCAL`
+  - `unset DATASET_PATH`
+- the DUET blocks now force the canonical offline dataset reference:
+  `DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET`
+
+## 4x H100 LR-split launch blocks documented in GPU runbook (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- added a dedicated training section for `4x H100` using
+  `scripts/dualcf/run_campaign_one_lr.sh`
+- the runbook now documents the fixed LR-to-GPU mapping:
+  - GPU `0` -> `5e-6`
+  - GPU `1` -> `1e-5`
+  - GPU `2` -> `5e-5`
+  - GPU `3` -> `1e-4`
+- added ready-to-paste background launch blocks with `wait` for:
+  - `duet_rare`
+  - `duet_popular`
+  - `duet_merged`
+  - `rwku`
+- replaced file redirection with terminal-tagged launch commands using
+  `sed -u` prefixes, so logs stay visible in the terminal
+- the runbook now also provides a single `all` phase launch block for running
+  the full campaign on `4x H100`
+
+## Campaign wrapper now keeps DUET and RWKU tokenizer paths phase-local (2026-03-15)
+
+Changed files:
+
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- fixed a DUET training bug introduced by exporting `TOKENIZER_MODEL_PATH` as
+  the base-model path globally in the campaign wrapper
+- DUET phases now explicitly use:
+  - `TOKENIZER_MODEL_PATH=${DUET_LOCAL_SFT_BASE}`
+  - `TOKENIZER_SUBFOLDER=${DUET_SFT_SUBFOLDER}`
+- RWKU phases now explicitly reset back to the base-model tokenizer:
+  - `unset USE_SFT_BASE`
+  - `unset LOCAL_SFT_BASE`
+  - `unset SFT_SUBFOLDER`
+  - `unset TOKENIZER_SUBFOLDER`
+  - `TOKENIZER_MODEL_PATH=${HF_BASE_MODEL_PATH}`
+- removed the global `TOKENIZER_MODEL_PATH=${HF_BASE_MODEL_PATH}` export from
+  the GPU runbook common setup, because that override also breaks DUET when
+  `USE_SFT_BASE=1`
+
+## DUET checkpoint and utility eval now inherit the SFT subfolder (2026-03-15)
+
+Changed files:
+
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+
+Updates:
+
+- fixed a DUET post-endpoint-eval bug where checkpoint eval and Utility-1K eval
+  tried to load `SwetieePawsss/DUET_ft_models` as a model root without the
+  actual model subfolder
+- DUET checkpoint eval now reads:
+  - `MODEL_SUBFOLDER` or `SFT_SUBFOLDER`
+  - `TOKENIZER_SUBFOLDER`
+  and forwards them into `src/eval.py`
+- Utility-1K checkpoint eval now supports:
+  - `BASE_MODEL_SUBFOLDER`
+  - `LORA_BASE_MODEL_SUBFOLDER`
+  - `BASE_TOKENIZER_SUBFOLDER`
+  - `LORA_TOKENIZER_SUBFOLDER`
+- `eval_checkpoints_duet.sh` now passes the DUET SFT subfolder through to the
+  utility evaluator, so both endpoint follow-up sweeps load the same base
+  checkpoint layout as training and endpoint eval
+
+## Checkpoint and utility eval now force auto device placement (2026-03-15)
+
+Changed files:
+
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/rwku/eval_checkpoints_rwku.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+
+Updates:
+
+- fixed a major performance bug where checkpoint eval and Utility-1K eval did
+  not pass `model.model_args.device_map=auto`
+- those follow-up evaluators now also set:
+  - `++model.model_args.low_cpu_mem_usage=true`
+- before this fix, endpoint eval could run on GPU while checkpoint/utility eval
+  silently loaded models on CPU, causing:
+  - very slow batch times
+  - low or zero visible GPU utilization during checkpoint sweeps

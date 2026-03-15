@@ -13,13 +13,81 @@ require_file() {
   fi
 }
 
+resolve_dataset_path() {
+  local raw="$1"
+  local suffix=""
+  local basename_path=""
+
+  if [[ "${raw}" == /* && -e "${raw}" ]]; then
+    realpath "${raw}"
+    return
+  fi
+
+  if [[ -e "${raw}" ]]; then
+    realpath "${raw}"
+    return
+  fi
+
+  if [[ -e "${repo_root}/${raw}" ]]; then
+    realpath "${repo_root}/${raw}"
+    return
+  fi
+
+  basename_path=$(basename "${raw}")
+  case "${basename_path}" in
+    DUET|exp_r) suffix="${basename_path}" ;;
+  esac
+
+  if [[ -n "${suffix}" ]]; then
+    if [[ "${raw}" != "SwetieePawsss/${suffix}" ]]; then
+      echo "[prepare_dual_cf_rwku_v2] Canonicalized dataset path ${raw} -> SwetieePawsss/${suffix}" >&2
+    fi
+    echo "SwetieePawsss/${suffix}"
+    return
+  fi
+
+  case "${suffix}" in
+    DUET)
+      echo "SwetieePawsss/DUET"
+      return
+      ;;
+    exp_r)
+      echo "SwetieePawsss/exp_r"
+      return
+      ;;
+  esac
+
+  echo "${raw}"
+}
+
+warn_if_dataset_unresolved() {
+  local path="$1"
+  if [[ "${path}" == /* && -e "${path}" ]]; then
+    return
+  fi
+  if [[ "${path}" != /* && -e "${path}" ]]; then
+    return
+  fi
+  if [[ "${path}" != /* && -e "${repo_root}/${path}" ]]; then
+    return
+  fi
+
+  echo "[prepare_dual_cf_rwku_v2] Dataset path ${path} did not resolve to a local directory; the Python loader will try known RWKU aliases next." >&2
+}
+
 FORGET_SPLIT=${FORGET_SPLIT:-forget_level2}
 RETAIN_SPLIT=${RETAIN_SPLIT:-neighbor_level2}
-DATASET_PATH=${DATASET_PATH:-SwetieePawsss/exp_r}
+DATASET_PATH=${DATASET_PATH:-${RWKU_DATASET_PATH_LOCAL:-SwetieePawsss/exp_r}}
+DATASET_PATH=$(resolve_dataset_path "${DATASET_PATH}")
+warn_if_dataset_unresolved "${DATASET_PATH}"
 QUESTION_KEY=${QUESTION_KEY:-query}
 ANSWER_KEY=${ANSWER_KEY:-answer}
 OUT_DIR=${OUT_DIR:-${repo_root}/artifacts/dualcf/rwku/${FORGET_SPLIT}}
 mkdir -p "${OUT_DIR}"
+
+echo "[prepare_dual_cf_rwku_v2] DATASET_PATH=${DATASET_PATH}"
+echo "[prepare_dual_cf_rwku_v2] RETAIN_SPLIT=${RETAIN_SPLIT}"
+echo "[prepare_dual_cf_rwku_v2] HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-<unset>}"
 
 GENERATOR_BACKEND=${GENERATOR_BACKEND:-vllm_openai}
 VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
@@ -27,6 +95,9 @@ VLLM_API_KEY=${VLLM_API_KEY:-EMPTY}
 VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-64}
 GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-256}
+GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
+GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
+GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
 DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
 ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
 ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
@@ -51,6 +122,9 @@ stop_after_clean_cf="${STOP_AFTER_CLEAN_CF:-0}"
 skip_cf_generation="${SKIP_CF_GENERATION:-0}"
 drop_invalid_after_clean="${DROP_INVALID_AFTER_CLEAN:-1}"
 rebuild_clean_cf="${REBUILD_CLEAN_CF:-0}"
+retry_invalid_cf_passes="${RETRY_INVALID_CF_PASSES:-0}"
+retry_invalid_cf_concurrency="${RETRY_INVALID_CF_CONCURRENCY:-${GENERATOR_CONCURRENCY}}"
+retry_invalid_cf_batch_size="${RETRY_INVALID_CF_BATCH_SIZE:-${GENERATOR_BATCH_SIZE}}"
 
 clean_extra_args=()
 if [[ "${drop_invalid_after_clean}" == "1" ]]; then
@@ -88,11 +162,36 @@ else
     --vllm-model "${VLLM_MODEL}" \
     --generator-concurrency "${GENERATOR_CONCURRENCY}" \
     --generator-batch-size "${GENERATOR_BATCH_SIZE}" \
+    --temperature "${GENERATOR_TEMPERATURE}" \
+    --top-p "${GENERATOR_TOP_P}" \
+    --max-new-tokens "${GENERATOR_MAX_NEW_TOKENS}" \
     --repair-invalid \
     --reject-gold-substring \
     --require-short-answer \
     --max-overlap-ratio 0.85 \
     --max-alt-length-chars 128
+
+  if [[ "${retry_invalid_cf_passes}" != "0" ]]; then
+    python "${repo_root}/src/tools/retry_invalid_counterfactuals.py" \
+      --input-path "${RAW_CF}" \
+      --output-path "${RAW_CF}" \
+      --question-key "${QUESTION_KEY}" \
+      --answer-key "${ANSWER_KEY}" \
+      --mapping-key index \
+      --retry-passes "${retry_invalid_cf_passes}" \
+      --vllm-base-url "${VLLM_BASE_URL}" \
+      --vllm-api-key "${VLLM_API_KEY}" \
+      --vllm-model "${VLLM_MODEL}" \
+      --generator-concurrency "${retry_invalid_cf_concurrency}" \
+      --generator-batch-size "${retry_invalid_cf_batch_size}" \
+      --temperature "${GENERATOR_TEMPERATURE}" \
+      --top-p "${GENERATOR_TOP_P}" \
+      --max-new-tokens "${GENERATOR_MAX_NEW_TOKENS}" \
+      --reject-gold-substring \
+      --require-short-answer \
+      --max-overlap-ratio 0.85 \
+      --max-alt-length-chars 128
+  fi
 
   python "${repo_root}/src/tools/clean_counterfactuals.py" \
     --input-path "${RAW_CF}" \

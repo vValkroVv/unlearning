@@ -17,7 +17,7 @@ TOKENIZER_PATH=$5
 ORIGINAL_BASE_MODEL_PATH=${BASE_MODEL_PATH}
 MODEL_CONFIG_RAW=${6:-${LORA_MODEL_EVAL_CONFIG:-Llama-3.1-8B-Instruct-lora}}
 BASE_MODEL_CONFIG_RAW=${7:-${BASE_MODEL_EVAL_CONFIG:-}}
-EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-64}
+EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-128}
 DELETE_RUN_BASE_MODEL_AFTER_EVAL=${DELETE_RUN_BASE_MODEL_AFTER_EVAL:-0}
 DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL:-1}
 
@@ -36,6 +36,11 @@ has_loadable_weights() {
     || [[ -f "${model_dir}/model.safetensors.index.json" ]] \
     || [[ -f "${model_dir}/pytorch_model.bin" ]] \
     || [[ -f "${model_dir}/pytorch_model.bin.index.json" ]]
+}
+
+has_loadable_base_model() {
+  local model_dir="$1"
+  [[ -f "${model_dir}/config.json" ]] && has_loadable_weights "${model_dir}"
 }
 
 delete_checkpoint_adapter_weights() {
@@ -64,9 +69,12 @@ else
 fi
 
 RESOLVED_BASE_MODEL_PATH=${FILA_BASE_PATH:-${BASE_MODEL_PATH}}
-if [[ -d "${RUN_DIR}/base_model" ]]; then
+LORA_BASE_MODEL_SUBFOLDER_VALUE=""
+if has_loadable_base_model "${RUN_DIR}/base_model"; then
   RESOLVED_BASE_MODEL_PATH="${RUN_DIR}/base_model"
   echo "[rwku][ckpt-eval] Detected LoKU FILA base model at ${RESOLVED_BASE_MODEL_PATH}"
+elif [[ -d "${RUN_DIR}/base_model" ]]; then
+  echo "[rwku][ckpt-eval] Found ${RUN_DIR}/base_model but it is missing config/weights; falling back to ${RESOLVED_BASE_MODEL_PATH}"
 fi
 
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
@@ -91,6 +99,8 @@ for ckpt in "${CKPTS[@]}"; do
     model.model_args.pretrained_model_name_or_path=${ckpt} \
     ++model.model_args.base_model_name_or_path=${RESOLVED_BASE_MODEL_PATH} \
     model.tokenizer_args.pretrained_model_name_or_path=${TOKENIZER_PATH} \
+    model.model_args.device_map=auto \
+    ++model.model_args.low_cpu_mem_usage=true \
     eval.duet.batch_size=${EVAL_BATCH_SIZE} \
     eval.duet.overwrite=true \
     paths.output_dir=${out_dir} \
@@ -102,6 +112,7 @@ python src/tools/summarize_checkpoint_metrics.py \
   --output-path "${RUN_DIR}/checkpoint_evals/summary.tsv"
 
 if [[ "${RUN_UTILITY_EVAL:-0}" == "1" ]]; then
+  LORA_BASE_MODEL_SUBFOLDER="${LORA_BASE_MODEL_SUBFOLDER_VALUE}" \
   LORA_BASE_MODEL_PATH="${RESOLVED_BASE_MODEL_PATH}" "${script_dir}/../utility/eval_checkpoints_utility.sh" \
     "${RUN_DIR}" \
     "${BASE_MODEL_CONFIG}" \

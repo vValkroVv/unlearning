@@ -70,7 +70,7 @@ def parse_args():
     parser.add_argument("--device", default=None)
     parser.add_argument("--max-examples", type=int, default=0)
     parser.add_argument("--max-length", type=int, default=512)
-    parser.add_argument("--max-new-tokens", type=int, default=64)
+    parser.add_argument("--max-new-tokens", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--repair-invalid", action="store_true")

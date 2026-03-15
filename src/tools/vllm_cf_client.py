@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
+from json import JSONDecodeError
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from openai import AsyncOpenAI
@@ -38,21 +40,26 @@ class VLLMCFGenerator:
     timeout: float = 300.0
 
     def __post_init__(self) -> None:
+        self.use_structured_outputs = (
+            os.environ.get("VLLM_USE_STRUCTURED_OUTPUTS", "0").strip().lower()
+            in {"1", "true", "yes"}
+        )
         # Qwen3 enables thinking traces by default unless the chat template is
         # told otherwise. Disable them here so counterfactual generation stays a
         # short JSON-only answer span.
+        self.schema = CounterfactualResponse.model_json_schema()
         self.extra_body = {
             "chat_template_kwargs": {
                 "enable_thinking": False,
             },
         }
-        self.response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "counterfactual_response",
-                "schema": CounterfactualResponse.model_json_schema(),
-            },
-        }
+        if self.use_structured_outputs:
+            # vLLM documents structured outputs for the OpenAI-compatible server
+            # through extra_body. Keep the schema here rather than relying on
+            # response_format mapping inside the compatibility layer.
+            self.extra_body["structured_outputs"] = {
+                "json": self.schema,
+            }
 
     def _make_client(self) -> AsyncOpenAI:
         return AsyncOpenAI(
@@ -76,8 +83,14 @@ class VLLMCFGenerator:
             "2. Output a short answer span, not a sentence or explanation.\n"
             "3. Never mention, quote, negate, or compare against the gold answer.\n"
             "4. Do not add prefixes like Alternative answer or Wrong answer.\n"
-            "5. Return valid JSON only."
         )
+        if self.use_structured_outputs:
+            system += "5. Return valid JSON only."
+        else:
+            system += (
+                "5. Return only the alternative answer span.\n"
+                "6. Do not output JSON, bullets, labels, or explanation."
+            )
         user = f"Question: {question}\nGold answer: {answer}\n"
         if candidate_answers:
             user += "Candidate alternatives:\n"
@@ -85,10 +98,13 @@ class VLLMCFGenerator:
                 user += f"{idx}. {candidate}\n"
             user += (
                 "Select the best candidate or minimally rewrite one candidate for fluency. "
-                "Do not invent a long explanation."
+                "Return only the final alternative answer span."
             )
         else:
-            user += "Generate one plausible alternative answer of the same answer type."
+            user += (
+                "Generate one plausible alternative answer of the same answer type. "
+                "Return only the answer span."
+            )
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -112,12 +128,61 @@ class VLLMCFGenerator:
             temperature=self.temperature,
             top_p=self.top_p,
             max_tokens=self.max_tokens,
-            response_format=self.response_format,
             extra_body=self.extra_body,
         )
         content = response.choices[0].message.content
-        payload = json.loads(_strip_json_fence(content))
-        return CounterfactualResponse.model_validate(payload).model_dump()
+        if not self.use_structured_outputs:
+            alternate = _strip_json_fence(content).splitlines()[0].strip() if content else ""
+            return {
+                "alternate": alternate,
+                "same_relation": True,
+                "answer_type": "plain_text",
+            }
+        return self._parse_payload(content)
+
+    def _parse_payload(self, content: Any) -> Dict[str, Any]:
+        stripped = _strip_json_fence(content)
+        if not stripped:
+            return {
+                "alternate": "",
+                "same_relation": False,
+                "answer_type": "empty_response",
+            }
+
+        try:
+            payload = json.loads(stripped)
+        except JSONDecodeError:
+            # Some backends may fail structured decoding but still emit a short
+            # plain-text span. Preserve that instead of aborting the whole batch.
+            fallback_alternate = str(stripped).splitlines()[0].strip()[:128]
+            if fallback_alternate and not fallback_alternate.startswith("{"):
+                return {
+                    "alternate": fallback_alternate,
+                    "same_relation": True,
+                    "answer_type": "free_text_fallback",
+                }
+            return {
+                "alternate": "",
+                "same_relation": False,
+                "answer_type": "invalid_json",
+            }
+
+        if not isinstance(payload, dict):
+            return {
+                "alternate": "",
+                "same_relation": False,
+                "answer_type": "invalid_payload",
+            }
+
+        try:
+            return CounterfactualResponse.model_validate(payload).model_dump()
+        except Exception:
+            fallback_alternate = str(payload.get("alternate", "")).strip()[:128]
+            return {
+                "alternate": fallback_alternate,
+                "same_relation": bool(payload.get("same_relation", False)),
+                "answer_type": str(payload.get("answer_type", "invalid_schema")),
+            }
 
     async def many(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         semaphore = asyncio.Semaphore(max(1, int(self.concurrency)))

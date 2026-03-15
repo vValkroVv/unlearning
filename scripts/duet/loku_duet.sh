@@ -73,11 +73,11 @@ fi
 export MERGE_POPULARITY_FORGET=${MERGE_POPULARITY_FORGET:-1}
 set_forget_retain_splits
 
-per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
-gradient_accumulation_steps=${GRAD_ACCUM:-32}
-importance_batch_size=${IMPORTANCE_BATCH_SIZE:-1}
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+importance_batch_size=${IMPORTANCE_BATCH_SIZE:-32}
 importance_max_steps=${IMPORTANCE_MAX_STEPS:-0}
-eval_batch_size=${EVAL_BATCH_SIZE:-8}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
 num_train_epochs=${NUM_EPOCHS:-2}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"

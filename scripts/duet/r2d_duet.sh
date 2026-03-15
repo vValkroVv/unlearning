@@ -152,7 +152,7 @@ set_forget_retain_splits
 
 per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-1}
 gradient_accumulation_steps=${GRAD_ACCUM:-32}
-eval_batch_size=${EVAL_BATCH_SIZE:-8}
+eval_batch_size=${EVAL_BATCH_SIZE:-128}
 num_train_epochs=${NUM_EPOCHS:-1}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 

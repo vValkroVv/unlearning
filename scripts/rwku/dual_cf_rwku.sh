@@ -77,9 +77,9 @@ else
     cf_dataset_split="${CF_DATASET_SPLIT:-test}"
 fi
 
-per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-16}
-gradient_accumulation_steps=${GRAD_ACCUM:-2}
-eval_batch_size=${EVAL_BATCH_SIZE:-64}
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
 num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
@@ -263,6 +263,34 @@ for lr in "${lrs[@]}"; do
                                                                                                         )
                                                                                                     fi
 
+                                                                                                    extra_method_args=(
+                                                                                                        trainer.method_args.beta=${beta}
+                                                                                                        trainer.method_args.alpha=${alpha}
+                                                                                                        trainer.method_args.gamma=${gamma}
+                                                                                                        trainer.method_args.retain_loss_type=NLL
+                                                                                                    )
+                                                                                                    if [[ "${trainer}" == "DualCF" ]]; then
+                                                                                                        extra_method_args+=(
+                                                                                                            trainer.method_args.tau_d=${tau_d}
+                                                                                                            trainer.method_args.tau_a=${tau_a}
+                                                                                                            trainer.method_args.temp_d=${temp_d}
+                                                                                                            trainer.method_args.temp_a=${temp_a}
+                                                                                                            trainer.method_args.lambda_neg_max=${lambda_neg_max}
+                                                                                                            trainer.method_args.lambda_ret_lo=${lambda_ret_lo}
+                                                                                                            trainer.method_args.lambda_ret_hi=${lambda_ret_hi}
+                                                                                                            trainer.method_args.cf_weight=${cf_weight}
+                                                                                                            trainer.method_args.risk_forget_scale=${risk_forget_scale}
+                                                                                                            trainer.method_args.normalize_cf_by_tokens=${normalize_cf}
+                                                                                                            trainer.method_args.normalize_neg_by_tokens=${normalize_neg}
+                                                                                                            trainer.method_args.disable_difficulty_route=${disable_difficulty_route}
+                                                                                                            trainer.method_args.disable_attribution_route=${disable_attribution_route}
+                                                                                                            trainer.method_args.alpha_eff_stat=${alpha_eff_stat}
+                                                                                                            trainer.method_args.alpha_eff_topk_frac=${alpha_eff_topk_frac}
+                                                                                                            trainer.method_args.risk_power=${risk_power}
+                                                                                                            trainer.method_args.neg_power=${neg_power}
+                                                                                                        )
+                                                                                                    fi
+
                                                                                                     train_cmd=(
                                                                                                         src/train.py
                                                                                                         --config-name=unlearn.yaml
@@ -288,27 +316,7 @@ for lr in "${lrs[@]}"; do
                                                                                                         trainer.args.num_train_epochs=${num_train_epochs}
                                                                                                         trainer.args.gradient_checkpointing=${gradient_checkpointing}
                                                                                                         trainer.args.learning_rate=${lr}
-                                                                                                        trainer.method_args.beta=${beta}
-                                                                                                        trainer.method_args.alpha=${alpha}
-                                                                                                        trainer.method_args.gamma=${gamma}
-                                                                                                        trainer.method_args.retain_loss_type=NLL
-                                                                                                        trainer.method_args.tau_d=${tau_d}
-                                                                                                        trainer.method_args.tau_a=${tau_a}
-                                                                                                        trainer.method_args.temp_d=${temp_d}
-                                                                                                        trainer.method_args.temp_a=${temp_a}
-                                                                                                        trainer.method_args.lambda_neg_max=${lambda_neg_max}
-                                                                                                        trainer.method_args.lambda_ret_lo=${lambda_ret_lo}
-                                                                                                        trainer.method_args.lambda_ret_hi=${lambda_ret_hi}
-                                                                                                        trainer.method_args.cf_weight=${cf_weight}
-                                                                                                        trainer.method_args.risk_forget_scale=${risk_forget_scale}
-                                                                                                        trainer.method_args.normalize_cf_by_tokens=${normalize_cf}
-                                                                                                        trainer.method_args.normalize_neg_by_tokens=${normalize_neg}
-                                                                                                        trainer.method_args.disable_difficulty_route=${disable_difficulty_route}
-                                                                                                        trainer.method_args.disable_attribution_route=${disable_attribution_route}
-                                                                                                        trainer.method_args.alpha_eff_stat=${alpha_eff_stat}
-                                                                                                        trainer.method_args.alpha_eff_topk_frac=${alpha_eff_topk_frac}
-                                                                                                        trainer.method_args.risk_power=${risk_power}
-                                                                                                        trainer.method_args.neg_power=${neg_power}
+                                                                                                        "${extra_method_args[@]}"
                                                                                                         retain_logs_path=null
                                                                                                         "${extra_schedule_args[@]}"
                                                                                                         paths.output_dir=${run_dir}

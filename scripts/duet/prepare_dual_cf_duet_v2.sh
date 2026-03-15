@@ -13,6 +13,68 @@ require_file() {
   fi
 }
 
+resolve_dataset_path() {
+  local raw="$1"
+  local suffix=""
+  local basename_path=""
+
+  if [[ "${raw}" == /* && -e "${raw}" ]]; then
+    realpath "${raw}"
+    return
+  fi
+
+  if [[ -e "${raw}" ]]; then
+    realpath "${raw}"
+    return
+  fi
+
+  if [[ -e "${repo_root}/${raw}" ]]; then
+    realpath "${repo_root}/${raw}"
+    return
+  fi
+
+  basename_path=$(basename "${raw}")
+  case "${basename_path}" in
+    DUET|exp_r) suffix="${basename_path}" ;;
+  esac
+
+  if [[ -n "${suffix}" ]]; then
+    if [[ "${raw}" != "SwetieePawsss/${suffix}" ]]; then
+      echo "[prepare_dual_cf_duet_v2] Canonicalized dataset path ${raw} -> SwetieePawsss/${suffix}" >&2
+    fi
+    echo "SwetieePawsss/${suffix}"
+    return
+  fi
+
+  case "${suffix}" in
+    DUET)
+      echo "SwetieePawsss/DUET"
+      return
+      ;;
+    exp_r)
+      echo "SwetieePawsss/exp_r"
+      return
+      ;;
+  esac
+
+  echo "${raw}"
+}
+
+warn_if_dataset_unresolved() {
+  local path="$1"
+  if [[ "${path}" == /* && -e "${path}" ]]; then
+    return
+  fi
+  if [[ "${path}" != /* && -e "${path}" ]]; then
+    return
+  fi
+  if [[ "${path}" != /* && -e "${repo_root}/${path}" ]]; then
+    return
+  fi
+
+  echo "[prepare_dual_cf_duet_v2] Dataset path ${path} did not resolve to a local directory; the Python loader will try known DUET aliases next." >&2
+}
+
 FORGET_LABEL=${FORGET_LABEL:-rare}
 case "${FORGET_LABEL}" in
   rare) FORGET_SPLIT=${FORGET_SPLIT:-city_forget_rare_5} ;;
@@ -21,12 +83,18 @@ case "${FORGET_LABEL}" in
   *) echo "[prepare_dual_cf_duet_v2] Unsupported FORGET_LABEL=${FORGET_LABEL}" >&2; exit 1 ;;
 esac
 
-DATASET_PATH=${DATASET_PATH:-SwetieePawsss/DUET}
+DATASET_PATH=${DATASET_PATH:-${DUET_DATASET_PATH_LOCAL:-SwetieePawsss/DUET}}
+DATASET_PATH=$(resolve_dataset_path "${DATASET_PATH}")
+warn_if_dataset_unresolved "${DATASET_PATH}"
 RETAIN_SPLIT=${RETAIN_SPLIT:-city_fast_retain_500}
 QUESTION_KEY=${QUESTION_KEY:-question}
 ANSWER_KEY=${ANSWER_KEY:-answer}
 OUT_DIR=${OUT_DIR:-${repo_root}/artifacts/dualcf/duet/${FORGET_LABEL}}
 mkdir -p "${OUT_DIR}"
+
+echo "[prepare_dual_cf_duet_v2] DATASET_PATH=${DATASET_PATH}"
+echo "[prepare_dual_cf_duet_v2] RETAIN_SPLIT=${RETAIN_SPLIT}"
+echo "[prepare_dual_cf_duet_v2] HF_DATASETS_CACHE=${HF_DATASETS_CACHE:-<unset>}"
 
 GENERATOR_BACKEND=${GENERATOR_BACKEND:-vllm_openai}
 VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
@@ -34,6 +102,9 @@ VLLM_API_KEY=${VLLM_API_KEY:-EMPTY}
 VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
 GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-64}
 GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-256}
+GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
+GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
+GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
 DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
 ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
 ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
@@ -113,6 +184,9 @@ else
     --vllm-model "${VLLM_MODEL}" \
     --generator-concurrency "${GENERATOR_CONCURRENCY}" \
     --generator-batch-size "${GENERATOR_BATCH_SIZE}" \
+    --temperature "${GENERATOR_TEMPERATURE}" \
+    --top-p "${GENERATOR_TOP_P}" \
+    --max-new-tokens "${GENERATOR_MAX_NEW_TOKENS}" \
     --repair-invalid \
     --reject-gold-substring \
     --require-short-answer \

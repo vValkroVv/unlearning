@@ -1,15 +1,15 @@
 # Production DualCF GPU Runs (v2)
 
-This runbook is for the DualCF v2 iteration:
+This is the offline production runbook for the current DualCF v2 campaign.
 
-- clean counterfactuals first
-- percentile-calibrate routing offline
-- use hybrid retain attribution
-- run DUET `rare -> popular -> merged`
-- train for `5` epochs
-- save/evaluate half-epoch checkpoints
+Scope:
 
-Do not use Gemma as the main evidence path until counterfactual leakage is fixed.
+- `Llama-3.1-8B-Instruct` only
+- DualCF v2 ablations plus matched baselines
+- DUET `rare -> popular -> merged`
+- Utility-1K built once and evaluated automatically during each run
+- RWKU kept as phase 2 until DUET is stable
+- sequential end-to-end shell blocks for one box; no per-GPU sharding in this file yet
 
 ## Common setup
 
@@ -20,293 +20,306 @@ source /data/home/vkropoti/unlearning-venv/bin/activate
 export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
 export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
-mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR"
+export ARTIFACT_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf
+export OUTPUT_ROOT=/data/home/vkropoti/unlearning/saves/unlearn
+export UTILITY_ROOT=/data/home/vkropoti/unlearning/evals/utility_1k_v1
+export BASELINE_CACHE_ROOT=/data/home/vkropoti/unlearning/saves/eval/utility_baselines
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR" \
+  "$ARTIFACT_ROOT" "$OUTPUT_ROOT" "$UTILITY_ROOT" "$BASELINE_CACHE_ROOT"
 
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export PER_DEVICE_TRAIN_BS=16
-export GRAD_ACCUM=2
+
+# Llama 8B production defaults
+export BASE_MODEL=Llama-3.1-8B-Instruct
+export MODEL_CONFIG=Llama-3.1-8B-Instruct-lora
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
+export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
+export BASE_MODEL_EVAL_CONFIG=Llama-3.1-8B-Instruct
+export LORA_MODEL_EVAL_CONFIG=Llama-3.1-8B-Instruct-lora
+
+# DUET SFT base for DUET artifact prep and DUET runs
+export DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models
+export DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
+
+# production LoRA parity
+export LORA_RS=32
+export LORA_ALPHAS=64
+export LORA_DROPOUTS=0.0
+
+# calibrated DualCF defaults
+export TAU_DS=0.6
+export TAU_AS=0.6
+export TEMP_DS=0.15
+export TEMP_AS=0.15
+export LAMBDA_RET_HIS=3.0
+export ALPHA_EFF_STATS=topk_mean
+export ALPHA_EFF_TOPK_FRACS=0.25
+export RISK_FORGET_SCALES=0.5
+
+# ablation LR shortlist
+export LRS="${LRS:-5e-6 1e-5 5e-5 1e-4}"
+
+# trajectory behavior
 export NUM_EPOCHS=5
-export EVAL_BATCH_SIZE=64
-export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1
 export CHECKPOINT_EVERY_HALF_EPOCH=1
 export SAVE_TOTAL_LIMIT=12
-export OUTPUT_ROOT=/data/home/vkropoti/unlearning/saves/unlearn
+export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1
+export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=1
 
-export LRS="1e-6 5e-6 1e-5 5e-5 1e-4"
-export TAU_DS="0.4 0.5 0.6"
-export TAU_AS="0.4 0.5 0.6"
-export TEMP_DS="0.1 0.2 0.4"
-export TEMP_AS="0.1 0.2 0.4"
-export RISK_FORGET_SCALES="0.25 0.5 0.75"
-export LAMBDA_RET_HIS="2.0 3.0 4.0"
-export ALPHA_EFF_STATS="topk_mean"
-export ALPHA_EFF_TOPK_FRACS="0.25"
+# default production cadence:
+# train -> endpoint eval -> checkpoint eval -> Utility-1K -> cleanup -> next run
+export RUN_CHECKPOINT_EVAL=1
+export RUN_UTILITY_EVAL=1
+export EVAL_RUN_BASE_MODEL=0
+export UTILITY_EVAL_BATCH_SIZE=64
+export UTILITY_APPLY_CHAT_TEMPLATE=true
 ```
 
-`OUTPUT_ROOT` is respected by:
+All DUET and RWKU launchers now write task directories directly under
+`${OUTPUT_ROOT}` and skip rerunning finished jobs unless `FORCE_RERUN=1`.
 
-- `scripts/duet/dual_cf_duet.sh`
-- `scripts/rwku/dual_cf_rwku.sh`
-- `scripts/duet/ga_duet.sh`
-- `scripts/duet/npo_duet.sh`
-- `scripts/duet/npo_sam_duet.sh`
-- `scripts/duet/loku_duet.sh`
-- `scripts/rwku/ga_rwku.sh`
-- `scripts/rwku/npo_rwku.sh`
-- `scripts/rwku/npo_sam_rwku.sh`
-- `scripts/rwku/loku_rwku.sh`
+## Hardware profile
 
-So the run directories land under:
+Pick one profile for the current shell. Keep the H100-sized profile active by
+default; switch to the commented L40S profile only if needed. This file does
+not split work across devices yet.
 
-- `/data/home/vkropoti/unlearning/saves/unlearn/<task_name>`
+```bash
+# active train / scoring profile
+export PER_DEVICE_TRAIN_BS=32
+export GRAD_ACCUM=1
+export EVAL_BATCH_SIZE=192
+export IMPORTANCE_BATCH_SIZE=32
+export DIFFICULTY_BATCH_SIZE=32
+export ATTR_RETAIN_BATCH_SIZE=4
+export ATTR_RETAIN_MAX_STEPS=0
+export ATTR_FORGET_MAX_STEPS=0
 
-For `LoKU`, importance files also move out of the repo and default to:
+# lighter fallback profile
+# export PER_DEVICE_TRAIN_BS=16
+# export GRAD_ACCUM=2
+# export EVAL_BATCH_SIZE=128
+# export IMPORTANCE_BATCH_SIZE=16
+# export DIFFICULTY_BATCH_SIZE=16
+# export ATTR_RETAIN_BATCH_SIZE=2
+```
 
-- `/data/home/vkropoti/unlearning/saves/importances/duet/loku`
-- `/data/home/vkropoti/unlearning/saves/importances/rwku/loku`
+## Utility-1K panel
 
-With the matched launcher updates, all DUET/RWKU ablations now also:
+Build the fixed general-knowledge panel once per machine and reuse it for every
+training run and checkpoint sweep.
 
-- save `checkpoint-*` directories every ~0.5 epoch when
-  `CHECKPOINT_EVERY_HALF_EPOCH=1`
-- write `dualcf_trace.jsonl` into each run directory
-- remove only top-level `*.safetensors` from `run_dir/` after endpoint eval when
-  `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
+```bash
+mkdir -p "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
 
-Checkpoint safetensors are intentionally kept until you finish trajectory eval.
-
-LoKU-specific note:
-
-- `DELETE_FILA_BASE_AFTER_EVAL` now defaults to `0`
-- if you force `DELETE_FILA_BASE_AFTER_EVAL=1` together with
-  `CHECKPOINT_EVERY_HALF_EPOCH=1`, the launcher overrides it back to `0`
-- this is required because LoKU checkpoint eval needs `run_dir/base_model`
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
+  --mmlu-pro 400 \
+  --truthfulqa-bin 200 \
+  --arc 200 \
+  --winogrande 200
+```
 
 ## vLLM generator
 
-Run the Qwen3 generator in a separate env or container, not in the training env.
+Run the Qwen3.5 counterfactual generator in a separate shell and separate env.
+The offline default below uses the local snapshot path directly.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507
-export TP=4
-export MAX_LEN=8192
-export PORT=8000
+cd /home/vkropoti/diploma/open-unlearning
+source /data/home/vkropoti/unlearning-vllm-venv/bin/activate
 
-scripts/vllm/start_qwen3_cf_server.sh
+export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
+export VLLM_CUDA_VISIBLE_DEVICES=${VLLM_CUDA_VISIBLE_DEVICES:-1}
+export CUDA_VISIBLE_DEVICES=${VLLM_CUDA_VISIBLE_DEVICES}
+export MODEL=${VLLM_MODEL}
+export TP=${TP:-1}
+export MAX_LEN=${MAX_LEN:-4096}
+export PORT=${PORT:-8000}
+export GPU_UTIL=${GPU_UTIL:-0.90}
+export DTYPE=${DTYPE:-auto}
+export KV_CACHE_DTYPE=${KV_CACHE_DTYPE:-fp8}
+export TRUST_REMOTE_CODE=${TRUST_REMOTE_CODE:-1}
+export ENABLE_CHUNKED_PREFILL=${ENABLE_CHUNKED_PREFILL:-1}
+export ASYNC_SCHEDULING=${ASYNC_SCHEDULING:-0}
+export CALCULATE_KV_SCALES=${CALCULATE_KV_SCALES:-1}
+export MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-16384}
+export MAX_CUDAGRAPH_CAPTURE_SIZE=${MAX_CUDAGRAPH_CAPTURE_SIZE:-32}
+export STRUCTURED_OUTPUTS_BACKEND=${STRUCTURED_OUTPUTS_BACKEND:-guidance}
+
+bash scripts/vllm/start_qwen3_cf_server.sh
+
 ```
 
 In the training shell:
 
 ```bash
+cd /home/vkropoti/diploma/open-unlearning
+source /data/home/vkropoti/unlearning-venv/bin/activate
+
 export VLLM_BASE_URL=http://127.0.0.1:8000/v1
 export VLLM_API_KEY=EMPTY
-export VLLM_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507
+export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-0}
+```
+
+Build all clean counterfactual files first, then stop the vLLM server before
+any Llama scoring or training.
+
+One-time offline dataset wiring on the GPU box:
+
+```bash
+ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss \
+  /home/vkropoti/diploma/open-unlearning/SwetieePawsss
 ```
 
 ## Artifact prep
 
-### DUET rare
+Only four commands matter here:
+
+1. DUET Phase A: generate and clean
+2. DUET Phase B: score and calibrate
+3. RWKU Phase A: generate and clean
+4. RWKU Phase B: score and calibrate
+
+For DUET, `merged` is included in the same command and reuses the `rare` and
+`popular` split artifacts by default.
+
+### 1. DUET Phase A
+
+Run this while the vLLM server is up.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
 export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
 export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
-export SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models
-export SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
-export FORGET_LABEL=rare
-export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/rare_llama_v2
+export SFT_MODEL_PATH=${DUET_LOCAL_SFT_BASE}
+export SFT_SUBFOLDER=${DUET_SFT_SUBFOLDER}
+unset FORGET_SPLIT
+unset RETAIN_SPLIT
+unset RWKU_DATASET_PATH_LOCAL
+unset DATASET_PATH
+export DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET
+export DROP_INVALID_AFTER_CLEAN=1
+export STOP_AFTER_CLEAN_CF=1
+export GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
+export GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
+export GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
+unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+for FORGET_LABEL in rare popular merged; do
+  export FORGET_LABEL
+  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v2"
+  bash scripts/duet/prepare_dual_cf_duet_v2.sh
+done
 ```
 
-### DUET popular
+### 2. DUET Phase B
+
+Stop the vLLM server before this step.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4
-export FORGET_LABEL=popular
-export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/popular_llama_v2
-
-scripts/duet/prepare_dual_cf_duet_v2.sh
-```
-
-### DUET merged
-
-Run this only after rare and popular are clean.
-
-```bash
-export CUDA_VISIBLE_DEVICES=4
-export FORGET_LABEL=merged
-export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/merged_llama_v2
-
-scripts/duet/prepare_dual_cf_duet_v2.sh
-```
-
-### RWKU
-
-```bash
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
 export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
 export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
-export BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
+export SFT_MODEL_PATH=${DUET_LOCAL_SFT_BASE}
+export SFT_SUBFOLDER=${DUET_SFT_SUBFOLDER}
+unset FORGET_SPLIT
+unset RETAIN_SPLIT
+unset RWKU_DATASET_PATH_LOCAL
+unset DATASET_PATH
+export DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET
+unset STOP_AFTER_CLEAN_CF
+export SKIP_CF_GENERATION=1
+export DROP_INVALID_AFTER_CLEAN=1
+
+for FORGET_LABEL in rare popular merged; do
+  export FORGET_LABEL
+  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v2"
+  bash scripts/duet/prepare_dual_cf_duet_v2.sh
+done
+```
+
+### 3. RWKU Phase A
+
+Start the vLLM server again before this step.
+
+```bash
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
-export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama_level2_v2
+export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2"
+export DROP_INVALID_AFTER_CLEAN=1
+export STOP_AFTER_CLEAN_CF=1
+export GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
+export GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
+export GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
+export RETRY_INVALID_CF_PASSES=${RETRY_INVALID_CF_PASSES:-2}
+export RETRY_INVALID_CF_CONCURRENCY=${RETRY_INVALID_CF_CONCURRENCY:-4}
+export RETRY_INVALID_CF_BATCH_SIZE=${RETRY_INVALID_CF_BATCH_SIZE:-16}
+unset SKIP_CF_GENERATION
 
-scripts/rwku/prepare_dual_cf_rwku_v2.sh
+bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
 ```
 
-## DUET training
+### 4. RWKU Phase B
 
-### Full DualCF
-
-Rare:
+Stop the vLLM server before this step.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=4
-export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/rare_llama_v2/dualcf_rare_v2.jsonl
-export METHOD_VARIANT=full
-export FORGET_LABEL=rare
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
+export FORGET_SPLIT=forget_level2
+export RETAIN_SPLIT=neighbor_level2
+export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2"
+unset STOP_AFTER_CLEAN_CF
+export SKIP_CF_GENERATION=1
+export DROP_INVALID_AFTER_CLEAN=1
 
-scripts/duet/run_dualcf_ablation_v2.sh
+bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
 ```
 
-Popular:
+## Training on 4x H100
+
+Use one LR per H100:
+
+- GPU `0`: `5e-6`
+- GPU `1`: `1e-5`
+- GPU `2`: `5e-5`
+- GPU `3`: `1e-4`
+
+Run the full campaign with terminal logs and a tag prefix per process:
 
 ```bash
-export CUDA_VISIBLE_DEVICES=5
-export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/popular_llama_v2/dualcf_popular_v2.jsonl
-export METHOD_VARIANT=full
-export FORGET_LABEL=popular
-
-scripts/duet/run_dualcf_ablation_v2.sh
+bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 all 2>&1 | sed -u "s/^/[gpu0 lr=5e-6 all] /"' &
+bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 1 1e-5 all 2>&1 | sed -u "s/^/[gpu1 lr=1e-5 all] /"' &
+bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 all 2>&1 | sed -u "s/^/[gpu2 lr=5e-5 all] /"' &
+bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 all 2>&1 | sed -u "s/^/[gpu3 lr=1e-4 all] /"' &
+wait
 ```
 
-Merged:
+This runs on each H100, in order:
 
-```bash
-export CUDA_VISIBLE_DEVICES=6
-export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/merged_llama_v2/dualcf_merged_v2.jsonl
-export METHOD_VARIANT=full
-export FORGET_LABEL=merged
+- `duet_rare`
+- `duet_popular`
+- `duet_merged`
+- `rwku`
 
-scripts/duet/run_dualcf_ablation_v2.sh
-```
-
-### Required ablations
-
-Difficulty-only:
-
-```bash
-export METHOD_VARIANT=d_only
-scripts/duet/run_dualcf_ablation_v2.sh
-```
-
-Attribution-only:
-
-```bash
-export METHOD_VARIANT=a_only
-scripts/duet/run_dualcf_ablation_v2.sh
-```
-
-Uniform counterfactual DPO:
-
-```bash
-export METHOD_VARIANT=dpo
-scripts/duet/run_dualcf_ablation_v2.sh
-```
-
-Baselines:
-
-```bash
-export METHOD_VARIANT=ga
-scripts/duet/run_dualcf_ablation_v2.sh
-
-export METHOD_VARIANT=npo
-scripts/duet/run_dualcf_ablation_v2.sh
-
-export METHOD_VARIANT=npo_sam
-scripts/duet/run_dualcf_ablation_v2.sh
-
-export METHOD_VARIANT=loku
-scripts/duet/run_dualcf_ablation_v2.sh
-```
-
-Every method variant above now uses the same trajectory-saving behavior:
-
-- half-epoch `checkpoint-*` saves
-- endpoint eval into `run_dir/evals`
-- training trace in `run_dir/dualcf_trace.jsonl`
-- top-level adapter safetensor cleanup after endpoint eval
-
-## RWKU training
-
-```bash
-export CUDA_VISIBLE_DEVICES=7
-export CF_DATASET_DATA_FILES=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama_level2_v2/dualcf_forget_level2_v2.jsonl
-export METHOD_VARIANT=full
-
-scripts/rwku/run_dualcf_ablation_v2.sh
-```
-
-Run the same ablation variants on RWKU after DUET rare/popular are stable.
-
-## Checkpoint evaluation
-
-DUET:
-
-```bash
-scripts/duet/eval_checkpoints_duet.sh \
-  /path/to/run_dir \
-  city_forget_rare_5 \
-  city_fast_retain_500 \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
-```
-
-For LoKU, the checkpoint evaluator auto-detects `run_dir/base_model` and uses it
-instead of the original base path. To clean that FILA base after trajectory eval:
-
-```bash
-DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/duet/eval_checkpoints_duet.sh \
-  /path/to/loku_run_dir \
-  city_forget_rare_5 \
-  city_fast_retain_500 \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
-```
-
-RWKU:
-
-```bash
-scripts/rwku/eval_checkpoints_rwku.sh \
-  /path/to/run_dir \
-  forget_level2 \
-  neighbor_level2 \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
-```
-
-For LoKU on RWKU, the same cleanup pattern works:
-
-```bash
-DELETE_RUN_BASE_MODEL_AFTER_EVAL=1 scripts/rwku/eval_checkpoints_rwku.sh \
-  /path/to/loku_run_dir \
-  forget_level2 \
-  neighbor_level2 \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct \
-  /data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
-```
-
-Each script writes:
-
-- per-checkpoint eval folders under `checkpoint_evals/`
-- `checkpoint_evals/summary.tsv`
-
-## Campaign order
-
-1. DUET rare, full + ablations.
-2. DUET popular, full + ablations.
-3. DUET merged, full only after split runs are clean.
-4. RWKU with the hybrid proxy retain map.
-5. Expand to Qwen only after the Llama path is stable.
+If you want only DUET and no RWKU yet, change `all` to `duet_all` in the same
+four commands.
