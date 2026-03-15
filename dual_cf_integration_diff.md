@@ -1574,3 +1574,65 @@ Updates:
   silently loaded models on CPU, causing:
   - very slow batch times
   - low or zero visible GPU utilization during checkpoint sweeps
+
+## RWKU manual raw-generation repair workflow is now documented (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+- `tmp_rwku_fix.txt`
+- `tmp_rwku_apply_manual_fixes.py`
+- `tmp_rwku_verify_clean.py`
+
+Updates:
+
+- the RWKU Phase A and Phase B runbook blocks now document the exact
+  single-shell commands used on the H100 box with:
+  - `CUDA_VISIBLE_DEVICES=1`
+  - Phase A generation defaults:
+    - `GENERATOR_CONCURRENCY=128`
+    - `GENERATOR_BATCH_SIZE=512`
+    - `RETRY_INVALID_CF_CONCURRENCY=8`
+    - `RETRY_INVALID_CF_BATCH_SIZE=32`
+  - Phase B scoring defaults:
+    - `DIFFICULTY_BATCH_SIZE=64`
+    - `ATTR_RETAIN_BATCH_SIZE=8`
+- added a short RWKU repair note to the runbook describing the actual recovery
+  path used for bad vLLM generations:
+  - raw invalid rows: `464`
+  - built-in numeric fallback repaired: `414`
+  - remaining manual fixes: `50`
+- added root-level temporary helpers for that manual RWKU recovery pass:
+  - `tmp_rwku_fix.txt` contains the curated replacements
+  - `tmp_rwku_apply_manual_fixes.py` patches the clean artifact and validates it
+  - `tmp_rwku_verify_clean.py` checks `raw` vs `clean` vs `final` and fails if
+    any repaired rows are still missing or invalid
+
+## DUET H100 prep commands and repair path are now documented (2026-03-15)
+
+Changed files:
+
+- `prod-run-dual-gpu.md`
+
+Updates:
+
+- the DUET Phase A and Phase B runbook blocks now document the exact
+  single-shell commands used on the H100 box with:
+  - `CUDA_VISIBLE_DEVICES=1`
+  - Phase A generation defaults:
+    - `GENERATOR_CONCURRENCY=128`
+    - `GENERATOR_BATCH_SIZE=512`
+  - Phase B scoring defaults:
+    - `DIFFICULTY_BATCH_SIZE=64`
+    - `ATTR_RETAIN_BATCH_SIZE=8`
+- added a DUET-specific vLLM repair note so the runbook does not imply the RWKU
+  manual-fix workflow applies there
+- the documented DUET recovery path is:
+  - build `step0_candidate_bank.jsonl`
+  - generate with `--candidate-bank`
+  - clean with `--candidate-bank --repair-invalid`
+  - enforce strict short-answer / gold-substring / overlap checks
+  - drop only the rows that remain invalid after candidate-bank repair
+- the runbook also now records the clean-only rebuild path for DUET:
+  - `SKIP_CF_GENERATION=1`
+  - `REBUILD_CLEAN_CF=1`

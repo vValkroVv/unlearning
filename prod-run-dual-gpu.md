@@ -201,11 +201,14 @@ For DUET, `merged` is included in the same command and reuses the `rare` and
 Run this while the vLLM server is up.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-1}
 export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
 export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
 export SFT_MODEL_PATH=${DUET_LOCAL_SFT_BASE}
 export SFT_SUBFOLDER=${DUET_SFT_SUBFOLDER}
+export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
+export VLLM_API_KEY=${VLLM_API_KEY:-EMPTY}
+export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
 unset FORGET_SPLIT
 unset RETAIN_SPLIT
 unset RWKU_DATASET_PATH_LOCAL
@@ -213,6 +216,8 @@ unset DATASET_PATH
 export DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET
 export DROP_INVALID_AFTER_CLEAN=1
 export STOP_AFTER_CLEAN_CF=1
+export GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-128}
+export GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-512}
 export GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
 export GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
 export GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
@@ -223,6 +228,12 @@ for FORGET_LABEL in rare popular merged; do
   export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v2"
   bash scripts/duet/prepare_dual_cf_duet_v2.sh
 done
+```
+
+Single-shell form used on the H100 box:
+
+```bash
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_API_KEY=EMPTY VLLM_MODEL=/data/home/vkropoti/models/Qwen3.5-27B DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DROP_INVALID_AFTER_CLEAN=1 STOP_AFTER_CLEAN_CF=1 GENERATOR_CONCURRENCY=128 GENERATOR_BATCH_SIZE=512 GENERATOR_TEMPERATURE=0.2 GENERATOR_TOP_P=0.8 GENERATOR_MAX_NEW_TOKENS=32 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset SKIP_CF_GENERATION && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v2; bash scripts/duet/prepare_dual_cf_duet_v2.sh; done
 ```
 
 ### 2. DUET Phase B
@@ -230,7 +241,7 @@ done
 Stop the vLLM server before this step.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-1}
 export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
 export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
 export SFT_MODEL_PATH=${DUET_LOCAL_SFT_BASE}
@@ -240,6 +251,10 @@ unset RETAIN_SPLIT
 unset RWKU_DATASET_PATH_LOCAL
 unset DATASET_PATH
 export DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET
+export DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-64}
+export ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-8}
+export ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
+export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 unset STOP_AFTER_CLEAN_CF
 export SKIP_CF_GENERATION=1
 export DROP_INVALID_AFTER_CLEAN=1
@@ -251,29 +266,71 @@ for FORGET_LABEL in rare popular merged; do
 done
 ```
 
+Single-shell form used on the H100 box:
+
+```bash
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset STOP_AFTER_CLEAN_CF && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v2; bash scripts/duet/prepare_dual_cf_duet_v2.sh; done
+```
+
+### DUET vLLM Repair Notes
+
+For DUET we used the built-in candidate-bank repair path instead of the RWKU
+manual patch workflow.
+
+What we used to keep DUET vLLM generations clean:
+
+1. `scripts/duet/prepare_dual_cf_duet_v2.sh` first builds
+   `step0_candidate_bank.jsonl` with relation-consistent candidates.
+2. `make_counterfactuals.py` receives that bank through `--candidate-bank`, so
+   generation is constrained to same-relation alternatives.
+3. `clean_counterfactuals.py` reruns with:
+   - `--candidate-bank`
+   - `--repair-invalid`
+   - `--reject-gold-substring`
+   - `--require-short-answer`
+   - `--max-overlap-ratio 0.85`
+   - `--max-alt-length-chars 128`
+4. `DROP_INVALID_AFTER_CLEAN=1` removes any rows still invalid after that bank
+   repair step.
+5. If we need to rebuild clean artifacts without rerunning vLLM generation, we
+   use:
+   - `SKIP_CF_GENERATION=1`
+   - `REBUILD_CLEAN_CF=1`
+
 ### 3. RWKU Phase A
 
 Start the vLLM server again before this step.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-1}
 export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
 export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
 export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
+export VLLM_BASE_URL=${VLLM_BASE_URL:-http://127.0.0.1:8000/v1}
+export VLLM_API_KEY=${VLLM_API_KEY:-EMPTY}
+export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
 export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2"
 export DROP_INVALID_AFTER_CLEAN=1
 export STOP_AFTER_CLEAN_CF=1
+export GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-128}
+export GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-512}
 export GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
 export GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
 export GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
 export RETRY_INVALID_CF_PASSES=${RETRY_INVALID_CF_PASSES:-2}
-export RETRY_INVALID_CF_CONCURRENCY=${RETRY_INVALID_CF_CONCURRENCY:-4}
-export RETRY_INVALID_CF_BATCH_SIZE=${RETRY_INVALID_CF_BATCH_SIZE:-16}
+export RETRY_INVALID_CF_CONCURRENCY=${RETRY_INVALID_CF_CONCURRENCY:-8}
+export RETRY_INVALID_CF_BATCH_SIZE=${RETRY_INVALID_CF_BATCH_SIZE:-32}
 unset SKIP_CF_GENERATION
 
 bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+```
+
+Single-shell form used on the H100 box:
+
+```bash
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_API_KEY=EMPTY VLLM_MODEL=/data/home/vkropoti/models/Qwen3.5-27B FORGET_SPLIT=forget_level2 RETAIN_SPLIT=neighbor_level2 OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2 DROP_INVALID_AFTER_CLEAN=1 STOP_AFTER_CLEAN_CF=1 GENERATOR_CONCURRENCY=128 GENERATOR_BATCH_SIZE=512 GENERATOR_TEMPERATURE=0.2 GENERATOR_TOP_P=0.8 GENERATOR_MAX_NEW_TOKENS=32 RETRY_INVALID_CF_PASSES=2 RETRY_INVALID_CF_CONCURRENCY=8 RETRY_INVALID_CF_BATCH_SIZE=32 && unset SKIP_CF_GENERATION && bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
 ```
 
 ### 4. RWKU Phase B
@@ -281,19 +338,55 @@ bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
 Stop the vLLM server before this step.
 
 ```bash
-export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-0}
+export CUDA_VISIBLE_DEVICES=${PREP_CUDA_VISIBLE_DEVICES:-1}
 export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
 export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
 export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
 export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2"
+export DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-64}
+export ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-8}
+export ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
+export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 unset STOP_AFTER_CLEAN_CF
 export SKIP_CF_GENERATION=1
 export DROP_INVALID_AFTER_CLEAN=1
 
 bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
 ```
+
+Single-shell form used on the H100 box:
+
+```bash
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct FORGET_SPLIT=forget_level2 RETAIN_SPLIT=neighbor_level2 OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 && unset STOP_AFTER_CLEAN_CF && bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+```
+
+### RWKU vLLM Repair Notes
+
+For the current RWKU run, raw vLLM generation produced `464` invalid rows:
+
+- `416` `empty`
+- `5` `exact_match`
+- `43` `gold_substring`
+
+What we used to recover the artifact:
+
+1. The built-in numeric fallback already repaired `414` rows during raw -> clean.
+2. The remaining `50` rows were fixed manually with:
+   - `tmp_rwku_fix.txt`
+   - `tmp_rwku_apply_manual_fixes.py`
+3. The clean artifact was checked with:
+   - `python tmp_rwku_verify_clean.py --out-dir "${OUT_DIR}" --preview 50`
+4. After the manual fixes, Phase B was rerun with `SKIP_CF_GENERATION=1` so
+   `step2_*`, `step3_*`, and the final `dualcf_*.jsonl` were rebuilt from the
+   patched clean file.
+5. Final success means:
+   - `clean_rows=2879`
+   - `final_rows=2879`
+   - `clean_invalid_rows=0`
+   - `final_invalid_rows=0`
+   - `verification=passed`
 
 ## Training on 4x H100
 
