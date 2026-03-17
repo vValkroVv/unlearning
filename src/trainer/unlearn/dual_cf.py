@@ -119,15 +119,14 @@ class DualCF(GradDiff):
             forget_inputs, "attribution_score", device=device, batch_size=batch_size
         )
 
-        if self.disable_difficulty_route:
-            difficulty = torch.zeros_like(difficulty)
-        if self.disable_attribution_route:
-            attribution = torch.zeros_like(attribution)
-
         difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
         risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
         difficulty_gate = difficulty_gate.pow(self.neg_power)
         risk_gate = risk_gate.pow(self.risk_power)
+        if self.disable_difficulty_route:
+            difficulty_gate = torch.ones_like(difficulty_gate)
+        if self.disable_attribution_route:
+            risk_gate = torch.zeros_like(risk_gate)
         return difficulty, attribution, difficulty_gate, risk_gate
 
     def _summarize_risk(self, risk_gate: torch.Tensor) -> torch.Tensor:

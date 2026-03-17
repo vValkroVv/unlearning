@@ -19,8 +19,10 @@ if str(SRC_ROOT) not in sys.path:
 from data.utils import preprocess_chat_instance
 from tools.dual_cf_artifact_utils import (
     build_answer_type_fallback_candidates,
+    build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_scored_candidates,
     load_dataset_split,
     load_keyed_jsonish,
     load_model_bundle,
@@ -97,21 +99,6 @@ def _score_list(value: Any, expected_length: int) -> list[Any]:
     return scores
 
 
-def _filter_scored_candidates(
-    candidates: list[Any],
-    scores: list[Any],
-) -> tuple[list[str], list[Any]]:
-    filtered_candidates: list[str] = []
-    filtered_scores: list[Any] = []
-    for index, candidate in enumerate(candidates):
-        candidate_text = clean_counterfactual_text(candidate)
-        if not candidate_text:
-            continue
-        filtered_candidates.append(candidate_text)
-        filtered_scores.append(scores[index] if index < len(scores) else None)
-    return filtered_candidates, filtered_scores
-
-
 def load_mapping(path: str, key_field: str, alternate_field: str) -> Dict[str, Dict[str, Any]]:
     mapping: Dict[str, Dict[str, Any]] = {}
     with open(path, "r", encoding="utf-8") as handle:
@@ -167,6 +154,24 @@ def build_hf_generator(args):
                 "Question: {question}\n"
                 "True answer: {answer}\n"
                 "Return {num_alternates} short incorrect alternatives with the same answer type. "
+                "Output only the answers, one per line."
+            )
+        ],
+        "duet_relation_safe": [
+            (
+                "Question: {question}\n"
+                "True answer: {answer}\n"
+                "Return {num_alternates} short incorrect alternatives that preserve the same relation "
+                "and answer type. Do not repeat, negate, or paraphrase the true answer. "
+                "Output only the answers, one per line."
+            )
+        ],
+        "rwku_shared_fact_safe": [
+            (
+                "Question: {question}\n"
+                "True answer: {answer}\n"
+                "Return {num_alternates} short incorrect alternatives that preserve the same answer type "
+                "and avoid changing unrelated shared facts. Do not add explanations. "
                 "Output only the answers, one per line."
             )
         ],
@@ -245,6 +250,8 @@ def build_vllm_generator(args) -> VLLMCFGenerator:
         top_p=args.top_p,
         max_tokens=args.max_new_tokens,
         concurrency=args.generator_concurrency,
+        prompt_family=args.prompt_family,
+        num_alternates=args.num_alternates,
     )
 
 
@@ -295,6 +302,7 @@ def select_best_alternate(
     external_candidates = list(external_candidates or [])
     candidate_pool = []
     score_pool = []
+    low_confidence_candidates: list[str] = []
 
     for candidate in primary_candidates:
         candidate_pool.append(candidate)
@@ -311,8 +319,9 @@ def select_best_alternate(
         for candidate in build_answer_type_fallback_candidates(answer, seed=seed):
             candidate_pool.append(candidate)
             score_pool.append(None)
+        low_confidence_candidates = build_low_confidence_fallback_candidates(answer)
 
-    candidate_pool, score_pool = _filter_scored_candidates(candidate_pool, score_pool)
+    candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
     best_alt, best_meta = pick_best_counterfactual_v3(
         question=question,
         answer=answer,
@@ -332,8 +341,35 @@ def select_best_alternate(
         require_short_answer=args.require_short_answer,
         max_alt_length_chars=args.max_alt_length_chars,
     )
-    primary_clean = clean_counterfactual_text(primary_candidates[0]) if primary_candidates else ""
-    repaired = bool(best_alt) and clean_counterfactual_text(best_alt) != primary_clean
+    if invalid_reason is not None and args.repair_invalid and low_confidence_candidates:
+        candidate_pool.extend(low_confidence_candidates)
+        score_pool.extend([None] * len(low_confidence_candidates))
+        candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+        best_alt, best_meta = pick_best_counterfactual_v3(
+            question=question,
+            answer=answer,
+            candidates=candidate_pool,
+            candidate_answers=row_candidates,
+            external_scores=score_pool,
+            reject_gold_substring=args.reject_gold_substring,
+            max_overlap_ratio=args.max_overlap_ratio,
+            require_short_answer=args.require_short_answer,
+            max_alt_length_chars=args.max_alt_length_chars,
+        )
+        invalid_reason = counterfactual_invalid_reason(
+            best_alt,
+            answer,
+            reject_gold_substring=args.reject_gold_substring,
+            max_overlap_ratio=args.max_overlap_ratio,
+            require_short_answer=args.require_short_answer,
+            max_alt_length_chars=args.max_alt_length_chars,
+        )
+    baseline_candidate = ""
+    for candidate in list(primary_candidates) + external_candidates:
+        baseline_candidate = clean_counterfactual_text(candidate)
+        if baseline_candidate:
+            break
+    repaired = bool(best_alt) and clean_counterfactual_text(best_alt) != baseline_candidate
     return best_alt, invalid_reason, repaired, best_meta
 
 
@@ -437,7 +473,7 @@ def main():
                         mapping_row.get(args.external_score_key),
                         expected_length=len(external_candidates),
                     )
-                    primary_candidates = external_candidates[:1] or external_candidates
+                    primary_candidates = []
                     cf_source = "alternate_jsonl_multi" if len(external_candidates) > 1 else "alternate_jsonl"
                 else:
                     primary_candidates = generate_alternates(question, str(answer))
@@ -522,7 +558,7 @@ def main():
                         question=question,
                         answer=answer,
                         seed=int(row.get(args.mapping_key, row_no) or row_no),
-                        primary_candidates=response_candidates,
+                        primary_candidates=[],
                         row_candidates=row_candidates,
                         external_candidates=response_candidates,
                         external_scores=response_scores,

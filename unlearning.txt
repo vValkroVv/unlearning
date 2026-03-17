@@ -289,6 +289,7 @@ Directory Structure:
 ├── falcon_integration_diff.md
 ├── falcon.md
 ├── ga_integration_diff.md
+├── idea2_dualcf_verified_cf_plan_and_review.md
 ├── LICENSE
 ├── loku_integration_diff.md
 ├── Makefile
@@ -456,10 +457,14 @@ Directory Structure:
 │       │   ├── src/trainer/unlearn/undial.py
 │       │   └── src/trainer/unlearn/wga.py
 │       └── src/trainer/utils.py
+│   ├── tests/test_dualcf_v3_counterfactual_selection.py
 │   ├── tests/test_dualcf_v3_helpers.py
+│   ├── tests/test_dualcf_v3_routing.py
 │   ├── tests/test_duet_split_overrides.py
 │   ├── tests/test_lm_eval_wrapper.py
-│   └── tests/test_utility_pipeline.py
+│   ├── tests/test_retry_invalid_counterfactuals.py
+│   ├── tests/test_utility_pipeline.py
+│   └── tests/test_vllm_cf_client.py
 ├── tmp_rwku_apply_manual_fixes.py
 ├── tmp_rwku_verify_clean.py
 └── vast-working.md
@@ -3143,6 +3148,705 @@ For full runs with default script hyperparameters (same style as other algorithm
 
 - In this environment, GPU visibility is available in host execution context.
 - NPO-SAM logs were emitted during training (`npo_sam_forget_loss_1`, `npo_sam_forget_loss_2`, `npo_sam_retain_loss`, `npo_sam_grad_norm`, `npo_sam_rho`, `npo_sam_adaptive`), confirming trainer path execution.
+
+</content>
+
+<content full_path="idea2_dualcf_verified_cf_plan_and_review.md">
+# Idea2 for DualCF: verified multi-alternate counterfactual supervision
+
+## What this idea is
+
+**Idea2** is the next step after your current DualCF v1/v2/v3 line:
+
+> keep the routed unlearning core, but make the **positive branch** much stronger by replacing one weak counterfactual target with a **verified pool of relation-preserving, answer-type-matched, shared-fact-safe alternatives**, then train only on the best one.
+
+In plain terms:
+
+- v1/v2 proved that routing works for selectivity/locality.
+- v3 already added the right plumbing for multi-candidate alternates, utility anchors, belief-bank generation, localized negative masking, and optional DualCFSAM.
+- **Idea2** is the part that should improve **utility, TruthfulQA, and the quality of the forget/retain trade-off** by making the alternate targets much less noisy.
+
+This is the correct next move because your current results say:
+
+- DualCF is already **very strong on holdout/locality**.
+- DualCF is **not yet the best on Utility-1K**.
+- The weakest utility dimension is **truthfulness / broad generalization**, not ARC-style simple factual recall.
+- DualCF also still trails NPO-SAM on **forget cosine similarity**, which suggests that some of the current “forgetting” is still too surface-level.
+
+So the best improvement is **not** “push the negative branch harder”; it is:
+
+1. improve the quality of the target alternate,
+2. make the alternate preserve relation and shared facts,
+3. keep the rest of the routed system stable.
+
+---
+
+## Why this should improve over idea1 and v2
+
+### 1. Your own report points at the positive branch as a bottleneck
+
+From your current aggregated results:
+
+- DualCF-full is better than DPO/NPO/NPO-SAM on many local forget/retain comparisons,
+- but it still trails them on `utility_avg`,
+- and the main utility weakness is **TruthfulQA-like behavior**.
+
+That is a classic symptom of a counterfactual branch that is **fluent but not sufficiently truth-preserving**.
+
+### 2. AltPO supports this direction directly
+
+AltPO’s core claim is that many unlearning methods rely too much on **negative-only feedback**, which can produce nonsensical or inconsistent outputs, and that adding **positive supervision on the forget set** improves performance and preservation. That is almost exactly the theoretical justification for this idea. citeturn560873view0
+
+### 3. DUSK explains why the alternates must preserve shared facts
+
+DUSK argues that good unlearning should remove **unique target content** while preserving **shared/public knowledge**, and that many current methods only remove surface text while damaging shared content. That is directly relevant to DUET and especially RWKU. If your alternate rewrites too much of the fact structure instead of only changing the target answer, utility gets worse. citeturn560873view1
+
+### 4. Structured generation is now practical
+
+OpenAI’s structured-output guidance makes it realistic to generate multi-candidate alternates with a strict JSON schema, which is exactly what your current `alternate_jsonl` + `scores` sidecar path wants. That means the idea is not just theoretically attractive — it fits your current repo design cleanly. citeturn406693search0turn406693search2
+
+---
+
+## The exact scientific claim for Idea2
+
+A good thesis-ready statement is:
+
+> **DualCF performance is currently limited less by routing capacity than by the quality of forget-side positive supervision. Verified multi-alternate counterfactual supervision should improve broad utility by preserving relation structure and shared facts while still providing a usable target for selective forgetting.**
+
+That is consistent with:
+
+- your v2/v3 design,
+- your current result profile,
+- AltPO,
+- DUSK.
+
+---
+
+## The intended pipeline
+
+## Phase A — generate 4 alternates, not 1
+
+For every forget example, generate a sidecar row like:
+
+```json
+{
+  "index": 17,
+  "alternates": [
+    "1997",
+    "1998",
+    "2001",
+    "1993"
+  ],
+  "scores": [0.94, 0.88, 0.76, 0.63],
+  "same_relation": [true, true, true, true],
+  "shared_fact_safe": [true, true, true, false],
+  "answer_type": "year",
+  "generator": "gpt-5.4",
+  "prompt_version": "cf_v2_idea2"
+}
+```
+
+The sidecar should be generated **before** `clean_counterfactuals.py` and **before** `score_difficulty.py`.
+
+Use one schema for DUET and one for RWKU:
+
+- **DUET**: same relation, same answer type, short answer, no explanation.
+- **RWKU**: same relation, preserve non-target/shared fact content, short answer, no explanation.
+
+---
+
+## Phase B — verify and rerank locally
+
+Do not trust the first external answer.
+
+Instead, rerank candidates with a local score:
+
+- answer-type match,
+- shortness,
+- candidate-bank consistency,
+- lexical overlap penalty,
+- external judge score,
+- relation-preservation bonus,
+- shared-fact-preservation bonus,
+- hard reject if explicit invalidity remains.
+
+The current v3 implementation already does:
+
+- answer-type match,
+- shortness,
+- bank membership,
+- external score,
+- overlap penalty,
+- invalidity checks.
+
+What is still missing is:
+
+- **explicit relation-preservation score**,
+- **explicit shared-fact-preservation score**,
+- **dataset-specific prompt families** beyond `default` / `strict_short`.
+
+---
+
+## Phase C — hard-row repair only on failures
+
+Rows that still fail after reranking should go through a second-pass repair:
+
+1. existing candidate bank,
+2. external alternates,
+3. answer-type fallback,
+4. if still invalid: a targeted second external generation pass.
+
+This should be done only for failed rows. Do not regenerate everything.
+
+---
+
+## What exactly to add in the repo
+
+## 1. Strengthen `make_counterfactuals.py`
+
+### What is already good
+
+Your v3 `make_counterfactuals.py` already supports:
+
+- `--num-alternates`,
+- `--prompt-family`,
+- `--alternate-jsonl`,
+- `--allow-list-alternates`,
+- `--external-score-key`,
+- vLLM/OpenAI-style generator backends,
+- candidate-bank fusion,
+- local reranking.
+
+### What to add
+
+Add **two new prompt families**:
+
+- `duet_relation_safe`
+- `rwku_shared_fact_safe`
+
+Example prompt behavior:
+
+#### `duet_relation_safe`
+
+- preserve the question relation,
+- preserve answer type,
+- output 4 short alternatives,
+- no explanation,
+- do not repeat gold,
+- do not paraphrase gold.
+
+#### `rwku_shared_fact_safe`
+
+- change only the target answer,
+- preserve shared/public fact content,
+- preserve answer type,
+- output 4 short alternatives,
+- no explanation.
+
+### Concrete patch idea
+
+Inside `build_hf_generator()` / the vLLM request formatter, extend:
+
+```python
+prompt_families = {
+    "default": [...],
+    "strict_short": [...],
+    "duet_relation_safe": [...],
+    "rwku_shared_fact_safe": [...],
+}
+```
+
+and make the external sidecar generation use those names too.
+
+---
+
+## 2. Fix duplicate-candidate bias in sidecar mode
+
+### Current problem
+
+When `alternate_jsonl` is used, the current flow does this:
+
+- loads `external_candidates`,
+- sets `primary_candidates = external_candidates[:1] or external_candidates`,
+- then `select_best_alternate()` appends **both** `primary_candidates` and `external_candidates`.
+
+That duplicates the first external candidate in the ranking pool and biases selection toward it.
+
+### Fix
+
+Change the JSONL-sidecar branch to:
+
+```python
+external_candidates = _string_list(mapped_value)
+external_scores = _score_list(...)
+primary_candidates = []
+```
+
+or deduplicate inside `select_best_alternate()`.
+
+### Safe version
+
+```python
+def _dedupe_scored_candidates(candidates, scores):
+    seen = set()
+    out_cands, out_scores = [], []
+    for cand, score in zip(candidates, scores):
+        key = clean_counterfactual_text(cand)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out_cands.append(cand)
+        out_scores.append(score)
+    return out_cands, out_scores
+```
+
+Then apply it before `pick_best_counterfactual_v3()`.
+
+---
+
+## 3. Extend `pick_best_counterfactual_v3()` with semantic safety terms
+
+### Current score
+
+Right now the ranking is effectively:
+
+```python
+score = (
+    0.35 * type_match
+    + 0.25 * shortness
+    + 0.25 * bank_score
+    + 0.15 * judge
+    - 0.30 * overlap
+)
+```
+
+This is a decent v3 baseline, but it is still mostly **surface-form-aware**.
+
+### What to add
+
+Add:
+
+- `relation_score`
+- `shared_fact_score`
+
+New score sketch:
+
+```python
+score = (
+    0.25 * type_match
+    + 0.15 * shortness
+    + 0.15 * bank_score
+    + 0.15 * judge
+    + 0.15 * relation_score
+    + 0.15 * shared_fact_score
+    - 0.20 * overlap
+)
+```
+
+### How to get these scores
+
+Simplest practical path:
+
+- put them into the sidecar from GPT-5.4 / Codex generation,
+- or derive them with a second-pass external judge,
+- then pass them through `external_scores` or a new `external_meta` field.
+
+Minimal schema upgrade:
+
+```json
+{
+  "index": 17,
+  "alternates": ["1997", "1998", "2001", "1993"],
+  "scores": [0.94, 0.88, 0.76, 0.63],
+  "relation_scores": [1.0, 1.0, 0.8, 0.6],
+  "shared_fact_scores": [1.0, 1.0, 0.9, 0.2]
+}
+```
+
+Then in the loader, preserve these arrays and merge them in the ranking logic.
+
+---
+
+## 4. Downgrade unsafe fallback candidates
+
+### Current risk
+
+`build_answer_type_fallback_candidates()` includes things like:
+
+- numeric/date perturbations,
+- `not {text}` for `short_span`.
+
+The numeric/date part is useful.
+
+The `not {text}` fallback is dangerous for truthfulness because it often creates a linguistically valid but semantically low-quality answer.
+
+### Fix
+
+Keep `not {text}` only as:
+
+- a last-resort repair,
+- excluded from primary ranking unless no safer candidate exists,
+- tagged as low-confidence provenance.
+
+Example:
+
+```python
+if answer_type == "short_span":
+    normalized_answer = normalize_text(text)
+    if normalized_answer and not normalized_answer.startswith("not "):
+        low_conf_candidates.append(f"not {text}")
+```
+
+Then append `low_conf_candidates` only after all normal candidates fail.
+
+---
+
+## 5. Make `clean_counterfactuals.py` stricter for Idea2
+
+`clean_counterfactuals.py` is already doing the right overall thing:
+
+- clean current alternate,
+- detect invalidity,
+- repool external + bank + fallback candidates,
+- rerank,
+- drop invalid rows if configured.
+
+For Idea2, tighten it with:
+
+- mandatory `DROP_INVALID_AFTER_CLEAN=1`,
+- a sidecar mismatch check,
+- a count report for:
+  - repaired by bank,
+  - repaired by external sidecar,
+  - repaired by answer-type fallback,
+  - dropped after all repairs.
+
+This should be logged per dataset split because RWKU and DUET have very different invalidity modes.
+
+---
+
+## 6. Keep `build_forget_belief_bank.py` as-is for now
+
+This file is part of your v3 semantic-suppression branch, but it is **not the core of Idea2**.
+
+For this iteration:
+
+- keep it,
+- do not redesign it yet,
+- first improve the positive branch,
+- only then test whether belief suppression adds more on top.
+
+Why: otherwise you change two orthogonal things at once and the interpretation becomes messy.
+
+---
+
+## 7. Add dataset-specific external generation policy
+
+For the external generator, use:
+
+### DUET
+
+- relation-preserving,
+- short answer,
+- same answer type,
+- slightly more diverse candidates allowed.
+
+### RWKU
+
+- preserve non-target/shared facts,
+- avoid multi-clause alternates,
+- prefer canonical short entities / dates / years,
+- heavily penalize invented explanations.
+
+This is the clearest dataset-specific part of Idea2.
+
+---
+
+## The most important implementation review findings
+
+## Status: overall good, but not yet ready for a serious GPU campaign
+
+### Update after current CPU-only fixes (March 17, 2026)
+
+The following items from this review are now fixed in the repo code:
+
+- `Red-1`: route-disable semantics in `src/trainer/unlearn/dual_cf.py`
+- `Red-2`: duplicate-candidate bias in `src/tools/make_counterfactuals.py`
+- prompt-family coverage is no longer limited to `default` / `strict_short`; `duet_relation_safe` and `rwku_shared_fact_safe` were added in both HF and vLLM generation paths
+- `not {answer}` fallback was demoted to last-resort repair only
+- the vLLM/retry path now accepts `num_alternates` / `prompt_family`, normalizes multi-candidate payloads, and reranks retry candidates locally
+
+Still not fixed by the current patch:
+
+- `Red-3`: the reranker is still mostly surface-form-aware and does not yet use explicit relation-preservation or shared-fact-preservation scores
+- richer sidecar metadata for relation/shared-fact scoring is still a next-step Idea2 feature, not part of the current correctness patch
+- no GPU-backed generation, train smoke, or short train+eval validation was run yet
+
+Your v3 plumbing is **substantially in place**:
+
+- multi-alternate sidecars exist,
+- ranked alternate selection exists,
+- answer-type fallback exists,
+- multi-bank proxy attribution exists,
+- belief-bank generation exists,
+- DualCFv3 / DualCFSAM configs exist,
+- prep scripts are properly staged,
+- validation tooling is much stronger than in early v2.
+
+So the repo is not in “broken prototype” state. It is in **“strong v3 skeleton, but several high-value corrections still needed”** state.
+
+### Green (good / aligned with the plan)
+
+1. **Artifact-side multi-candidate support is real.**
+   `make_counterfactuals.py` now supports list-valued sidecars, external scores, provenance, vLLM generation, and prompt families.
+
+2. **Counterfactual reranking exists.**
+   `pick_best_counterfactual_v3()` is a genuine candidate selector, not just first-valid fallback.
+
+3. **Repair path is much better than v2.**
+   `clean_counterfactuals.py` repools external candidates, bank candidates, and answer-type fallbacks.
+
+4. **Attribution side is much broader than v2.**
+   `build_proxy_retain_map.py` now carries syntax, semantic, and utility-anchor neighborhoods.
+
+5. **Belief suppression is correctly placed offline.**
+   `build_forget_belief_bank.py` writes `belief_candidates` / `belief_alternate` before training.
+
+### Yellow (partially implemented; scientifically right direction, but still incomplete)
+
+1. **Idea2 is only partially realized.**
+   The reranker still does not visibly use an explicit **relation-preservation** score or **shared-fact-preservation** score.
+
+2. **Prompt family coverage is still too narrow.**
+   Only `default` and `strict_short` are visible in the current generator path.
+   For Idea2 you need at least one DUET-specific and one RWKU-specific strict prompt family.
+
+   > Fixed in the current patch: `duet_relation_safe` and `rwku_shared_fact_safe` now exist in both HF and vLLM generation paths. What is still missing is semantic reranking that uses relation/shared-fact scores explicitly.
+
+3. **The external sidecar is underused.**
+   You already pass `scores`, but the richer semantics that should drive Idea2 are not yet represented explicitly.
+
+### Red (fix before GPU debugging)
+
+#### Red-1. Route-disable logic in `DualCF` is wrong
+
+Current behavior is effectively:
+
+```python
+if self.disable_difficulty_route:
+    difficulty = torch.zeros_like(difficulty)
+if self.disable_attribution_route:
+    attribution = torch.zeros_like(attribution)
+
+difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
+risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
+```
+
+That does **not** neutralize the routes.
+
+With default `tau_d=0.6`, `temp_d=0.15`, setting `difficulty=0` makes `difficulty_gate` very small, not `1.0`.
+With default `tau_a=0.6`, `temp_a=0.15`, setting `attribution=0` makes `risk_gate` small but not exactly `0.0`.
+
+So:
+
+- `disable_difficulty_route` is not a clean “no difficulty routing” ablation,
+- `disable_attribution_route` is not a clean “no attribution routing” ablation.
+
+### Fix
+
+```python
+difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
+risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
+
+if self.disable_difficulty_route:
+    difficulty_gate = torch.ones_like(difficulty_gate)
+if self.disable_attribution_route:
+    risk_gate = torch.zeros_like(risk_gate)
+
+difficulty_gate = difficulty_gate.pow(self.neg_power)
+risk_gate = risk_gate.pow(self.risk_power)
+```
+
+This is the **highest-priority bug** before any ablation.
+
+> Fixed in the current patch: disabled routes now force neutral gates directly (`difficulty_gate=1`, `risk_gate=0`) while preserving the raw artifact scores for logging.
+
+#### Red-2. Sidecar mode duplicates the first external candidate
+
+In sidecar mode, you currently do:
+
+```python
+external_candidates = _string_list(mapped_value)
+primary_candidates = external_candidates[:1] or external_candidates
+```
+
+and later:
+
+```python
+for candidate in primary_candidates:
+    candidate_pool.append(candidate)
+...
+for candidate in external_candidates:
+    candidate_pool.append(candidate)
+```
+
+So the first external candidate is inserted twice.
+
+That biases ranking toward the first sidecar answer.
+
+### Fix
+
+Either:
+
+```python
+primary_candidates = []
+```
+
+for sidecar mode,
+
+or dedupe the candidate pool before ranking.
+
+> Fixed in the current patch: sidecar mode no longer seeds `primary_candidates` from `external_candidates`, and candidate pools are deduped by cleaned text before ranking. The same fix also removed equivalent duplication in the vLLM path.
+
+#### Red-3. Idea2 review target is still more surface-form-safe than fact-structure-safe
+
+The current scoring uses:
+
+- type match,
+- shortness,
+- bank membership,
+- external score,
+- overlap penalty.
+
+That is a solid v3 baseline, but it is **not yet the full Idea2 design** because it still lacks explicit scoring for:
+
+- relation preservation,
+- shared-fact preservation.
+
+This is exactly the part that is supposed to improve TruthfulQA / utility.
+
+> Still open after the current patch: the reranker remains a strong v3 baseline, but not the full Idea2 relation/shared-fact-aware reranker.
+
+---
+
+## The fix order I recommend
+
+### Before GPU debug
+
+1. fix route-disable semantics in `dual_cf.py`
+2. fix duplicate-candidate bias in `make_counterfactuals.py`
+3. add `duet_relation_safe` and `rwku_shared_fact_safe` prompt families
+4. demote `not {answer}` fallback to last-resort only
+5. add a richer sidecar schema for relation/shared-fact metadata
+
+Status after the current patch:
+
+- items 1-4 are done
+- item 5 is still pending
+
+### Then do a tiny validation ladder
+
+For each of DUET rare and RWKU:
+
+1. build 16-row clean artifact,
+2. run `validate_dual_cf_artifact.py`,
+3. inspect:
+   - invalid counts,
+   - repair-source counts,
+   - external score coverage,
+   - relation/shared-fact tag coverage,
+4. run 1-step train smoke,
+5. run short train + eval,
+6. only then run the H100 ablation.
+
+---
+
+## The minimal ablation for Idea2
+
+Do not blow up the search space yet. Use your best 8 split×LR cells.
+
+### Core ablations
+
+1. **v2/v3 current single-best alternate**
+2. **4 candidates + current reranker**
+3. **4 candidates + relation/shared-fact-aware reranker**
+4. **4 candidates + relation/shared-fact-aware reranker + strict dataset prompts**
+
+### What to compare
+
+Track:
+
+- `forget_qa_rouge`
+- `holdout_qa_rouge`
+- `forget_qa_cos_sim`
+- `holdout_qa_cos_sim`
+- `utility_avg`
+- `truthfulqa_bin_200_acc`
+- `mmlu_pro_400_acc`
+- trajectory stability metrics
+
+### Expected movement
+
+If Idea2 works:
+
+- `utility_avg` should improve,
+- `truthfulqa_bin_200_acc` should improve the most,
+- holdout/locality should stay strong,
+- forget ROUGE should stay similar or improve slightly,
+- forget cosine may improve a little, but the bigger cosine gains will likely still come from belief suppression / semantic negative work.
+
+---
+
+## Final recommendation
+
+For your next serious run, do **not** change everything at once.
+
+The cleanest next thesis step is:
+
+1. keep DualCF routing exactly as your current v3 intends,
+2. repair the two real logic bugs,
+3. implement Idea2 as **verified multi-alternate counterfactual supervision**,
+4. run a controlled ablation against the current v3 artifact flow,
+5. only after that add belief-heavy or DualCFSAM-heavy combinations.
+
+That gives you the cleanest scientific story:
+
+- v1/v2: routing works,
+- v3: routing + broader artifact/control plumbing,
+- **Idea2**: better positive supervision improves utility without giving up locality.
+
+---
+
+## References
+
+### Repo evidence
+
+- `dualcf_detailed_report.md` — current DualCF vs baselines summary
+- `dual_cf_integration_diff.md` — v2/v3 integration notes
+- `src/tools/make_counterfactuals.py`
+- `src/tools/clean_counterfactuals.py`
+- `src/tools/build_proxy_retain_map.py`
+- `src/tools/score_attribution.py`
+- `src/tools/build_forget_belief_bank.py`
+- `src/trainer/unlearn/dual_cf.py`
+- `configs/trainer/DualCFv3.yaml`
+
+### Papers / docs
+
+- AltPO: *Alternate Preference Optimization for Unlearning Factual Knowledge in Large Language Models*  
+  https://arxiv.org/abs/2409.13474
+
+- DUSK: *Do Not Unlearn Shared Knowledge*  
+  https://arxiv.org/abs/2505.15209
+
+- GUARD: *Gradient-aware Unlearning with Adaptive Retention Distribution*  
+  https://arxiv.org/abs/2506.10946
+
+- OpenAI Structured Outputs guide  
+  https://platform.openai.com/docs/guides/structured-outputs
+
+- OpenAI response_format JSON schema strict example  
+  https://platform.openai.com/docs/api-reference/chat/create
 
 </content>
 
@@ -13807,6 +14511,13 @@ Use the additive v3 prep scripts when you want:
 - multi-bank attribution with semantic and utility anchors
 - offline belief-bank generation before calibration
 
+Runtime note:
+
+- sidecar mode supports real multi-alternate selection directly
+- vLLM mode supports real multi-alternate selection only when
+  `VLLM_USE_STRUCTURED_OUTPUTS=1`
+- plain-text vLLM mode remains supported, but it returns one alternate per row
+
 Common v3 env additions:
 
 ```bash
@@ -13866,15 +14577,15 @@ unset SKIP_CF_GENERATION
 
 for FORGET_LABEL in rare popular merged; do
   export FORGET_LABEL
-  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v2"
-  bash scripts/duet/prepare_dual_cf_duet_v2.sh
+  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v3"
+  bash scripts/duet/prepare_dual_cf_duet_v3.sh
 done
 ```
 
 Single-shell form used on the H100 box:
 
 ```bash
-source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_API_KEY=EMPTY VLLM_MODEL=/data/home/vkropoti/models/Qwen3.5-27B DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DROP_INVALID_AFTER_CLEAN=1 STOP_AFTER_CLEAN_CF=1 GENERATOR_CONCURRENCY=128 GENERATOR_BATCH_SIZE=512 GENERATOR_TEMPERATURE=0.2 GENERATOR_TOP_P=0.8 GENERATOR_MAX_NEW_TOKENS=32 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset SKIP_CF_GENERATION && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v2; bash scripts/duet/prepare_dual_cf_duet_v2.sh; done
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_API_KEY=EMPTY VLLM_MODEL=/data/home/vkropoti/models/Qwen3.5-27B DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DROP_INVALID_AFTER_CLEAN=1 STOP_AFTER_CLEAN_CF=1 GENERATOR_CONCURRENCY=128 GENERATOR_BATCH_SIZE=512 GENERATOR_TEMPERATURE=0.2 GENERATOR_TOP_P=0.8 GENERATOR_MAX_NEW_TOKENS=32 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset SKIP_CF_GENERATION && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v3; bash scripts/duet/prepare_dual_cf_duet_v3.sh; done
 ```
 
 ### 2. DUET Phase B
@@ -13902,15 +14613,15 @@ export DROP_INVALID_AFTER_CLEAN=1
 
 for FORGET_LABEL in rare popular merged; do
   export FORGET_LABEL
-  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v2"
-  bash scripts/duet/prepare_dual_cf_duet_v2.sh
+  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v3"
+  bash scripts/duet/prepare_dual_cf_duet_v3.sh
 done
 ```
 
 Single-shell form used on the H100 box:
 
 ```bash
-source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset STOP_AFTER_CLEAN_CF && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v2; bash scripts/duet/prepare_dual_cf_duet_v2.sh; done
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset STOP_AFTER_CLEAN_CF && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v3; bash scripts/duet/prepare_dual_cf_duet_v3.sh; done
 ```
 
 ### DUET vLLM Repair Notes
@@ -13920,7 +14631,7 @@ manual patch workflow.
 
 What we used to keep DUET vLLM generations clean:
 
-1. `scripts/duet/prepare_dual_cf_duet_v2.sh` first builds
+1. `scripts/duet/prepare_dual_cf_duet_v3.sh` first builds
    `step0_candidate_bank.jsonl` with relation-consistent candidates.
 2. `make_counterfactuals.py` receives that bank through `--candidate-bank`, so
    generation is constrained to same-relation alternatives.
@@ -13952,7 +14663,7 @@ export VLLM_API_KEY=${VLLM_API_KEY:-EMPTY}
 export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
-export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2"
+export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v3"
 export DROP_INVALID_AFTER_CLEAN=1
 export STOP_AFTER_CLEAN_CF=1
 export GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-128}
@@ -13965,13 +14676,13 @@ export RETRY_INVALID_CF_CONCURRENCY=${RETRY_INVALID_CF_CONCURRENCY:-8}
 export RETRY_INVALID_CF_BATCH_SIZE=${RETRY_INVALID_CF_BATCH_SIZE:-32}
 unset SKIP_CF_GENERATION
 
-bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+bash scripts/rwku/prepare_dual_cf_rwku_v3.sh
 ```
 
 Single-shell form used on the H100 box:
 
 ```bash
-source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_API_KEY=EMPTY VLLM_MODEL=/data/home/vkropoti/models/Qwen3.5-27B FORGET_SPLIT=forget_level2 RETAIN_SPLIT=neighbor_level2 OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2 DROP_INVALID_AFTER_CLEAN=1 STOP_AFTER_CLEAN_CF=1 GENERATOR_CONCURRENCY=128 GENERATOR_BATCH_SIZE=512 GENERATOR_TEMPERATURE=0.2 GENERATOR_TOP_P=0.8 GENERATOR_MAX_NEW_TOKENS=32 RETRY_INVALID_CF_PASSES=2 RETRY_INVALID_CF_CONCURRENCY=8 RETRY_INVALID_CF_BATCH_SIZE=32 && unset SKIP_CF_GENERATION && bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct VLLM_BASE_URL=http://127.0.0.1:8000/v1 VLLM_API_KEY=EMPTY VLLM_MODEL=/data/home/vkropoti/models/Qwen3.5-27B FORGET_SPLIT=forget_level2 RETAIN_SPLIT=neighbor_level2 OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v3 DROP_INVALID_AFTER_CLEAN=1 STOP_AFTER_CLEAN_CF=1 GENERATOR_CONCURRENCY=128 GENERATOR_BATCH_SIZE=512 GENERATOR_TEMPERATURE=0.2 GENERATOR_TOP_P=0.8 GENERATOR_MAX_NEW_TOKENS=32 RETRY_INVALID_CF_PASSES=2 RETRY_INVALID_CF_CONCURRENCY=8 RETRY_INVALID_CF_BATCH_SIZE=32 && unset SKIP_CF_GENERATION && bash scripts/rwku/prepare_dual_cf_rwku_v3.sh
 ```
 
 ### 4. RWKU Phase B
@@ -13985,7 +14696,7 @@ export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
 export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
-export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2"
+export OUT_DIR="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v3"
 export DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-64}
 export ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-8}
 export ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
@@ -13994,13 +14705,13 @@ unset STOP_AFTER_CLEAN_CF
 export SKIP_CF_GENERATION=1
 export DROP_INVALID_AFTER_CLEAN=1
 
-bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+bash scripts/rwku/prepare_dual_cf_rwku_v3.sh
 ```
 
 Single-shell form used on the H100 box:
 
 ```bash
-source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct FORGET_SPLIT=forget_level2 RETAIN_SPLIT=neighbor_level2 OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 && unset STOP_AFTER_CLEAN_CF && bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct FORGET_SPLIT=forget_level2 RETAIN_SPLIT=neighbor_level2 OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v3 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 && unset STOP_AFTER_CLEAN_CF && bash scripts/rwku/prepare_dual_cf_rwku_v3.sh
 ```
 
 ### RWKU vLLM Repair Notes
@@ -14133,11 +14844,16 @@ Validation status for this v3 patch set:
 - completed:
   - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/clean_counterfactuals.py src/tools/build_proxy_retain_map.py src/tools/score_attribution.py src/tools/build_utility_1k_panel.py src/tools/validate_dual_cf_artifact.py src/tools/build_forget_belief_bank.py src/data/qa.py src/trainer/utils.py src/trainer/unlearn/dual_cf.py src/trainer/unlearn/dual_cf_sam.py src/trainer/__init__.py`
   - `python -m unittest discover -s tests -p 'test_dualcf_v3_helpers.py'`
+  - `python -m unittest discover -s tests -p 'test_dualcf_v3*.py'`
+  - `python -m unittest discover -s tests -p 'test_*vllm*.py'`
+  - `python -m unittest discover -s tests -p 'test_*retry*.py'`
   - `bash -n scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh`
   - CLI `--help` smoke for the updated artifact tools and the new belief-bank tool
   - a CPU-only helper smoke covering ranked CF picking, answer-type fallback,
-    QA-anchor flattening, and belief validity filtering
+    QA-anchor flattening, belief validity filtering, vLLM payload normalization,
+    and retry candidate selection
 - not completed here:
+  - GPU-backed vLLM generation checks
   - GPU-backed attribution scoring
   - end-to-end belief generation against a real checkpoint
   - 1-step or short functional train/eval runs
@@ -14560,9 +15276,11 @@ Added CLI flags:
 - `--max-overlap-ratio`
 - `--max-alt-length-chars`
 
-`src/tools/vllm_cf_client.py` uses the OpenAI-compatible vLLM server with
-structured JSON outputs so alternates stay short and explanation-style leakage
-is suppressed at generation time.
+`src/tools/vllm_cf_client.py` uses the OpenAI-compatible vLLM server and
+supports structured JSON outputs for multi-candidate generation. Plain-text mode
+is still supported and remains the default unless `VLLM_USE_STRUCTURED_OUTPUTS=1`,
+so the runtime only gets real multi-alternate vLLM outputs when structured mode
+is explicitly enabled.
 
 ### DUET candidate bank
 
@@ -15534,6 +16252,9 @@ Updates:
 - plain-text vLLM generation is now the default client mode
   (`VLLM_USE_STRUCTURED_OUTPUTS=0`); structured outputs remain opt-in for cases
   where the grammar backend is stable
+- the client supports structured multi-alternate payloads, but real
+  multi-alternate vLLM generation still requires `VLLM_USE_STRUCTURED_OUTPUTS=1`;
+  sidecar mode remains the safer default when structured decoding is unstable
 
 ## Targeted retry path for invalid RWKU counterfactual rows (2026-03-15)
 
@@ -34814,6 +35535,8 @@ else
       --temperature "${GENERATOR_TEMPERATURE}" \
       --top-p "${GENERATOR_TOP_P}" \
       --max-new-tokens "${GENERATOR_MAX_NEW_TOKENS}" \
+      --num-alternates "${NUM_ALTERNATES}" \
+      --prompt-family "${PROMPT_FAMILY}" \
       --reject-gold-substring \
       --require-short-answer \
       --max-overlap-ratio 0.85 \
@@ -41066,16 +41789,9 @@ import json
 import os
 from dataclasses import dataclass
 from json import JSONDecodeError
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, Optional, Sequence
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field
-
-
-class CounterfactualResponse(BaseModel):
-    alternate: str = Field(min_length=1, max_length=128)
-    same_relation: bool = True
-    answer_type: str = "unknown"
 
 
 def _strip_json_fence(text: str) -> str:
@@ -41089,6 +41805,37 @@ def _strip_json_fence(text: str) -> str:
     return stripped
 
 
+def _normalize_alternate(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    first_line = text.splitlines()[0].strip()
+    return first_line[:128]
+
+
+def _normalize_alternates(value: Any) -> list[str]:
+    if isinstance(value, list):
+        out = [_normalize_alternate(item) for item in value]
+        return [item for item in out if item]
+    alternate = _normalize_alternate(value)
+    return [alternate] if alternate else []
+
+
+def _normalize_scores(value: Any, expected_length: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[Any] = []
+    for raw_score in value[:expected_length]:
+        try:
+            normalized.append(float(raw_score))
+        except Exception:
+            normalized.append(None)
+    if len(normalized) < expected_length:
+        normalized.extend([None] * (expected_length - len(normalized)))
+    return normalized
+
+
 @dataclass
 class VLLMCFGenerator:
     base_url: str
@@ -41099,25 +41846,47 @@ class VLLMCFGenerator:
     max_tokens: int = 32
     concurrency: int = 64
     timeout: float = 300.0
+    prompt_family: str = "default"
+    num_alternates: int = 1
 
     def __post_init__(self) -> None:
         self.use_structured_outputs = (
             os.environ.get("VLLM_USE_STRUCTURED_OUTPUTS", "0").strip().lower()
             in {"1", "true", "yes"}
         )
+        candidate_limit = max(1, int(self.num_alternates))
+        self.schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "alternates": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
+                    "minItems": 1,
+                    "maxItems": candidate_limit,
+                },
+                "scores": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                },
+                "same_relation": {"type": "boolean"},
+                "answer_type": {"type": "string"},
+            },
+            "required": ["alternates", "same_relation", "answer_type"],
+        }
         # Qwen3 enables thinking traces by default unless the chat template is
         # told otherwise. Disable them here so counterfactual generation stays a
-        # short JSON-only answer span.
-        self.schema = CounterfactualResponse.model_json_schema()
+        # short answer span or short JSON payload.
         self.extra_body = {
             "chat_template_kwargs": {
                 "enable_thinking": False,
             },
         }
         if self.use_structured_outputs:
-            # vLLM documents structured outputs for the OpenAI-compatible server
-            # through extra_body. Keep the schema here rather than relying on
-            # response_format mapping inside the compatibility layer.
             self.extra_body["structured_outputs"] = {
                 "json": self.schema,
             }
@@ -41129,47 +41898,111 @@ class VLLMCFGenerator:
             timeout=self.timeout,
         )
 
+    def _system_rules(self) -> str:
+        base_rules = [
+            "You generate short plausible but incorrect alternative answers for a factual unlearning dataset.",
+            "Rules:",
+            "1. Keep the same answer type as the gold answer.",
+            "2. Output short answer spans, not explanations or full sentences.",
+            "3. Never mention, quote, negate, or compare against the gold answer unless explicitly forced by the prompt.",
+            "4. Do not add prefixes like Alternative answer or Wrong answer.",
+        ]
+        prompt_family = str(self.prompt_family or "default")
+        if prompt_family == "strict_short":
+            base_rules.append(
+                "5. Prefer compact spans that can be written on one line."
+            )
+        elif prompt_family == "duet_relation_safe":
+            base_rules.append(
+                "5. Preserve the same semantic relation as the gold answer and avoid paraphrasing the gold answer."
+            )
+        elif prompt_family == "rwku_shared_fact_safe":
+            base_rules.append(
+                "5. Change only the target answer and avoid altering unrelated shared facts."
+            )
+        else:
+            base_rules.append(
+                "5. Keep the answer plausible and relation-consistent when possible."
+            )
+        return "\n".join(base_rules)
+
     def build_messages(
         self,
         *,
         question: str,
         answer: str,
         candidate_answers: Optional[Sequence[str]] = None,
-    ) -> List[Dict[str, str]]:
-        system = (
-            "You generate a short plausible but incorrect alternative answer for "
-            "a factual unlearning dataset.\n"
-            "Rules:\n"
-            "1. Keep the same semantic relation as the gold answer.\n"
-            "2. Output a short answer span, not a sentence or explanation.\n"
-            "3. Never mention, quote, negate, or compare against the gold answer.\n"
-            "4. Do not add prefixes like Alternative answer or Wrong answer.\n"
-        )
+    ) -> list[Dict[str, str]]:
+        system = self._system_rules()
         if self.use_structured_outputs:
-            system += "5. Return valid JSON only."
+            system += (
+                "\n6. Return valid JSON only with keys `alternates`, optional `scores`, "
+                "`same_relation`, and `answer_type`."
+            )
         else:
             system += (
-                "5. Return only the alternative answer span.\n"
-                "6. Do not output JSON, bullets, labels, or explanation."
+                "\n6. Return only one alternative answer span.\n"
+                "7. Do not output JSON, bullets, labels, or explanation."
             )
+
         user = f"Question: {question}\nGold answer: {answer}\n"
+        prompt_family = str(self.prompt_family or "default")
         if candidate_answers:
             user += "Candidate alternatives:\n"
             for idx, candidate in enumerate(candidate_answers, start=1):
                 user += f"{idx}. {candidate}\n"
-            user += (
-                "Select the best candidate or minimally rewrite one candidate for fluency. "
-                "Return only the final alternative answer span."
-            )
+            if self.use_structured_outputs:
+                user += (
+                    f"Select up to {max(1, int(self.num_alternates))} best short alternatives from the candidate list "
+                    "or minimal rewrites of that list. If you provide `scores`, align them with `alternates`."
+                )
+            else:
+                user += (
+                    "Select the best candidate or minimally rewrite one candidate for fluency. "
+                    "Return only the final alternative answer span."
+                )
         else:
+            if self.use_structured_outputs:
+                user += (
+                    f"Generate up to {max(1, int(self.num_alternates))} short incorrect alternatives with the same answer type. "
+                )
+            else:
+                user += "Generate one plausible alternative answer of the same answer type. "
+
+            if prompt_family == "duet_relation_safe":
+                user += "Preserve the same relation and do not repeat or paraphrase the gold answer. "
+            elif prompt_family == "rwku_shared_fact_safe":
+                user += "Change only the target answer and preserve unrelated shared facts. "
+
             user += (
-                "Generate one plausible alternative answer of the same answer type. "
-                "Return only the answer span."
+                "Return only the requested answer span or JSON payload."
+                if self.use_structured_outputs
+                else "Return only the answer span."
             )
+
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
+
+    def _normalize_response(
+        self,
+        *,
+        alternates: Sequence[Any],
+        scores: Sequence[Any] | None = None,
+        same_relation: bool = True,
+        answer_type: str = "unknown",
+    ) -> Dict[str, Any]:
+        normalized_alternates = _normalize_alternates(list(alternates))
+        normalized_scores = _normalize_scores(scores, len(normalized_alternates))
+        alternate = normalized_alternates[0] if normalized_alternates else ""
+        return {
+            "alternate": alternate,
+            "alternates": normalized_alternates,
+            "scores": normalized_scores,
+            "same_relation": bool(same_relation),
+            "answer_type": str(answer_type),
+        }
 
     async def one(
         self,
@@ -41193,59 +42026,58 @@ class VLLMCFGenerator:
         )
         content = response.choices[0].message.content
         if not self.use_structured_outputs:
-            alternate = _strip_json_fence(content).splitlines()[0].strip() if content else ""
-            return {
-                "alternate": alternate,
-                "same_relation": True,
-                "answer_type": "plain_text",
-            }
+            alternate = _normalize_alternate(_strip_json_fence(content)) if content else ""
+            return self._normalize_response(
+                alternates=[alternate] if alternate else [],
+                same_relation=True,
+                answer_type="plain_text",
+            )
         return self._parse_payload(content)
 
     def _parse_payload(self, content: Any) -> Dict[str, Any]:
         stripped = _strip_json_fence(content)
         if not stripped:
-            return {
-                "alternate": "",
-                "same_relation": False,
-                "answer_type": "empty_response",
-            }
+            return self._normalize_response(
+                alternates=[],
+                same_relation=False,
+                answer_type="empty_response",
+            )
 
         try:
             payload = json.loads(stripped)
         except JSONDecodeError:
-            # Some backends may fail structured decoding but still emit a short
-            # plain-text span. Preserve that instead of aborting the whole batch.
-            fallback_alternate = str(stripped).splitlines()[0].strip()[:128]
+            fallback_alternate = _normalize_alternate(stripped)
             if fallback_alternate and not fallback_alternate.startswith("{"):
-                return {
-                    "alternate": fallback_alternate,
-                    "same_relation": True,
-                    "answer_type": "free_text_fallback",
-                }
-            return {
-                "alternate": "",
-                "same_relation": False,
-                "answer_type": "invalid_json",
-            }
+                return self._normalize_response(
+                    alternates=[fallback_alternate],
+                    same_relation=True,
+                    answer_type="free_text_fallback",
+                )
+            return self._normalize_response(
+                alternates=[],
+                same_relation=False,
+                answer_type="invalid_json",
+            )
 
         if not isinstance(payload, dict):
-            return {
-                "alternate": "",
-                "same_relation": False,
-                "answer_type": "invalid_payload",
-            }
+            return self._normalize_response(
+                alternates=[],
+                same_relation=False,
+                answer_type="invalid_payload",
+            )
 
-        try:
-            return CounterfactualResponse.model_validate(payload).model_dump()
-        except Exception:
-            fallback_alternate = str(payload.get("alternate", "")).strip()[:128]
-            return {
-                "alternate": fallback_alternate,
-                "same_relation": bool(payload.get("same_relation", False)),
-                "answer_type": str(payload.get("answer_type", "invalid_schema")),
-            }
+        alternates = payload.get("alternates")
+        if alternates is None:
+            alternates = payload.get("alternate", "")
+        normalized_alternates = _normalize_alternates(alternates)
+        return self._normalize_response(
+            alternates=normalized_alternates,
+            scores=payload.get("scores"),
+            same_relation=bool(payload.get("same_relation", bool(normalized_alternates))),
+            answer_type=str(payload.get("answer_type", "invalid_schema")),
+        )
 
-    async def many(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def many(self, rows: Sequence[Dict[str, Any]]) -> list[Dict[str, Any]]:
         semaphore = asyncio.Semaphore(max(1, int(self.concurrency)))
         client = self._make_client()
 
@@ -41264,7 +42096,7 @@ class VLLMCFGenerator:
         finally:
             await client.close()
 
-    def many_sync(self, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def many_sync(self, rows: Sequence[Dict[str, Any]]) -> list[Dict[str, Any]]:
         return asyncio.run(self.many(rows))
 
 
@@ -42065,6 +42897,8 @@ if str(SRC_ROOT) not in sys.path:
 from tools.dual_cf_artifact_utils import (  # noqa: E402
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_scored_candidates,
+    pick_best_counterfactual_v3,
     read_jsonl,
     save_jsonl,
 )
@@ -42091,6 +42925,8 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.8)
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--num-alternates", type=int, default=1)
+    parser.add_argument("--prompt-family", default="default")
     parser.add_argument("--reject-gold-substring", action="store_true")
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
@@ -42118,7 +42954,31 @@ def build_generator(args) -> VLLMCFGenerator:
         top_p=args.top_p,
         max_tokens=args.max_new_tokens,
         concurrency=args.generator_concurrency,
+        prompt_family=args.prompt_family,
+        num_alternates=args.num_alternates,
     )
+
+
+def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
+    response_candidates = list(response.get("alternates") or [])
+    if not response_candidates and str(response.get("alternate", "")).strip():
+        response_candidates = [str(response.get("alternate", "")).strip()]
+    candidates, scores = dedupe_scored_candidates(
+        response_candidates,
+        response.get("scores", []),
+    )
+    best_alt, pick_meta = pick_best_counterfactual_v3(
+        question=str(row.get(args.question_key, "")),
+        answer=str(row.get(args.answer_key, "")),
+        candidates=candidates,
+        candidate_answers=row.get("candidate_answers"),
+        external_scores=scores,
+        reject_gold_substring=args.reject_gold_substring,
+        max_overlap_ratio=args.max_overlap_ratio,
+        require_short_answer=args.require_short_answer,
+        max_alt_length_chars=args.max_alt_length_chars,
+    )
+    return best_alt, candidates, scores, pick_meta
 
 
 def main():
@@ -42164,13 +43024,20 @@ def main():
             outputs = generator.many_sync(list(row_chunk))
             for response, row_idx in zip(outputs, meta_chunk):
                 row = dict(rows[row_idx])
-                alternate = clean_counterfactual_text(response.get("alternate", ""))
+                alternate, response_candidates, response_scores, pick_meta = choose_retry_alternate(
+                    args,
+                    row,
+                    response,
+                )
                 reason = invalid_reason(args, row, alternate)
                 row["cf_retry_passes"] = int(row.get("cf_retry_passes", 0)) + 1
                 row["cf_retry_last_alternate"] = alternate
+                row["cf_retry_last_alternates"] = list(response_candidates)
+                row["cf_retry_last_scores"] = list(response_scores)
                 row["cf_retry_last_answer_type"] = str(
                     response.get("answer_type", "unknown")
                 )
+                row["cf_retry_pick_meta"] = pick_meta
                 if reason is None:
                     row["alternate"] = alternate
                     row["cf_invalid_reason"] = None
@@ -43595,8 +44462,10 @@ if str(SRC_ROOT) not in sys.path:
 from data.utils import preprocess_chat_instance
 from tools.dual_cf_artifact_utils import (
     build_answer_type_fallback_candidates,
+    build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_scored_candidates,
     load_dataset_split,
     load_keyed_jsonish,
     load_model_bundle,
@@ -43673,21 +44542,6 @@ def _score_list(value: Any, expected_length: int) -> list[Any]:
     return scores
 
 
-def _filter_scored_candidates(
-    candidates: list[Any],
-    scores: list[Any],
-) -> tuple[list[str], list[Any]]:
-    filtered_candidates: list[str] = []
-    filtered_scores: list[Any] = []
-    for index, candidate in enumerate(candidates):
-        candidate_text = clean_counterfactual_text(candidate)
-        if not candidate_text:
-            continue
-        filtered_candidates.append(candidate_text)
-        filtered_scores.append(scores[index] if index < len(scores) else None)
-    return filtered_candidates, filtered_scores
-
-
 def load_mapping(path: str, key_field: str, alternate_field: str) -> Dict[str, Dict[str, Any]]:
     mapping: Dict[str, Dict[str, Any]] = {}
     with open(path, "r", encoding="utf-8") as handle:
@@ -43743,6 +44597,24 @@ def build_hf_generator(args):
                 "Question: {question}\n"
                 "True answer: {answer}\n"
                 "Return {num_alternates} short incorrect alternatives with the same answer type. "
+                "Output only the answers, one per line."
+            )
+        ],
+        "duet_relation_safe": [
+            (
+                "Question: {question}\n"
+                "True answer: {answer}\n"
+                "Return {num_alternates} short incorrect alternatives that preserve the same relation "
+                "and answer type. Do not repeat, negate, or paraphrase the true answer. "
+                "Output only the answers, one per line."
+            )
+        ],
+        "rwku_shared_fact_safe": [
+            (
+                "Question: {question}\n"
+                "True answer: {answer}\n"
+                "Return {num_alternates} short incorrect alternatives that preserve the same answer type "
+                "and avoid changing unrelated shared facts. Do not add explanations. "
                 "Output only the answers, one per line."
             )
         ],
@@ -43821,6 +44693,8 @@ def build_vllm_generator(args) -> VLLMCFGenerator:
         top_p=args.top_p,
         max_tokens=args.max_new_tokens,
         concurrency=args.generator_concurrency,
+        prompt_family=args.prompt_family,
+        num_alternates=args.num_alternates,
     )
 
 
@@ -43871,6 +44745,7 @@ def select_best_alternate(
     external_candidates = list(external_candidates or [])
     candidate_pool = []
     score_pool = []
+    low_confidence_candidates: list[str] = []
 
     for candidate in primary_candidates:
         candidate_pool.append(candidate)
@@ -43887,8 +44762,9 @@ def select_best_alternate(
         for candidate in build_answer_type_fallback_candidates(answer, seed=seed):
             candidate_pool.append(candidate)
             score_pool.append(None)
+        low_confidence_candidates = build_low_confidence_fallback_candidates(answer)
 
-    candidate_pool, score_pool = _filter_scored_candidates(candidate_pool, score_pool)
+    candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
     best_alt, best_meta = pick_best_counterfactual_v3(
         question=question,
         answer=answer,
@@ -43908,8 +44784,35 @@ def select_best_alternate(
         require_short_answer=args.require_short_answer,
         max_alt_length_chars=args.max_alt_length_chars,
     )
-    primary_clean = clean_counterfactual_text(primary_candidates[0]) if primary_candidates else ""
-    repaired = bool(best_alt) and clean_counterfactual_text(best_alt) != primary_clean
+    if invalid_reason is not None and args.repair_invalid and low_confidence_candidates:
+        candidate_pool.extend(low_confidence_candidates)
+        score_pool.extend([None] * len(low_confidence_candidates))
+        candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+        best_alt, best_meta = pick_best_counterfactual_v3(
+            question=question,
+            answer=answer,
+            candidates=candidate_pool,
+            candidate_answers=row_candidates,
+            external_scores=score_pool,
+            reject_gold_substring=args.reject_gold_substring,
+            max_overlap_ratio=args.max_overlap_ratio,
+            require_short_answer=args.require_short_answer,
+            max_alt_length_chars=args.max_alt_length_chars,
+        )
+        invalid_reason = counterfactual_invalid_reason(
+            best_alt,
+            answer,
+            reject_gold_substring=args.reject_gold_substring,
+            max_overlap_ratio=args.max_overlap_ratio,
+            require_short_answer=args.require_short_answer,
+            max_alt_length_chars=args.max_alt_length_chars,
+        )
+    baseline_candidate = ""
+    for candidate in list(primary_candidates) + external_candidates:
+        baseline_candidate = clean_counterfactual_text(candidate)
+        if baseline_candidate:
+            break
+    repaired = bool(best_alt) and clean_counterfactual_text(best_alt) != baseline_candidate
     return best_alt, invalid_reason, repaired, best_meta
 
 
@@ -44013,7 +44916,7 @@ def main():
                         mapping_row.get(args.external_score_key),
                         expected_length=len(external_candidates),
                     )
-                    primary_candidates = external_candidates[:1] or external_candidates
+                    primary_candidates = []
                     cf_source = "alternate_jsonl_multi" if len(external_candidates) > 1 else "alternate_jsonl"
                 else:
                     primary_candidates = generate_alternates(question, str(answer))
@@ -44098,7 +45001,7 @@ def main():
                         question=question,
                         answer=answer,
                         seed=int(row.get(args.mapping_key, row_no) or row_no),
-                        primary_candidates=response_candidates,
+                        primary_candidates=[],
                         row_candidates=row_candidates,
                         external_candidates=response_candidates,
                         external_scores=response_scores,
@@ -44514,6 +45417,48 @@ def bank_membership_score(candidate: Any, candidate_answers: Sequence[str] | Non
     return 1.0 if candidate_norm in bank_norm else 0.0
 
 
+def dedupe_scored_candidates(
+    candidates: Sequence[Any],
+    scores: Sequence[Any] | None = None,
+) -> tuple[list[str], list[Any]]:
+    deduped_candidates: list[str] = []
+    deduped_scores: list[Any] = []
+    positions: dict[str, int] = {}
+    score_values = list(scores) if scores is not None else []
+
+    for index, candidate in enumerate(candidates):
+        cleaned = clean_counterfactual_text(candidate)
+        if not cleaned:
+            continue
+
+        score = score_values[index] if index < len(score_values) else None
+        existing_index = positions.get(cleaned)
+        if existing_index is None:
+            positions[cleaned] = len(deduped_candidates)
+            deduped_candidates.append(cleaned)
+            deduped_scores.append(score)
+            continue
+
+        try:
+            score_value = float(score) if score is not None else None
+        except Exception:
+            score_value = None
+        try:
+            existing_value = (
+                float(deduped_scores[existing_index])
+                if deduped_scores[existing_index] is not None
+                else None
+            )
+        except Exception:
+            existing_value = None
+        if score_value is not None and (
+            existing_value is None or score_value > existing_value
+        ):
+            deduped_scores[existing_index] = score
+
+    return deduped_candidates, deduped_scores
+
+
 def score_counterfactual_candidate(
     *,
     question: str,
@@ -44735,10 +45680,6 @@ def build_answer_type_fallback_candidates(answer: Any, seed: int) -> list[str]:
     if answer_type in {"year", "date"} and _INT_RE.match(normalized):
         year = int(normalized)
         candidates.append(str(year + (1 if seed % 2 == 0 else -1)))
-    if answer_type == "short_span":
-        normalized_answer = normalize_text(text)
-        if normalized_answer and not normalized_answer.startswith("not "):
-            candidates.append(f"not {text}")
     deduped = []
     seen = set()
     for candidate in candidates:
@@ -44747,6 +45688,19 @@ def build_answer_type_fallback_candidates(answer: Any, seed: int) -> list[str]:
             deduped.append(cleaned)
             seen.add(cleaned)
     return deduped
+
+
+def build_low_confidence_fallback_candidates(answer: Any) -> list[str]:
+    text = clean_counterfactual_text(answer)
+    if not text:
+        return []
+    if detect_answer_type(text) != "short_span":
+        return []
+
+    normalized_answer = normalize_text(text)
+    if not normalized_answer or normalized_answer.startswith("not "):
+        return []
+    return [f"not {text}"]
 
 
 def pick_valid_candidate(
@@ -47035,8 +47989,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from tools.dual_cf_artifact_utils import (
     build_answer_type_fallback_candidates,
+    build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_scored_candidates,
     load_keyed_jsonish,
     pick_best_counterfactual_v3,
     read_jsonl,
@@ -47063,18 +48019,6 @@ def parse_args():
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
     parser.add_argument("--max-alt-length-chars", type=int, default=128)
     return parser.parse_args()
-
-
-def _filter_scored_candidates(candidates, scores):
-    filtered_candidates = []
-    filtered_scores = []
-    for index, candidate in enumerate(candidates):
-        candidate_text = clean_counterfactual_text(candidate)
-        if not candidate_text:
-            continue
-        filtered_candidates.append(candidate_text)
-        filtered_scores.append(scores[index] if index < len(scores) else None)
-    return filtered_candidates, filtered_scores
 
 
 def main():
@@ -47127,7 +48071,10 @@ def main():
             )
             candidate_pool.extend(fallback_candidates)
             score_pool.extend([None] * len(fallback_candidates))
-            candidate_pool, score_pool = _filter_scored_candidates(candidate_pool, score_pool)
+            candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+            low_confidence_candidates = build_low_confidence_fallback_candidates(
+                updated.get(args.answer_key, "")
+            )
             repaired_alternate, pick_meta = pick_best_counterfactual_v3(
                 question=str(updated.get("question") or updated.get("query") or ""),
                 answer=str(updated.get(args.answer_key, "")),
@@ -47139,6 +48086,27 @@ def main():
                 require_short_answer=args.require_short_answer,
                 max_alt_length_chars=args.max_alt_length_chars,
             )
+            if (
+                pick_meta.get("invalid_reason") is not None
+                and low_confidence_candidates
+            ):
+                candidate_pool.extend(low_confidence_candidates)
+                score_pool.extend([None] * len(low_confidence_candidates))
+                candidate_pool, score_pool = dedupe_scored_candidates(
+                    candidate_pool,
+                    score_pool,
+                )
+                repaired_alternate, pick_meta = pick_best_counterfactual_v3(
+                    question=str(updated.get("question") or updated.get("query") or ""),
+                    answer=str(updated.get(args.answer_key, "")),
+                    candidates=candidate_pool,
+                    candidate_answers=row_candidates,
+                    external_scores=score_pool,
+                    reject_gold_substring=args.reject_gold_substring,
+                    max_overlap_ratio=args.max_overlap_ratio,
+                    require_short_answer=args.require_short_answer,
+                    max_alt_length_chars=args.max_alt_length_chars,
+                )
             if repaired_alternate:
                 updated[args.alternate_key] = repaired_alternate
                 updated["cf_pick_meta"] = pick_meta
@@ -49675,15 +50643,14 @@ class DualCF(GradDiff):
             forget_inputs, "attribution_score", device=device, batch_size=batch_size
         )
 
-        if self.disable_difficulty_route:
-            difficulty = torch.zeros_like(difficulty)
-        if self.disable_attribution_route:
-            attribution = torch.zeros_like(attribution)
-
         difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
         risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
         difficulty_gate = difficulty_gate.pow(self.neg_power)
         risk_gate = risk_gate.pow(self.risk_power)
+        if self.disable_difficulty_route:
+            difficulty_gate = torch.ones_like(difficulty_gate)
+        if self.disable_attribution_route:
+            risk_gate = torch.zeros_like(risk_gate)
         return difficulty, attribution, difficulty_gate, risk_gate
 
     def _summarize_risk(self, risk_gate: torch.Tensor) -> torch.Tensor:

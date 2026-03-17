@@ -15,6 +15,8 @@ if str(SRC_ROOT) not in sys.path:
 from tools.dual_cf_artifact_utils import (  # noqa: E402
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_scored_candidates,
+    pick_best_counterfactual_v3,
     read_jsonl,
     save_jsonl,
 )
@@ -41,6 +43,8 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.8)
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--num-alternates", type=int, default=1)
+    parser.add_argument("--prompt-family", default="default")
     parser.add_argument("--reject-gold-substring", action="store_true")
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
@@ -68,7 +72,31 @@ def build_generator(args) -> VLLMCFGenerator:
         top_p=args.top_p,
         max_tokens=args.max_new_tokens,
         concurrency=args.generator_concurrency,
+        prompt_family=args.prompt_family,
+        num_alternates=args.num_alternates,
     )
+
+
+def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
+    response_candidates = list(response.get("alternates") or [])
+    if not response_candidates and str(response.get("alternate", "")).strip():
+        response_candidates = [str(response.get("alternate", "")).strip()]
+    candidates, scores = dedupe_scored_candidates(
+        response_candidates,
+        response.get("scores", []),
+    )
+    best_alt, pick_meta = pick_best_counterfactual_v3(
+        question=str(row.get(args.question_key, "")),
+        answer=str(row.get(args.answer_key, "")),
+        candidates=candidates,
+        candidate_answers=row.get("candidate_answers"),
+        external_scores=scores,
+        reject_gold_substring=args.reject_gold_substring,
+        max_overlap_ratio=args.max_overlap_ratio,
+        require_short_answer=args.require_short_answer,
+        max_alt_length_chars=args.max_alt_length_chars,
+    )
+    return best_alt, candidates, scores, pick_meta
 
 
 def main():
@@ -114,13 +142,20 @@ def main():
             outputs = generator.many_sync(list(row_chunk))
             for response, row_idx in zip(outputs, meta_chunk):
                 row = dict(rows[row_idx])
-                alternate = clean_counterfactual_text(response.get("alternate", ""))
+                alternate, response_candidates, response_scores, pick_meta = choose_retry_alternate(
+                    args,
+                    row,
+                    response,
+                )
                 reason = invalid_reason(args, row, alternate)
                 row["cf_retry_passes"] = int(row.get("cf_retry_passes", 0)) + 1
                 row["cf_retry_last_alternate"] = alternate
+                row["cf_retry_last_alternates"] = list(response_candidates)
+                row["cf_retry_last_scores"] = list(response_scores)
                 row["cf_retry_last_answer_type"] = str(
                     response.get("answer_type", "unknown")
                 )
+                row["cf_retry_pick_meta"] = pick_meta
                 if reason is None:
                     row["alternate"] = alternate
                     row["cf_invalid_reason"] = None

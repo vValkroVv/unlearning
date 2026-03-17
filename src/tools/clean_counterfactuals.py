@@ -13,8 +13,10 @@ if str(SRC_ROOT) not in sys.path:
 
 from tools.dual_cf_artifact_utils import (
     build_answer_type_fallback_candidates,
+    build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_scored_candidates,
     load_keyed_jsonish,
     pick_best_counterfactual_v3,
     read_jsonl,
@@ -41,18 +43,6 @@ def parse_args():
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
     parser.add_argument("--max-alt-length-chars", type=int, default=128)
     return parser.parse_args()
-
-
-def _filter_scored_candidates(candidates, scores):
-    filtered_candidates = []
-    filtered_scores = []
-    for index, candidate in enumerate(candidates):
-        candidate_text = clean_counterfactual_text(candidate)
-        if not candidate_text:
-            continue
-        filtered_candidates.append(candidate_text)
-        filtered_scores.append(scores[index] if index < len(scores) else None)
-    return filtered_candidates, filtered_scores
 
 
 def main():
@@ -105,7 +95,10 @@ def main():
             )
             candidate_pool.extend(fallback_candidates)
             score_pool.extend([None] * len(fallback_candidates))
-            candidate_pool, score_pool = _filter_scored_candidates(candidate_pool, score_pool)
+            candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+            low_confidence_candidates = build_low_confidence_fallback_candidates(
+                updated.get(args.answer_key, "")
+            )
             repaired_alternate, pick_meta = pick_best_counterfactual_v3(
                 question=str(updated.get("question") or updated.get("query") or ""),
                 answer=str(updated.get(args.answer_key, "")),
@@ -117,6 +110,27 @@ def main():
                 require_short_answer=args.require_short_answer,
                 max_alt_length_chars=args.max_alt_length_chars,
             )
+            if (
+                pick_meta.get("invalid_reason") is not None
+                and low_confidence_candidates
+            ):
+                candidate_pool.extend(low_confidence_candidates)
+                score_pool.extend([None] * len(low_confidence_candidates))
+                candidate_pool, score_pool = dedupe_scored_candidates(
+                    candidate_pool,
+                    score_pool,
+                )
+                repaired_alternate, pick_meta = pick_best_counterfactual_v3(
+                    question=str(updated.get("question") or updated.get("query") or ""),
+                    answer=str(updated.get(args.answer_key, "")),
+                    candidates=candidate_pool,
+                    candidate_answers=row_candidates,
+                    external_scores=score_pool,
+                    reject_gold_substring=args.reject_gold_substring,
+                    max_overlap_ratio=args.max_overlap_ratio,
+                    require_short_answer=args.require_short_answer,
+                    max_alt_length_chars=args.max_alt_length_chars,
+                )
             if repaired_alternate:
                 updated[args.alternate_key] = repaired_alternate
                 updated["cf_pick_meta"] = pick_meta

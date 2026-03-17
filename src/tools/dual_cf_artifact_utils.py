@@ -356,6 +356,48 @@ def bank_membership_score(candidate: Any, candidate_answers: Sequence[str] | Non
     return 1.0 if candidate_norm in bank_norm else 0.0
 
 
+def dedupe_scored_candidates(
+    candidates: Sequence[Any],
+    scores: Sequence[Any] | None = None,
+) -> tuple[list[str], list[Any]]:
+    deduped_candidates: list[str] = []
+    deduped_scores: list[Any] = []
+    positions: dict[str, int] = {}
+    score_values = list(scores) if scores is not None else []
+
+    for index, candidate in enumerate(candidates):
+        cleaned = clean_counterfactual_text(candidate)
+        if not cleaned:
+            continue
+
+        score = score_values[index] if index < len(score_values) else None
+        existing_index = positions.get(cleaned)
+        if existing_index is None:
+            positions[cleaned] = len(deduped_candidates)
+            deduped_candidates.append(cleaned)
+            deduped_scores.append(score)
+            continue
+
+        try:
+            score_value = float(score) if score is not None else None
+        except Exception:
+            score_value = None
+        try:
+            existing_value = (
+                float(deduped_scores[existing_index])
+                if deduped_scores[existing_index] is not None
+                else None
+            )
+        except Exception:
+            existing_value = None
+        if score_value is not None and (
+            existing_value is None or score_value > existing_value
+        ):
+            deduped_scores[existing_index] = score
+
+    return deduped_candidates, deduped_scores
+
+
 def score_counterfactual_candidate(
     *,
     question: str,
@@ -577,10 +619,6 @@ def build_answer_type_fallback_candidates(answer: Any, seed: int) -> list[str]:
     if answer_type in {"year", "date"} and _INT_RE.match(normalized):
         year = int(normalized)
         candidates.append(str(year + (1 if seed % 2 == 0 else -1)))
-    if answer_type == "short_span":
-        normalized_answer = normalize_text(text)
-        if normalized_answer and not normalized_answer.startswith("not "):
-            candidates.append(f"not {text}")
     deduped = []
     seen = set()
     for candidate in candidates:
@@ -589,6 +627,19 @@ def build_answer_type_fallback_candidates(answer: Any, seed: int) -> list[str]:
             deduped.append(cleaned)
             seen.add(cleaned)
     return deduped
+
+
+def build_low_confidence_fallback_candidates(answer: Any) -> list[str]:
+    text = clean_counterfactual_text(answer)
+    if not text:
+        return []
+    if detect_answer_type(text) != "short_span":
+        return []
+
+    normalized_answer = normalize_text(text)
+    if not normalized_answer or normalized_answer.startswith("not "):
+        return []
+    return [f"not {text}"]
 
 
 def pick_valid_candidate(

@@ -218,6 +218,8 @@ else
       --temperature "${GENERATOR_TEMPERATURE}" \
       --top-p "${GENERATOR_TOP_P}" \
       --max-new-tokens "${GENERATOR_MAX_NEW_TOKENS}" \
+      --num-alternates "${NUM_ALTERNATES}" \
+      --prompt-family "${PROMPT_FAMILY}" \
       --reject-gold-substring \
       --require-short-answer \
       --max-overlap-ratio 0.85 \

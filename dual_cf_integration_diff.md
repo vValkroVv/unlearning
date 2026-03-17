@@ -70,11 +70,16 @@ Validation status for this v3 patch set:
 - completed:
   - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/clean_counterfactuals.py src/tools/build_proxy_retain_map.py src/tools/score_attribution.py src/tools/build_utility_1k_panel.py src/tools/validate_dual_cf_artifact.py src/tools/build_forget_belief_bank.py src/data/qa.py src/trainer/utils.py src/trainer/unlearn/dual_cf.py src/trainer/unlearn/dual_cf_sam.py src/trainer/__init__.py`
   - `python -m unittest discover -s tests -p 'test_dualcf_v3_helpers.py'`
+  - `python -m unittest discover -s tests -p 'test_dualcf_v3*.py'`
+  - `python -m unittest discover -s tests -p 'test_*vllm*.py'`
+  - `python -m unittest discover -s tests -p 'test_*retry*.py'`
   - `bash -n scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh`
   - CLI `--help` smoke for the updated artifact tools and the new belief-bank tool
   - a CPU-only helper smoke covering ranked CF picking, answer-type fallback,
-    QA-anchor flattening, and belief validity filtering
+    QA-anchor flattening, belief validity filtering, vLLM payload normalization,
+    and retry candidate selection
 - not completed here:
+  - GPU-backed vLLM generation checks
   - GPU-backed attribution scoring
   - end-to-end belief generation against a real checkpoint
   - 1-step or short functional train/eval runs
@@ -497,9 +502,11 @@ Added CLI flags:
 - `--max-overlap-ratio`
 - `--max-alt-length-chars`
 
-`src/tools/vllm_cf_client.py` uses the OpenAI-compatible vLLM server with
-structured JSON outputs so alternates stay short and explanation-style leakage
-is suppressed at generation time.
+`src/tools/vllm_cf_client.py` uses the OpenAI-compatible vLLM server and
+supports structured JSON outputs for multi-candidate generation. Plain-text mode
+is still supported and remains the default unless `VLLM_USE_STRUCTURED_OUTPUTS=1`,
+so the runtime only gets real multi-alternate vLLM outputs when structured mode
+is explicitly enabled.
 
 ### DUET candidate bank
 
@@ -1471,6 +1478,9 @@ Updates:
 - plain-text vLLM generation is now the default client mode
   (`VLLM_USE_STRUCTURED_OUTPUTS=0`); structured outputs remain opt-in for cases
   where the grammar backend is stable
+- the client supports structured multi-alternate payloads, but real
+  multi-alternate vLLM generation still requires `VLLM_USE_STRUCTURED_OUTPUTS=1`;
+  sidecar mode remains the safer default when structured decoding is unstable
 
 ## Targeted retry path for invalid RWKU counterfactual rows (2026-03-15)
 
