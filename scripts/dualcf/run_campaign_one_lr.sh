@@ -49,6 +49,87 @@ require_file() {
   fi
 }
 
+resolve_existing_dir() {
+  local raw_path="$1"
+  local candidate=""
+
+  if [[ -d "${raw_path}" ]]; then
+    realpath "${raw_path}"
+    return 0
+  fi
+
+  candidate="${REPO_ROOT}/${raw_path}"
+  if [[ -d "${candidate}" ]]; then
+    realpath "${candidate}"
+    return 0
+  fi
+
+  candidate="/data/home/vkropoti/unlearning/${raw_path}"
+  if [[ -d "${candidate}" ]]; then
+    realpath "${candidate}"
+    return 0
+  fi
+
+  printf '%s\n' "${raw_path}"
+}
+
+cleanup_loku_wrapper_tmp_dirs() {
+  if [[ "${LOKU_WRAPPER_DELETE_TMP_AFTER_RUN:-1}" != "1" ]]; then
+    return
+  fi
+
+  if [[ -n "${LOKU_TMP_IMPORTANCE_DIR:-}" && -d "${LOKU_TMP_IMPORTANCE_DIR}" ]]; then
+    rm -rf "${LOKU_TMP_IMPORTANCE_DIR}"
+    echo "[dualcf][campaign] Removed LoKU tmp importance dir ${LOKU_TMP_IMPORTANCE_DIR}"
+  fi
+
+  if [[ -n "${LOKU_TMP_FILA_DIR:-}" && -d "${LOKU_TMP_FILA_DIR}" ]]; then
+    rm -rf "${LOKU_TMP_FILA_DIR}"
+    echo "[dualcf][campaign] Removed LoKU tmp FILA dir ${LOKU_TMP_FILA_DIR}"
+  fi
+}
+
+configure_method_variant_env() {
+  local method_variant="$1"
+
+  unset IMPORTANCE_PATH
+  unset FILA_BASE_PATH
+  unset DELETE_IMPORTANCE_AFTER_RUN
+  unset DELETE_FILA_BASE_AFTER_EVAL
+  unset DELETE_RUN_BASE_MODEL_AFTER_EVAL
+
+  if [[ "${method_variant}" != "loku" ]]; then
+    return
+  fi
+
+  export LOKU_TMP_IMPORTANCE_DIR="${LOKU_IMPORTANCE_TMP_DIR}/${LOKU_RUN_TAG}"
+  export LOKU_TMP_FILA_DIR="${LOKU_FILA_BASE_TMP_DIR}/${LOKU_RUN_TAG}"
+  mkdir -p "${LOKU_TMP_IMPORTANCE_DIR}" "${LOKU_TMP_FILA_DIR}"
+
+  if [[ -n "${LOKU_IMPORTANCE_PATH:-}" ]]; then
+    export IMPORTANCE_PATH="${LOKU_IMPORTANCE_PATH}"
+  else
+    export IMPORTANCE_PATH="${LOKU_TMP_IMPORTANCE_DIR}/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt"
+  fi
+
+  if [[ -n "${LOKU_FILA_BASE_PATH:-}" ]]; then
+    export FILA_BASE_PATH="${LOKU_FILA_BASE_PATH}"
+  else
+    export FILA_BASE_PATH="${LOKU_TMP_FILA_DIR}/{task_name}"
+  fi
+
+  # Keep LoKU's internal EXIT trap from deleting debug artifacts on failure.
+  # The wrapper removes these temp dirs only after the LoKU method returns
+  # successfully, which is after train + endpoint eval + checkpoint eval +
+  # Utility-1K eval.
+  export DELETE_IMPORTANCE_AFTER_RUN="${LOKU_DELETE_IMPORTANCE_AFTER_RUN:-0}"
+  export DELETE_FILA_BASE_AFTER_EVAL="${LOKU_DELETE_FILA_BASE_AFTER_EVAL:-0}"
+  export DELETE_RUN_BASE_MODEL_AFTER_EVAL="${LOKU_DELETE_RUN_BASE_MODEL_AFTER_EVAL:-1}"
+
+  echo "[dualcf][campaign] LoKU cleanup: IMPORTANCE_PATH=${IMPORTANCE_PATH}"
+  echo "[dualcf][campaign] LoKU cleanup: FILA_BASE_PATH=${FILA_BASE_PATH}"
+}
+
 run_duet_block() {
   local forget_label="$1"
   local artifact_path="$2"
@@ -67,7 +148,11 @@ run_duet_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=duet_${forget_label}"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
+    configure_method_variant_env "${METHOD_VARIANT}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
+    if [[ "${METHOD_VARIANT}" == "loku" ]]; then
+      cleanup_loku_wrapper_tmp_dirs
+    fi
   done
 }
 
@@ -76,6 +161,11 @@ run_rwku_block() {
 
   require_file "${artifact_path}"
 
+  unset FORGET_LABEL
+  unset FORGET_SPLIT_OVERRIDE
+  unset RETAIN_SPLIT_OVERRIDE
+  unset FORGET_LABEL_OVERRIDE
+  unset MERGE_POPULARITY_FORGET
   unset USE_SFT_BASE
   unset LOCAL_SFT_BASE
   unset SFT_SUBFOLDER
@@ -90,7 +180,11 @@ run_rwku_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=rwku"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
+    configure_method_variant_env "${METHOD_VARIANT}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
+    if [[ "${METHOD_VARIANT}" == "loku" ]]; then
+      cleanup_loku_wrapper_tmp_dirs
+    fi
   done
 }
 
@@ -107,8 +201,12 @@ export ARTIFACT_ROOT="${ARTIFACT_ROOT:-/data/home/vkropoti/unlearning/artifacts/
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/data/home/vkropoti/unlearning/saves/unlearn}"
 export UTILITY_ROOT="${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utility_1k_v1}"
 export BASELINE_CACHE_ROOT="${BASELINE_CACHE_ROOT:-/data/home/vkropoti/unlearning/saves/eval/utility_baselines}"
+export LOKU_IMPORTANCE_TMP_DIR="${LOKU_IMPORTANCE_TMP_DIR:-/data/home/vkropoti/unlearning/importance_tmp}"
+export LOKU_FILA_BASE_TMP_DIR="${LOKU_FILA_BASE_TMP_DIR:-/data/home/vkropoti/unlearning/fila_base_tmp}"
+export LOKU_RUN_TAG="${LOKU_RUN_TAG:-gpu${GPU_ID}_lr${LR}_phase_${PHASE}}"
 mkdir -p "${HF_HOME}" "${HF_DATASETS_CACHE}" "${TRITON_CACHE_DIR}" \
-  "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}" "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
+  "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}" "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}" \
+  "${LOKU_IMPORTANCE_TMP_DIR}" "${LOKU_FILA_BASE_TMP_DIR}"
 
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
@@ -125,8 +223,9 @@ export BASE_MODEL_PATH="${BASE_MODEL_PATH:-${HF_BASE_MODEL_PATH}}"
 export BASE_MODEL_EVAL_CONFIG="${BASE_MODEL_EVAL_CONFIG:-Llama-3.1-8B-Instruct}"
 export LORA_MODEL_EVAL_CONFIG="${LORA_MODEL_EVAL_CONFIG:-Llama-3.1-8B-Instruct-lora}"
 
-export DUET_LOCAL_SFT_BASE="${DUET_LOCAL_SFT_BASE:-SwetieePawsss/DUET_ft_models}"
+export DUET_LOCAL_SFT_BASE="${DUET_LOCAL_SFT_BASE:-/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models}"
 export DUET_SFT_SUBFOLDER="${DUET_SFT_SUBFOLDER:-llama-3.1-8b-instruct-tripunlamb-ft}"
+export DUET_LOCAL_SFT_BASE="$(resolve_existing_dir "${DUET_LOCAL_SFT_BASE}")"
 
 export LORA_RS="${LORA_RS:-32}"
 export LORA_ALPHAS="${LORA_ALPHAS:-64}"
@@ -150,12 +249,12 @@ export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL="${DELETE_CHECKPOINT_ADA
 export RUN_CHECKPOINT_EVAL="${RUN_CHECKPOINT_EVAL:-1}"
 export RUN_UTILITY_EVAL="${RUN_UTILITY_EVAL:-1}"
 export EVAL_RUN_BASE_MODEL="${EVAL_RUN_BASE_MODEL:-0}"
-export UTILITY_EVAL_BATCH_SIZE="${UTILITY_EVAL_BATCH_SIZE:-64}"
+export UTILITY_EVAL_BATCH_SIZE="${UTILITY_EVAL_BATCH_SIZE:-512}"
 export UTILITY_APPLY_CHAT_TEMPLATE="${UTILITY_APPLY_CHAT_TEMPLATE:-true}"
 
-export PER_DEVICE_TRAIN_BS="${PER_DEVICE_TRAIN_BS:-32}"
-export GRAD_ACCUM="${GRAD_ACCUM:-1}"
-export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-192}"
+export PER_DEVICE_TRAIN_BS="${PER_DEVICE_TRAIN_BS:-16}"
+export GRAD_ACCUM="${GRAD_ACCUM:-2}"
+export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-512}"
 export IMPORTANCE_BATCH_SIZE="${IMPORTANCE_BATCH_SIZE:-32}"
 export DIFFICULTY_BATCH_SIZE="${DIFFICULTY_BATCH_SIZE:-32}"
 export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
@@ -167,6 +266,7 @@ METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo ga npo npo_sam loku}"
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
 echo "[dualcf][campaign] method_variants=${METHOD_VARIANTS}"
+echo "[dualcf][campaign] duet_local_sft_base=${DUET_LOCAL_SFT_BASE}"
 
 duet_rare_artifact="${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl"
 duet_popular_artifact="${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl"

@@ -1,0 +1,9 @@
+method	utility_metric	utility_auc	utility_max_drawdown	utility_best_final_gap	endpoint_label	u_at_forget_tau
+full	utility_avg	0.593646666667	0.019	0.017	final	
+d_only	utility_avg	0.594393333333	0.019	0.012	final	
+a_only	utility_avg	0.597233333333	0.015	0.007	final	
+dpo	utility_avg	0.60034	0.012	0.007	final	
+ga	utility_avg	0.521886666667	0.188	0.188	final	
+npo	utility_avg	0.602893333333	0.01	0.006	final	
+npo_sam	utility_avg	0.607013333333	0.004	0.004	final	
+loku	utility_avg	0.495966666667	0.149	0.145	final	

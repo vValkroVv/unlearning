@@ -76,12 +76,16 @@ LORA_BASE_MODEL_SUBFOLDER_VALUE=${MODEL_SUBFOLDER}
 if has_loadable_base_model "${RUN_DIR}/base_model"; then
   RESOLVED_BASE_MODEL_PATH="${RUN_DIR}/base_model"
   echo "[duet][ckpt-eval] Detected LoKU FILA base model at ${RESOLVED_BASE_MODEL_PATH}"
-  # LoKU saves a standalone flattened model in run_dir/base_model, so the
-  # DUET SFT subfolder no longer applies during checkpoint eval.
-  LORA_MODEL_SUBFOLDER_VALUE=""
-  LORA_BASE_MODEL_SUBFOLDER_VALUE=""
 elif [[ -d "${RUN_DIR}/base_model" ]]; then
   echo "[duet][ckpt-eval] Found ${RUN_DIR}/base_model but it is missing config/weights; falling back to ${RESOLVED_BASE_MODEL_PATH}"
+fi
+
+if has_loadable_base_model "${RESOLVED_BASE_MODEL_PATH}"; then
+  # LoKU can provide either run_dir/base_model or an external FILA_BASE_PATH.
+  # In both cases this is already a standalone flattened model, so the DUET SFT
+  # subfolder must not be applied when loading it for checkpoint eval.
+  LORA_MODEL_SUBFOLDER_VALUE=""
+  LORA_BASE_MODEL_SUBFOLDER_VALUE=""
 fi
 
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)

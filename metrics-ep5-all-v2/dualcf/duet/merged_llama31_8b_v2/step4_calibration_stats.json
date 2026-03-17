@@ -1,0 +1,12 @@
+{
+  "rows": 964,
+  "method": "percentile",
+  "difficulty_in": "difficulty_score_raw",
+  "difficulty_out": "difficulty_score",
+  "attribution_in": "attribution_score_raw",
+  "attribution_out": "attribution_score",
+  "difficulty_raw_min": 0.2927597766299612,
+  "difficulty_raw_max": 0.9949212221094601,
+  "attribution_raw_min": 14.57820156134985,
+  "attribution_raw_max": 851.7385206808452
+}

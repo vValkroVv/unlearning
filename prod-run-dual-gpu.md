@@ -17,6 +17,9 @@ Scope:
 cd /home/vkropoti/diploma/open-unlearning
 source /data/home/vkropoti/unlearning-venv/bin/activate
 
+ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss \
+  /home/vkropoti/diploma/open-unlearning/SwetieePawsss
+
 export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
 export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
@@ -43,7 +46,7 @@ export BASE_MODEL_EVAL_CONFIG=Llama-3.1-8B-Instruct
 export LORA_MODEL_EVAL_CONFIG=Llama-3.1-8B-Instruct-lora
 
 # DUET SFT base for DUET artifact prep and DUET runs
-export DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models
+export DUET_LOCAL_SFT_BASE=/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models
 export DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
 
 # production LoRA parity
@@ -176,13 +179,6 @@ export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-0}
 
 Build all clean counterfactual files first, then stop the vLLM server before
 any Llama scoring or training.
-
-One-time offline dataset wiring on the GPU box:
-
-```bash
-ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss \
-  /home/vkropoti/diploma/open-unlearning/SwetieePawsss
-```
 
 ## Artifact prep
 

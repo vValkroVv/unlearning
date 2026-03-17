@@ -6,6 +6,7 @@ Directory Structure:
 .
 ├── .gitignore
 ├── .pre-commit-config.yaml
+├── check_saves.py
 │   │       ├── community/benchmarks/template/README.md
 │   │       └── community/benchmarks/template/run.sh
 │   ├── community/leaderboard.md
@@ -385,6 +386,7 @@ Directory Structure:
 │   ├── src/tools
 │   │   ├── src/tools/build_duet_candidate_bank.py
 │   │   ├── src/tools/build_proxy_retain_map.py
+│   │   ├── src/tools/build_structured_saves.py
 │   │   ├── src/tools/build_utility_1k_panel.py
 │   │   ├── src/tools/calibrate_dual_cf_scores.py
 │   │   ├── src/tools/checkpoint_summary_utils.py
@@ -1454,64 +1456,147 @@ CUDA_VISIBLE_DEVICES=0 python scripts/calc_cos_sim.py --base-dir . --benchmarks 
 
 set -euo pipefail
 
-if [[ ! -d "saves" ]]; then
-    echo "Error: run this script from repo root (missing ./saves directory)." >&2
-    exit 1
+usage() {
+  cat <<'EOF'
+Usage:
+  bash package_saves.sh --path_to_saves PATH --out_path PATH [--save_eval 0|1]
+
+Examples:
+  bash package_saves.sh \
+    --path_to_saves /data/home/vkropoti/unlearning/saves \
+    --out_path /data/home/vkropoti/unlearning/zips_for_gpu/saves-clean \
+    --save_eval 0
+
+  bash package_saves.sh \
+    --path_to_saves /data/home/vkropoti/unlearning/saves/unlearn \
+    --out_path /data/home/vkropoti/unlearning/zips_for_gpu/unlearn-clean \
+    --save_eval 1
+
+Notes:
+  --out_path is the clean directory path. The script also writes --out_path.zip.
+  --save_eval 1 keeps *_EVAL.json files. --save_eval 0 keeps only summaries.
+EOF
+}
+
+PATH_TO_SAVES=""
+OUT_PATH=""
+SAVE_EVAL=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --path_to_saves)
+      PATH_TO_SAVES="${2:-}"
+      shift 2
+      ;;
+    --out_path)
+      OUT_PATH="${2:-}"
+      shift 2
+      ;;
+    --save_eval)
+      SAVE_EVAL="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "${PATH_TO_SAVES}" || -z "${OUT_PATH}" ]]; then
+  echo "Error: --path_to_saves and --out_path are required." >&2
+  usage >&2
+  exit 1
+fi
+
+if [[ "${SAVE_EVAL}" != "0" && "${SAVE_EVAL}" != "1" ]]; then
+  echo "Error: --save_eval must be 0 or 1." >&2
+  exit 1
+fi
+
+if [[ ! -d "${PATH_TO_SAVES}" ]]; then
+  echo "Error: path_to_saves does not exist: ${PATH_TO_SAVES}" >&2
+  exit 1
 fi
 
 if ! command -v zip >/dev/null 2>&1; then
-    echo "Error: 'zip' command is required but not found." >&2
-    exit 1
+  echo "Error: 'zip' command is required but not found." >&2
+  exit 1
 fi
 
-src_dir="saves"
-clean_dir="saves-clean"
+src_dir="$(realpath "${PATH_TO_SAVES}")"
+out_parent="$(dirname "${OUT_PATH}")"
+mkdir -p "${out_parent}"
+clean_dir="$(realpath -m "${OUT_PATH}")"
 zip_path="${clean_dir}.zip"
 
-echo "[package_saves] Rebuilding ${clean_dir} and ${zip_path}"
-rm -rf "${clean_dir}" "${zip_path}" "saves-summary"
+echo "[package_saves] src_dir=${src_dir}"
+echo "[package_saves] clean_dir=${clean_dir}"
+echo "[package_saves] zip_path=${zip_path}"
+echo "[package_saves] save_eval=${SAVE_EVAL}"
+
+rm -rf "${clean_dir}" "${zip_path}"
 mkdir -p "${clean_dir}"
 
 copied_files=0
 skipped_files=0
 
 should_keep_file() {
-    local rel_path="$1"
-    local base_name
-    local dir_name
+  local rel_path="$1"
+  local base_name=""
+  local dir_name=""
 
-    base_name="$(basename "${rel_path}")"
-    dir_name="$(dirname "${rel_path}")"
+  base_name="$(basename "${rel_path}")"
+  dir_name="$(dirname "${rel_path}")"
 
-    if [[ "${base_name}" == *_SUMMARY.json || "${base_name}" == *_EVAL.json ]]; then
-        return 0
-    fi
+  if [[ "${base_name}" == *_SUMMARY.json ]]; then
+    return 0
+  fi
 
-    if [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
-        return 0
-    fi
+  if [[ "${SAVE_EVAL}" == "1" && "${base_name}" == *_EVAL.json ]]; then
+    return 0
+  fi
 
-    return 1
+  # Keep summary tables and merged trajectory summaries from checkpoint + utility evals.
+  if [[ "${base_name}" == "summary.tsv" || "${base_name}" == "trajectory_metrics.json" ]]; then
+    return 0
+  fi
+
+  # Keep Hydra configs for reproducibility.
+  if [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
+    return 0
+  fi
+
+  return 1
 }
 
 while IFS= read -r -d '' src_file; do
-    rel_path="${src_file#${src_dir}/}"
+  rel_path="${src_file#${src_dir}/}"
 
-    if ! should_keep_file "${rel_path}"; then
-        skipped_files=$((skipped_files + 1))
-        continue
-    fi
+  if ! should_keep_file "${rel_path}"; then
+    skipped_files=$((skipped_files + 1))
+    continue
+  fi
 
-    dst_file="${clean_dir}/${rel_path}"
-    mkdir -p "$(dirname "${dst_file}")"
-    cp -p "${src_file}" "${dst_file}"
-    copied_files=$((copied_files + 1))
+  dst_file="${clean_dir}/${rel_path}"
+  mkdir -p "$(dirname "${dst_file}")"
+  cp -p "${src_file}" "${dst_file}"
+  copied_files=$((copied_files + 1))
 done < <(find "${src_dir}" -type f -print0)
 
 echo "[package_saves] copied files: ${copied_files}"
 echo "[package_saves] skipped files: ${skipped_files}"
 
-zip -rq "${zip_path}" "${clean_dir}"
+(
+  cd "$(dirname "${clean_dir}")"
+  zip -rq "${zip_path}" "$(basename "${clean_dir}")"
+)
+
 echo "[package_saves] wrote ${zip_path}"
 echo "[package_saves] done"
 
@@ -12634,6 +12719,282 @@ setup(
 
 </content>
 
+<content full_path="check_saves.py">
+#!/usr/bin/env python3
+"""Check DualCF campaign saves created by run_campaign_one_lr.sh."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+
+DEFAULT_LRS = ["5e-6", "1e-5", "5e-5", "1e-4"]
+DEFAULT_VARIANTS = ["full", "d_only", "a_only", "dpo", "ga", "npo", "npo_sam", "loku"]
+
+PHASE_PREFIXES = {
+    "duet_rare": "duet_Llama-3.1-8B-Instruct_city_forget_rare_5_",
+    "duet_popular": "duet_Llama-3.1-8B-Instruct_city_forget_popular_5_",
+    "duet_merged": "duet_Llama-3.1-8B-Instruct_city_forget_5_",
+    "rwku": "rwku_Llama-3.1-8B-Instruct_forget_level2_",
+}
+
+LEGACY_RWKU_LOKU_PREFIX = "rwku_Llama-3.1-8B-Instruct_merged_loku_"
+
+
+def _is_dualcf_full(name: str) -> bool:
+    return "_dual_cf_" in name and "_dOn_aOn" in name
+
+
+def _is_dualcf_d_only(name: str) -> bool:
+    return "_dual_cf_" in name and "_dOn_aOff" in name
+
+
+def _is_dualcf_a_only(name: str) -> bool:
+    return "_dual_cf_" in name and "_dOff_aOn" in name
+
+
+def _contains(token: str) -> Callable[[str], bool]:
+    return lambda name: token in name
+
+
+VARIANT_MATCHERS: dict[str, Callable[[str], bool]] = {
+    "full": _is_dualcf_full,
+    "d_only": _is_dualcf_d_only,
+    "a_only": _is_dualcf_a_only,
+    "dpo": _contains("_dpo_cf_"),
+    "ga": _contains("_ga_"),
+    "npo": lambda name: "_npo_" in name and "_npo_sam_" not in name,
+    "npo_sam": _contains("_npo_sam_"),
+    "loku": _contains("_loku_"),
+}
+
+
+@dataclass(frozen=True)
+class ExpectedRun:
+    phase: str
+    lr: str
+    variant: str
+
+
+@dataclass
+class RunCheckResult:
+    run_dir: Path
+    issues: list[str]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--path_to_saves", required=True, help="Path to saves/ or saves/unlearn")
+    parser.add_argument(
+        "--lrs",
+        nargs="+",
+        default=DEFAULT_LRS,
+        help=f"Expected LR tags. Default: {' '.join(DEFAULT_LRS)}",
+    )
+    parser.add_argument(
+        "--method_variants",
+        nargs="+",
+        default=DEFAULT_VARIANTS,
+        help=f"Expected method variants. Default: {' '.join(DEFAULT_VARIANTS)}",
+    )
+    return parser.parse_args()
+
+
+def resolve_unlearn_root(path_to_saves: str) -> Path:
+    root = Path(path_to_saves).expanduser().resolve()
+    if (root / "unlearn").is_dir():
+        return root / "unlearn"
+    return root
+
+
+def list_run_dirs(unlearn_root: Path) -> list[Path]:
+    if not unlearn_root.exists():
+        raise FileNotFoundError(f"Save root does not exist: {unlearn_root}")
+    return sorted(path for path in unlearn_root.iterdir() if path.is_dir())
+
+
+def build_expected_runs(lrs: list[str], variants: list[str]) -> list[ExpectedRun]:
+    runs: list[ExpectedRun] = []
+    for phase in PHASE_PREFIXES:
+        for lr in lrs:
+            for variant in variants:
+                runs.append(ExpectedRun(phase=phase, lr=lr, variant=variant))
+    return runs
+
+
+def find_matches(run_dirs: list[Path], expected: ExpectedRun) -> list[Path]:
+    prefixes = [PHASE_PREFIXES[expected.phase]]
+    if expected.phase == "rwku" and expected.variant == "loku":
+        prefixes.append(LEGACY_RWKU_LOKU_PREFIX)
+    variant_matcher = VARIANT_MATCHERS[expected.variant]
+    lr_pattern = re.compile(rf"_lr{re.escape(expected.lr)}(?:_|$)")
+    return [
+        run_dir
+        for run_dir in run_dirs
+        if any(run_dir.name.startswith(prefix) for prefix in prefixes)
+        and lr_pattern.search(run_dir.name) is not None
+        and variant_matcher(run_dir.name)
+    ]
+
+
+def require_file(path: Path, label: str, issues: list[str]) -> None:
+    if not path.is_file():
+        issues.append(label)
+
+
+def require_duet_eval_artifacts(eval_dir: Path, run_dir: Path, issues: list[str]) -> None:
+    relative = eval_dir.relative_to(run_dir)
+    require_file(eval_dir / "DUET_EVAL.json", f"{relative}/DUET_EVAL.json", issues)
+    require_file(eval_dir / "DUET_SUMMARY.json", f"{relative}/DUET_SUMMARY.json", issues)
+    require_file(eval_dir / "COS_SIM_EVAL.json", f"{relative}/COS_SIM_EVAL.json", issues)
+    require_file(eval_dir / "COS_SIM_SUMMARY.json", f"{relative}/COS_SIM_SUMMARY.json", issues)
+
+
+def inspect_run_dir(run_dir: Path) -> RunCheckResult:
+    issues: list[str] = []
+
+    require_duet_eval_artifacts(run_dir / "evals", run_dir, issues)
+
+    require_file(run_dir / "checkpoint_evals" / "summary.tsv", "checkpoint_evals/summary.tsv", issues)
+    require_file(
+        run_dir / "checkpoint_evals_utility" / "summary.tsv",
+        "checkpoint_evals_utility/summary.tsv",
+        issues,
+    )
+    require_file(
+        run_dir / "checkpoint_evals_merged" / "summary.tsv",
+        "checkpoint_evals_merged/summary.tsv",
+        issues,
+    )
+    require_file(
+        run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json",
+        "checkpoint_evals_merged/trajectory_metrics.json",
+        issues,
+    )
+
+    checkpoint_eval_root = run_dir / "checkpoint_evals"
+    checkpoint_dirs = sorted(
+        path
+        for path in checkpoint_eval_root.glob("checkpoint-*")
+        if path.is_dir()
+    )
+    if not checkpoint_dirs:
+        issues.append("checkpoint_evals/checkpoint-*")
+    else:
+        for checkpoint_dir in checkpoint_dirs:
+            require_duet_eval_artifacts(checkpoint_dir, run_dir, issues)
+
+    utility_root = run_dir / "checkpoint_evals_utility"
+    utility_dirs = sorted(
+        path
+        for path in utility_root.iterdir()
+        if utility_root.is_dir() and path.is_dir() and not path.name.startswith("_")
+    ) if utility_root.exists() else []
+    if not utility_dirs:
+        issues.append("checkpoint_evals_utility/*")
+    else:
+        utility_labels = {path.name for path in utility_dirs}
+        if "base_model_orig" not in utility_labels:
+            issues.append("checkpoint_evals_utility/base_model_orig/LMEval_SUMMARY.json")
+        if "final" not in utility_labels:
+            issues.append("checkpoint_evals_utility/final/LMEval_SUMMARY.json")
+
+        checkpoint_labels = {path.name for path in checkpoint_dirs}
+        missing_utility_labels = sorted(checkpoint_labels - utility_labels)
+        for label in missing_utility_labels:
+            issues.append(f"checkpoint_evals_utility/{label}/LMEval_SUMMARY.json")
+
+        for utility_dir in utility_dirs:
+            require_file(
+                utility_dir / "LMEval_SUMMARY.json",
+                f"{utility_dir.relative_to(run_dir)}/LMEval_SUMMARY.json",
+                issues,
+            )
+
+    return RunCheckResult(run_dir=run_dir, issues=issues)
+
+
+def main() -> int:
+    args = parse_args()
+    unlearn_root = resolve_unlearn_root(args.path_to_saves)
+    run_dirs = list_run_dirs(unlearn_root)
+    expected_runs = build_expected_runs(args.lrs, args.method_variants)
+
+    missing_runs: list[ExpectedRun] = []
+    duplicate_runs: list[tuple[ExpectedRun, list[Path]]] = []
+    bad_runs: list[RunCheckResult] = []
+    matched_run_dirs: list[Path] = []
+
+    for expected in expected_runs:
+        matches = find_matches(run_dirs, expected)
+        if not matches:
+            missing_runs.append(expected)
+            continue
+        if len(matches) > 1:
+            duplicate_runs.append((expected, matches))
+            continue
+
+        matched_run_dirs.append(matches[0])
+        result = inspect_run_dir(matches[0])
+        if result.issues:
+            bad_runs.append(result)
+
+    matched_unique = {path.resolve() for path in matched_run_dirs}
+    extra_runs = [
+        run_dir
+        for run_dir in run_dirs
+        if any(phase_prefix in run_dir.name for phase_prefix in PHASE_PREFIXES.values())
+        and run_dir.resolve() not in matched_unique
+    ]
+
+    expected_total = len(expected_runs)
+    ok_runs = expected_total - len(missing_runs) - len(duplicate_runs) - len(bad_runs)
+
+    print(f"save_root={unlearn_root}")
+    print(f"expected_runs={expected_total}")
+    print(f"ok_runs={ok_runs}")
+    print(f"missing_runs={len(missing_runs)}")
+    print(f"duplicate_matches={len(duplicate_runs)}")
+    print(f"broken_runs={len(bad_runs)}")
+    print(f"extra_runs={len(extra_runs)}")
+
+    if missing_runs:
+        print("\nMissing runs:")
+        for item in missing_runs:
+            print(f"- phase={item.phase} lr={item.lr} variant={item.variant}")
+
+    if duplicate_runs:
+        print("\nDuplicate matches:")
+        for item, matches in duplicate_runs:
+            print(f"- phase={item.phase} lr={item.lr} variant={item.variant}")
+            for match in matches:
+                print(f"  {match}")
+
+    if bad_runs:
+        print("\nBroken runs:")
+        for result in bad_runs:
+            print(f"- {result.run_dir}")
+            for issue in result.issues:
+                print(f"  missing: {issue}")
+
+    if extra_runs:
+        print("\nExtra matched-shape runs not covered by current expectation set:")
+        for run_dir in extra_runs:
+            print(f"- {run_dir}")
+
+    return 0 if not (missing_runs or duplicate_runs or bad_runs) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+</content>
+
 <content full_path="tmp_rwku_apply_manual_fixes.py">
 #!/usr/bin/env python3
 """Apply manual RWKU counterfactual fixes into the clean DualCF artifact."""
@@ -13165,6 +13526,9 @@ Scope:
 cd /home/vkropoti/diploma/open-unlearning
 source /data/home/vkropoti/unlearning-venv/bin/activate
 
+ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss \
+  /home/vkropoti/diploma/open-unlearning/SwetieePawsss
+
 export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
 export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
@@ -13191,7 +13555,7 @@ export BASE_MODEL_EVAL_CONFIG=Llama-3.1-8B-Instruct
 export LORA_MODEL_EVAL_CONFIG=Llama-3.1-8B-Instruct-lora
 
 # DUET SFT base for DUET artifact prep and DUET runs
-export DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models
+export DUET_LOCAL_SFT_BASE=/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models
 export DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
 
 # production LoRA parity
@@ -13324,13 +13688,6 @@ export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-0}
 
 Build all clean counterfactual files first, then stop the vLLM server before
 any Llama scoring or training.
-
-One-time offline dataset wiring on the GPU box:
-
-```bash
-ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss \
-  /home/vkropoti/diploma/open-unlearning/SwetieePawsss
-```
 
 ## Artifact prep
 
@@ -13812,6 +14169,19 @@ Operational update:
   - `EVAL_BATCH_SIZE=192`
   in both the shared campaign wrapper and the direct DUET/RWKU launcher
   defaults, so direct reruns and campaign runs stay aligned.
+- `scripts/dualcf/run_campaign_one_lr.sh` now resolves the DUET SFT base to a
+  real local directory before launch and defaults it to the offline filesystem
+  path `/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models`, instead
+  of relying on a repo-style HF identifier that can fail in offline mode.
+- after wrapper-only OOMs in the 4-run campaign path,
+  `scripts/dualcf/run_campaign_one_lr.sh` was pulled back to the previously
+  stable train defaults:
+  - `PER_DEVICE_TRAIN_BS=16`
+  - `GRAD_ACCUM=2`
+  while leaving the direct DUET/RWKU launcher defaults unchanged
+- the offline dataset symlink step
+  `ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss /home/vkropoti/diploma/open-unlearning/SwetieePawsss`
+  was moved into the common setup block of `prod-run-dual-gpu.md`
 - the GPU validation playbook now lives in `plan-test-dual.md`, including:
   - explicit split-matched artifact preparation for DUET rare / popular / merged
   - stronger artifact validation and provenance requirements
@@ -15206,6 +15576,153 @@ Updates:
 - the runbook also now records the clean-only rebuild path for DUET:
   - `SKIP_CF_GENERATION=1`
   - `REBUILD_CLEAN_CF=1`
+
+## Campaign save checker added (2026-03-16)
+
+Changed files:
+
+- `check_saves.py`
+
+Updates:
+
+- added a root-level helper to verify the expected `run_campaign_one_lr.sh`
+  save layout under `saves/` or `saves/unlearn`
+- the checker matches the current 4-LR, 4-phase, 8-method campaign shape and
+  validates:
+  - endpoint eval files under `evals/`
+  - checkpoint eval summaries under `checkpoint_evals/`
+  - Utility-1K summaries under `checkpoint_evals_utility/`
+  - merged checkpoint + utility summaries under `checkpoint_evals_merged/`
+- the script exits nonzero if any expected run is missing, duplicated, or has
+  missing summary artifacts
+- updated the default LR set in the checker to match the intended 4-GPU launch
+  block:
+  - `5e-6`
+  - `1e-5`
+  - `5e-5`
+  - `1e-4`
+- fixed LR matching so GA-style runs that end exactly at `_lr...` are detected
+  correctly instead of being reported as both `missing` and `extra`
+- fixed an RWKU LoKU naming leak in `run_campaign_one_lr.sh` where DUET's last
+  `FORGET_LABEL` value could carry into RWKU and produce legacy run names like
+  `rwku_..._merged_loku_...` instead of `rwku_..._forget_level2_loku_...`
+- updated the checker to treat those already-written legacy RWKU LoKU run names
+  as valid matches for the RWKU LoKU slot
+- updated the checker to require cosine-sim artifacts alongside every DUET eval
+  directory:
+  - `COS_SIM_EVAL.json`
+  - `COS_SIM_SUMMARY.json`
+  for both top-level `evals/` and each `checkpoint_evals/checkpoint-*`
+
+## Cos-sim eval sweep now works on remote saves trees and checkpoint evals (2026-03-16)
+
+Changed files:
+
+- `scripts/calc_cos_sim.py`
+
+Updates:
+
+- the cos-sim helper now takes `--path_to_saves` instead of assuming the repo
+  root contains `saves/`
+- it resolves both `.../saves` and `.../saves/unlearn`
+- it now scans all `DUET_EVAL.json` files under the provided saves tree,
+  including:
+  - endpoint evals under `evals/`
+  - half-epoch / checkpoint evals under `checkpoint_evals/checkpoint-*`
+- each discovered eval directory now receives:
+  - `COS_SIM_EVAL.json` with per-example cosine similarities
+  - `COS_SIM_SUMMARY.json` with aggregated `*_cos_sim` values alongside the
+    existing `DUET_SUMMARY.json`
+- the helper now resolves the SBERT encoder from the local Hugging Face cache
+  under `HF_HOME` first and also accepts `--sbert_model_path` for explicit
+  offline model selection on GPU boxes
+
+## Saves packager now supports explicit paths and summary-only mode (2026-03-16)
+
+Changed files:
+
+- `package_saves.sh`
+
+Updates:
+
+- the saves packager no longer assumes repo-root `./saves`
+- it now takes:
+  - `--path_to_saves`
+  - `--out_path`
+  - `--save_eval 0|1`
+- `--save_eval 0` keeps only summary artifacts:
+  - `*_SUMMARY.json`
+  - `summary.tsv`
+  - `trajectory_metrics.json`
+  - `.hydra/*.yaml`
+- `--save_eval 1` additionally keeps `*_EVAL.json`
+- the script writes both:
+  - the cleaned output directory at `--out_path`
+  - the zip archive at `--out_path.zip`
+
+## Structured post-run metric tables for packaged saves (2026-03-16)
+
+Changed files:
+
+- `src/tools/build_structured_saves.py`
+
+Updates:
+
+- added a post-processing helper that reads packaged summary-only saves under
+  `saves-clean/unlearn` and writes comparison tables under a separate
+  `structured-saves/` tree
+- the helper creates `structured-saves/params/` with one YAML file per run that
+  bundles:
+  - split bucket
+  - LR
+  - method key
+  - override list
+  - selected config summary fields
+  - the full Hydra config payload
+- it also writes `structured-saves/params/params_index.tsv` so the full run list
+  can be filtered by:
+  - split bucket
+  - LR
+  - method
+  - trainer
+  - experiment
+- per split bucket (`duet_rare`, `duet_popular`, `duet_merged`, `rwku`) and per
+  LR (`5e-6`, `1e-5`, `5e-5`, `1e-4`), the helper now writes:
+  - `runs_index.tsv`
+  - `epoch_reference.tsv`
+  - one TSV per metric with methods on rows and half-epoch slots on columns
+  - `trajectory_summary.tsv` for merged trajectory-level utility stats
+- method row labels are normalized to the campaign's `METHOD_VARIANT` slots:
+  - `full`
+  - `d_only`
+  - `a_only`
+  - `dpo`
+  - `ga`
+  - `npo`
+  - `npo_sam`
+  - `loku`
+- metric tables currently include:
+  - forget / holdout ROUGE
+  - forget / holdout cosine similarity
+  - `utility_avg`
+  - `utility_delta_vs_base`
+  - Utility-1K split metrics:
+    - `mmlu_pro_400_acc`
+    - `truthfulqa_bin_200_acc`
+    - `arc_200_acc`
+    - `winogrande_200_acc`
+- DUET runs keep the nominal half-epoch table columns (`0.5`, `1.0`, ...,
+  `5.0`) while `epoch_reference.tsv` records the exact saved epoch values such
+  as `0.516129...` and `4.838709...`
+
+Example command:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-ep5-all/saves-clean/unlearn \
+  --output-root metrics-ep5-all/structured-saves \
+  --overwrite
+```
 
 </content>
 
@@ -23386,11 +23903,52 @@ import os
 from pathlib import Path
 from typing import Dict, Iterable
 
+from huggingface_hub import snapshot_download
 from sentence_transformers import SentenceTransformer
 
 
-def _load_sbert(device: str) -> SentenceTransformer:
-    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
+def _candidate_snapshot_dir(model_id: str, cache_root: Path) -> Path | None:
+    repo_dir = cache_root / "hub" / f"models--{model_id.replace('/', '--')}"
+    snapshots_dir = repo_dir / "snapshots"
+    if not snapshots_dir.exists():
+        return None
+    snapshots = sorted(path for path in snapshots_dir.iterdir() if path.is_dir())
+    if not snapshots:
+        return None
+    return snapshots[-1]
+
+
+def _resolve_sbert_model_path(model_ref: str) -> str:
+    candidate = Path(model_ref).expanduser()
+    if candidate.exists():
+        return str(candidate.resolve())
+
+    hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")).expanduser()
+    offline = os.environ.get("HF_HUB_OFFLINE", "0") == "1"
+
+    snapshot_dir = _candidate_snapshot_dir(model_ref, hf_home)
+    if snapshot_dir is not None:
+        return str(snapshot_dir.resolve())
+
+    try:
+        resolved = snapshot_download(
+            repo_id=model_ref,
+            cache_dir=str(hf_home),
+            local_files_only=offline,
+        )
+        return str(Path(resolved).resolve())
+    except Exception as exc:
+        raise FileNotFoundError(
+            f"Could not resolve SBERT model '{model_ref}' from local path or HF cache under {hf_home}. "
+            "If you are on the offline GPU box, make sure the model is cached in HF_HOME/hub "
+            "or pass --sbert_model_path explicitly."
+        ) from exc
+
+
+def _load_sbert(device: str, model_ref: str) -> SentenceTransformer:
+    resolved_model = _resolve_sbert_model_path(model_ref)
+    print(f"[cos_sim] Resolved SBERT model: {resolved_model}")
+    return SentenceTransformer(resolved_model, device=device)
 
 
 def _compute_metric(metric_block: Dict[str, object], model: SentenceTransformer) -> Dict[str, object]:
@@ -23425,11 +23983,12 @@ def _compute_metric(metric_block: Dict[str, object], model: SentenceTransformer)
 
 def process_file(path: Path, model: SentenceTransformer) -> bool:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return False
 
     out: Dict[str, object] = {}
+    summary_out: Dict[str, float] = {}
     updated = False
     for key, block in data.items():
         if not isinstance(block, dict) or "value_by_index" not in block:
@@ -23437,38 +23996,81 @@ def process_file(path: Path, model: SentenceTransformer) -> bool:
         if not any("ground_truth" in item for item in block["value_by_index"].values() if isinstance(item, dict)):
             continue
         out_key = key.replace("_rouge", "_cos_sim", 1)
-        out[out_key] = _compute_metric(block, model)
+        metric_out = _compute_metric(block, model)
+        out[out_key] = metric_out
+        summary_out[out_key] = float(metric_out["agg_value"])
         updated = True
 
     if not updated:
         return False
 
     out_path = path.parent / "COS_SIM_EVAL.json"
-    out_path.write_text(json.dumps(out, indent=2))
+    out_path.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    summary_path = path.parent / "COS_SIM_SUMMARY.json"
+    summary_path.write_text(json.dumps(summary_out, indent=2), encoding="utf-8")
     return True
+
+
+def resolve_search_roots(path_to_saves: Path) -> list[Path]:
+    root = path_to_saves.expanduser().resolve()
+    candidates: list[Path] = []
+
+    if root.name == "unlearn":
+        candidates.append(root)
+        eval_root = root.parent / "evals"
+        if eval_root.exists():
+            candidates.append(eval_root)
+    elif root.name == "saves":
+        unlearn_root = root / "unlearn"
+        eval_root = root / "evals"
+        if unlearn_root.exists():
+            candidates.append(unlearn_root)
+        if eval_root.exists():
+            candidates.append(eval_root)
+        if not candidates:
+            candidates.append(root)
+    else:
+        if (root / "unlearn").exists():
+            candidates.append(root / "unlearn")
+        if (root / "evals").exists():
+            candidates.append(root / "evals")
+        if not candidates:
+            candidates.append(root)
+
+    return candidates
+
+
+def collect_eval_paths(path_to_saves: Path) -> list[Path]:
+    paths: set[Path] = set()
+    for search_root in resolve_search_roots(path_to_saves):
+        if not search_root.exists():
+            continue
+        for path in search_root.rglob("DUET_EVAL.json"):
+            if "pretrained" in path.parts:
+                continue
+            paths.add(path.resolve())
+    return sorted(paths)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-dir", type=Path, default=Path.cwd())
-    parser.add_argument(
-        "--benchmarks",
-        type=str,
-        default="duet,popqa,rwku",
-        help="Comma-separated list: duet,popqa,rwku",
-    )
+    parser.add_argument("--path_to_saves", type=Path, required=True, help="Path to saves/ or saves/unlearn")
     parser.add_argument("--gpu", type=str, default=None, help="Set CUDA_VISIBLE_DEVICES")
+    parser.add_argument(
+        "--sbert_model_path",
+        type=str,
+        default=os.environ.get("SBERT_MODEL_PATH", "sentence-transformers/all-MiniLM-L6-v2"),
+        help="Local path or HF repo id for the SBERT model used for cosine similarity.",
+    )
     args = parser.parse_args()
 
-    base_dir = args.base_dir
-    benches = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
     total = 0
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
         print(f"[cos_sim] CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
     device = "cuda" if args.gpu not in (None, "", "-1") else "cpu"
     print(f"[cos_sim] Loading SBERT on {device}")
-    model = _load_sbert(device=device)
+    model = _load_sbert(device=device, model_ref=args.sbert_model_path)
 
     try:
         from tqdm import tqdm  # type: ignore
@@ -23480,28 +24082,19 @@ def main() -> None:
             print(f"[cos_sim] {desc}")
             return items
 
-    for bench in benches:
-        # Process unlearn runs
-        unlearn_root = base_dir / "saves" / "unlearn" / bench
-        paths = []
-        if unlearn_root.exists():
-            paths.extend([p for p in unlearn_root.glob("**/evals/DUET_EVAL.json") if "pretrained" not in p.parts])
-        
-        # Process base (orig) runs
-        base_eval_root = base_dir / "saves" / "evals" / f"{bench}_base"
-        if base_eval_root.exists():
-            paths.extend(list(base_eval_root.glob("**/DUET_EVAL.json")))
+    paths = collect_eval_paths(args.path_to_saves)
+    if not paths:
+        print(f"[cos_sim] No DUET_EVAL.json files found under {args.path_to_saves}")
+        print("[cos_sim] Expected to find files like evals/DUET_EVAL.json and checkpoint_evals/checkpoint-*/DUET_EVAL.json")
+        return
 
-        if not paths:
-            print(f"[cos_sim] No eval files found for benchmark: {bench}")
-            continue
-
-        for path in _iter(paths, f"{bench}: cos_sim"):
-            print(f"[cos_sim] Processing {path}")
-            if process_file(path, model):
-                total += 1
-            else:
-                print(f"[cos_sim] Skipped (no value_by_index or ground_truth): {path}")
+    print(f"[cos_sim] Found {len(paths)} DUET_EVAL.json files under {args.path_to_saves}")
+    for path in _iter(paths, "cos_sim"):
+        print(f"[cos_sim] Processing {path}")
+        if process_file(path, model):
+            total += 1
+        else:
+            print(f"[cos_sim] Skipped (no value_by_index or ground_truth): {path}")
     print(f"Written COS_SIM_EVAL.json for {total} eval folders.")
 
 
@@ -27037,12 +27630,16 @@ LORA_BASE_MODEL_SUBFOLDER_VALUE=${MODEL_SUBFOLDER}
 if has_loadable_base_model "${RUN_DIR}/base_model"; then
   RESOLVED_BASE_MODEL_PATH="${RUN_DIR}/base_model"
   echo "[duet][ckpt-eval] Detected LoKU FILA base model at ${RESOLVED_BASE_MODEL_PATH}"
-  # LoKU saves a standalone flattened model in run_dir/base_model, so the
-  # DUET SFT subfolder no longer applies during checkpoint eval.
-  LORA_MODEL_SUBFOLDER_VALUE=""
-  LORA_BASE_MODEL_SUBFOLDER_VALUE=""
 elif [[ -d "${RUN_DIR}/base_model" ]]; then
   echo "[duet][ckpt-eval] Found ${RUN_DIR}/base_model but it is missing config/weights; falling back to ${RESOLVED_BASE_MODEL_PATH}"
+fi
+
+if has_loadable_base_model "${RESOLVED_BASE_MODEL_PATH}"; then
+  # LoKU can provide either run_dir/base_model or an external FILA_BASE_PATH.
+  # In both cases this is already a standalone flattened model, so the DUET SFT
+  # subfolder must not be applied when loading it for checkpoint eval.
+  LORA_MODEL_SUBFOLDER_VALUE=""
+  LORA_BASE_MODEL_SUBFOLDER_VALUE=""
 fi
 
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
@@ -28467,6 +29064,87 @@ require_file() {
   fi
 }
 
+resolve_existing_dir() {
+  local raw_path="$1"
+  local candidate=""
+
+  if [[ -d "${raw_path}" ]]; then
+    realpath "${raw_path}"
+    return 0
+  fi
+
+  candidate="${REPO_ROOT}/${raw_path}"
+  if [[ -d "${candidate}" ]]; then
+    realpath "${candidate}"
+    return 0
+  fi
+
+  candidate="/data/home/vkropoti/unlearning/${raw_path}"
+  if [[ -d "${candidate}" ]]; then
+    realpath "${candidate}"
+    return 0
+  fi
+
+  printf '%s\n' "${raw_path}"
+}
+
+cleanup_loku_wrapper_tmp_dirs() {
+  if [[ "${LOKU_WRAPPER_DELETE_TMP_AFTER_RUN:-1}" != "1" ]]; then
+    return
+  fi
+
+  if [[ -n "${LOKU_TMP_IMPORTANCE_DIR:-}" && -d "${LOKU_TMP_IMPORTANCE_DIR}" ]]; then
+    rm -rf "${LOKU_TMP_IMPORTANCE_DIR}"
+    echo "[dualcf][campaign] Removed LoKU tmp importance dir ${LOKU_TMP_IMPORTANCE_DIR}"
+  fi
+
+  if [[ -n "${LOKU_TMP_FILA_DIR:-}" && -d "${LOKU_TMP_FILA_DIR}" ]]; then
+    rm -rf "${LOKU_TMP_FILA_DIR}"
+    echo "[dualcf][campaign] Removed LoKU tmp FILA dir ${LOKU_TMP_FILA_DIR}"
+  fi
+}
+
+configure_method_variant_env() {
+  local method_variant="$1"
+
+  unset IMPORTANCE_PATH
+  unset FILA_BASE_PATH
+  unset DELETE_IMPORTANCE_AFTER_RUN
+  unset DELETE_FILA_BASE_AFTER_EVAL
+  unset DELETE_RUN_BASE_MODEL_AFTER_EVAL
+
+  if [[ "${method_variant}" != "loku" ]]; then
+    return
+  fi
+
+  export LOKU_TMP_IMPORTANCE_DIR="${LOKU_IMPORTANCE_TMP_DIR}/${LOKU_RUN_TAG}"
+  export LOKU_TMP_FILA_DIR="${LOKU_FILA_BASE_TMP_DIR}/${LOKU_RUN_TAG}"
+  mkdir -p "${LOKU_TMP_IMPORTANCE_DIR}" "${LOKU_TMP_FILA_DIR}"
+
+  if [[ -n "${LOKU_IMPORTANCE_PATH:-}" ]]; then
+    export IMPORTANCE_PATH="${LOKU_IMPORTANCE_PATH}"
+  else
+    export IMPORTANCE_PATH="${LOKU_TMP_IMPORTANCE_DIR}/{base_model}_{forget_label}_{retain_split}_{targets_tag}.pt"
+  fi
+
+  if [[ -n "${LOKU_FILA_BASE_PATH:-}" ]]; then
+    export FILA_BASE_PATH="${LOKU_FILA_BASE_PATH}"
+  else
+    export FILA_BASE_PATH="${LOKU_TMP_FILA_DIR}/{task_name}"
+  fi
+
+  # Keep LoKU's internal EXIT trap from deleting debug artifacts on failure.
+  # The wrapper removes these temp dirs only after the LoKU method returns
+  # successfully, which is after train + endpoint eval + checkpoint eval +
+  # Utility-1K eval.
+  export DELETE_IMPORTANCE_AFTER_RUN="${LOKU_DELETE_IMPORTANCE_AFTER_RUN:-0}"
+  export DELETE_FILA_BASE_AFTER_EVAL="${LOKU_DELETE_FILA_BASE_AFTER_EVAL:-0}"
+  export DELETE_RUN_BASE_MODEL_AFTER_EVAL="${LOKU_DELETE_RUN_BASE_MODEL_AFTER_EVAL:-1}"
+
+  echo "[dualcf][campaign] LoKU cleanup: IMPORTANCE_PATH=${IMPORTANCE_PATH}"
+  echo "[dualcf][campaign] LoKU cleanup: FILA_BASE_PATH=${FILA_BASE_PATH}"
+}
+
 run_duet_block() {
   local forget_label="$1"
   local artifact_path="$2"
@@ -28485,7 +29163,11 @@ run_duet_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=duet_${forget_label}"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
+    configure_method_variant_env "${METHOD_VARIANT}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
+    if [[ "${METHOD_VARIANT}" == "loku" ]]; then
+      cleanup_loku_wrapper_tmp_dirs
+    fi
   done
 }
 
@@ -28494,6 +29176,11 @@ run_rwku_block() {
 
   require_file "${artifact_path}"
 
+  unset FORGET_LABEL
+  unset FORGET_SPLIT_OVERRIDE
+  unset RETAIN_SPLIT_OVERRIDE
+  unset FORGET_LABEL_OVERRIDE
+  unset MERGE_POPULARITY_FORGET
   unset USE_SFT_BASE
   unset LOCAL_SFT_BASE
   unset SFT_SUBFOLDER
@@ -28508,7 +29195,11 @@ run_rwku_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=rwku"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
+    configure_method_variant_env "${METHOD_VARIANT}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
+    if [[ "${METHOD_VARIANT}" == "loku" ]]; then
+      cleanup_loku_wrapper_tmp_dirs
+    fi
   done
 }
 
@@ -28525,8 +29216,12 @@ export ARTIFACT_ROOT="${ARTIFACT_ROOT:-/data/home/vkropoti/unlearning/artifacts/
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/data/home/vkropoti/unlearning/saves/unlearn}"
 export UTILITY_ROOT="${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utility_1k_v1}"
 export BASELINE_CACHE_ROOT="${BASELINE_CACHE_ROOT:-/data/home/vkropoti/unlearning/saves/eval/utility_baselines}"
+export LOKU_IMPORTANCE_TMP_DIR="${LOKU_IMPORTANCE_TMP_DIR:-/data/home/vkropoti/unlearning/importance_tmp}"
+export LOKU_FILA_BASE_TMP_DIR="${LOKU_FILA_BASE_TMP_DIR:-/data/home/vkropoti/unlearning/fila_base_tmp}"
+export LOKU_RUN_TAG="${LOKU_RUN_TAG:-gpu${GPU_ID}_lr${LR}_phase_${PHASE}}"
 mkdir -p "${HF_HOME}" "${HF_DATASETS_CACHE}" "${TRITON_CACHE_DIR}" \
-  "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}" "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
+  "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}" "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}" \
+  "${LOKU_IMPORTANCE_TMP_DIR}" "${LOKU_FILA_BASE_TMP_DIR}"
 
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
@@ -28543,8 +29238,9 @@ export BASE_MODEL_PATH="${BASE_MODEL_PATH:-${HF_BASE_MODEL_PATH}}"
 export BASE_MODEL_EVAL_CONFIG="${BASE_MODEL_EVAL_CONFIG:-Llama-3.1-8B-Instruct}"
 export LORA_MODEL_EVAL_CONFIG="${LORA_MODEL_EVAL_CONFIG:-Llama-3.1-8B-Instruct-lora}"
 
-export DUET_LOCAL_SFT_BASE="${DUET_LOCAL_SFT_BASE:-SwetieePawsss/DUET_ft_models}"
+export DUET_LOCAL_SFT_BASE="${DUET_LOCAL_SFT_BASE:-/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models}"
 export DUET_SFT_SUBFOLDER="${DUET_SFT_SUBFOLDER:-llama-3.1-8b-instruct-tripunlamb-ft}"
+export DUET_LOCAL_SFT_BASE="$(resolve_existing_dir "${DUET_LOCAL_SFT_BASE}")"
 
 export LORA_RS="${LORA_RS:-32}"
 export LORA_ALPHAS="${LORA_ALPHAS:-64}"
@@ -28568,12 +29264,12 @@ export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL="${DELETE_CHECKPOINT_ADA
 export RUN_CHECKPOINT_EVAL="${RUN_CHECKPOINT_EVAL:-1}"
 export RUN_UTILITY_EVAL="${RUN_UTILITY_EVAL:-1}"
 export EVAL_RUN_BASE_MODEL="${EVAL_RUN_BASE_MODEL:-0}"
-export UTILITY_EVAL_BATCH_SIZE="${UTILITY_EVAL_BATCH_SIZE:-64}"
+export UTILITY_EVAL_BATCH_SIZE="${UTILITY_EVAL_BATCH_SIZE:-512}"
 export UTILITY_APPLY_CHAT_TEMPLATE="${UTILITY_APPLY_CHAT_TEMPLATE:-true}"
 
-export PER_DEVICE_TRAIN_BS="${PER_DEVICE_TRAIN_BS:-32}"
-export GRAD_ACCUM="${GRAD_ACCUM:-1}"
-export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-192}"
+export PER_DEVICE_TRAIN_BS="${PER_DEVICE_TRAIN_BS:-16}"
+export GRAD_ACCUM="${GRAD_ACCUM:-2}"
+export EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-512}"
 export IMPORTANCE_BATCH_SIZE="${IMPORTANCE_BATCH_SIZE:-32}"
 export DIFFICULTY_BATCH_SIZE="${DIFFICULTY_BATCH_SIZE:-32}"
 export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
@@ -28585,6 +29281,7 @@ METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo ga npo npo_sam loku}"
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
 echo "[dualcf][campaign] method_variants=${METHOD_VARIANTS}"
+echo "[dualcf][campaign] duet_local_sft_base=${DUET_LOCAL_SFT_BASE}"
 
 duet_rare_artifact="${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl"
 duet_popular_artifact="${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl"
@@ -42290,6 +42987,582 @@ def main():
         "Done. "
         f"attribution_score_range=({min(attribution_scores):.6f}, {max(attribution_scores):.6f})"
     )
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="src/tools/build_structured_saves.py">
+#!/usr/bin/env python3
+"""Build comparison tables from packaged unlearning save summaries."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import shutil
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from checkpoint_summary_utils import collect_eval_summaries
+
+
+META_COLUMNS = {"label", "checkpoint", "step", "epoch"}
+PREFERRED_METRIC_ORDER = [
+    "forget_qa_rouge",
+    "holdout_qa_rouge",
+    "forget_qa_cos_sim",
+    "holdout_qa_cos_sim",
+    "utility_avg",
+    "utility_delta_vs_base",
+    "mmlu_pro_400_acc",
+    "truthfulqa_bin_200_acc",
+    "arc_200_acc",
+    "winogrande_200_acc",
+]
+METHOD_ORDER = [
+    "full",
+    "d_only",
+    "a_only",
+    "dpo",
+    "ga",
+    "npo",
+    "npo_sam",
+    "loku",
+]
+METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
+LR_RE = re.compile(r"_lr([^_]+)")
+METHOD_RE = re.compile(r"_(dual_cf|dpo_cf|ga|loku|npo_sam|npo)_lora_.*?_lr[^_]+(.*)$")
+DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+
+
+class NoAliasSafeDumper(yaml.SafeDumper):
+    def ignore_aliases(self, data: Any) -> bool:
+        return True
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input-root",
+        type=Path,
+        required=True,
+        help="Path to saves-clean/unlearn, saves-clean, or a parent directory that contains unlearn/.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        required=True,
+        help="Directory where structured-saves outputs will be written.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Remove the existing output directory before generating files.",
+    )
+    return parser.parse_args()
+
+
+def resolve_unlearn_root(input_root: Path) -> Path:
+    root = input_root.expanduser().resolve()
+    if root.name == "unlearn" and root.is_dir():
+        return root
+    candidate = root / "unlearn"
+    if candidate.is_dir():
+        return candidate.resolve()
+    raise FileNotFoundError(f"Could not resolve an unlearn root under {root}")
+
+
+def prepare_output_root(output_root: Path, overwrite: bool) -> Path:
+    root = output_root.expanduser().resolve()
+    if root.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"Output directory already exists: {root}. Pass --overwrite to rebuild it."
+            )
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def load_yaml(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def parse_float(value: str | None) -> float | None:
+    if value in {None, "", "None"}:
+        return None
+    return float(value)
+
+
+def parse_int(value: str | None) -> int | None:
+    if value in {None, "", "None"}:
+        return None
+    return int(float(value))
+
+
+def load_tsv_rows(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            parsed: dict[str, Any] = {}
+            for key, raw_value in row.items():
+                if key == "step":
+                    parsed[key] = parse_int(raw_value)
+                elif key == "epoch":
+                    parsed[key] = parse_float(raw_value)
+                elif key in {"label", "checkpoint"}:
+                    parsed[key] = raw_value
+                else:
+                    parsed[key] = parse_float(raw_value)
+            rows.append(parsed)
+    return rows
+
+
+def format_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return format(value, ".12g")
+    if isinstance(value, (int, bool)):
+        return str(value)
+    return str(value)
+
+
+def write_tsv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: format_value(row.get(key)) for key in fieldnames})
+
+
+def extract_lr(run_name: str) -> str:
+    match = LR_RE.search(run_name)
+    if match is None:
+        raise ValueError(f"Could not parse lr from run name: {run_name}")
+    return match.group(1)
+
+
+def extract_method_key(run_name: str) -> str:
+    match = METHOD_RE.search(run_name)
+    if match is None:
+        raise ValueError(f"Could not parse method from run name: {run_name}")
+    method_name = match.group(1)
+    suffix = match.group(2)
+    flags = [token for token in suffix.split("_") if DUAL_FLAG_RE.fullmatch(token)]
+
+    if method_name == "dual_cf":
+        flag_set = set(flags)
+        if flag_set == {"dOn", "aOn"}:
+            return "full"
+        if flag_set == {"dOn", "aOff"}:
+            return "d_only"
+        if flag_set == {"dOff", "aOn"}:
+            return "a_only"
+        return "_".join([method_name] + flags) if flags else method_name
+
+    if method_name == "dpo_cf":
+        return "dpo"
+    if method_name == "npo_sam":
+        return "npo_sam"
+    return method_name
+
+
+def infer_split_bucket(run_name: str, config: dict[str, Any]) -> str:
+    if run_name.startswith("rwku_"):
+        return "rwku"
+
+    forget_split = str(config.get("forget_split", ""))
+    if forget_split == "city_forget_rare_5":
+        return "duet_rare"
+    if forget_split == "city_forget_popular_5":
+        return "duet_popular"
+    if forget_split == "city_forget_5":
+        return "duet_merged"
+
+    if "_city_forget_rare_5_" in run_name:
+        return "duet_rare"
+    if "_city_forget_popular_5_" in run_name:
+        return "duet_popular"
+    if "_city_forget_5_" in run_name:
+        return "duet_merged"
+    raise ValueError(f"Could not infer split bucket for run: {run_name}")
+
+
+def extract_override_map(overrides: list[Any]) -> dict[str, str]:
+    output: dict[str, str] = {}
+    for item in overrides:
+        if not isinstance(item, str) or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        output[key.lstrip("+")] = value
+    return output
+
+
+def resolve_simple_reference(value: Any, context: dict[str, Any]) -> Any:
+    if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+        key = value[2:-1]
+        return context.get(key, value)
+    return value
+
+
+def dedupe_representative_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    base_row = next((row for row in rows if row.get("label") == "base_model_orig"), None)
+    trajectory_rows = [
+        row
+        for row in rows
+        if row.get("label") not in {"base_model_orig", "base_model_run"}
+    ]
+
+    representatives: list[dict[str, Any]] = []
+    for row in trajectory_rows:
+        if representatives:
+            previous = representatives[-1]
+            if previous.get("step") == row.get("step") and previous.get("epoch") == row.get("epoch"):
+                if row.get("label") == "final":
+                    representatives[-1] = row
+                continue
+        representatives.append(row)
+
+    if base_row is not None:
+        return [base_row] + representatives
+    return representatives
+
+
+def build_epoch_slots(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    slot_rows: list[dict[str, Any]] = []
+    slot_names: list[str] = []
+
+    representatives = dedupe_representative_rows(rows)
+    slot_index = 0
+    for row in representatives:
+        label = row.get("label")
+        if label == "base_model_orig":
+            slot_name = "0.0"
+        else:
+            slot_index += 1
+            slot_name = format(slot_index * 0.5, ".1f")
+        slot_names.append(slot_name)
+        slot_rows.append(
+            {
+                "slot": slot_name,
+                "label": label,
+                "checkpoint": row.get("checkpoint"),
+                "step": row.get("step"),
+                "actual_epoch": row.get("epoch"),
+            }
+        )
+    return slot_rows, slot_names
+
+
+def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
+    metric_keys = {
+        key
+        for row in rows
+        for key, value in row.items()
+        if key not in META_COLUMNS and value is not None
+    }
+    ordered = [metric for metric in PREFERRED_METRIC_ORDER if metric in metric_keys]
+    ordered.extend(sorted(metric_keys - set(ordered)))
+    return ordered
+
+
+def method_sort_key(method_name: str) -> tuple[int, str]:
+    return (METHOD_ORDER_INDEX.get(method_name, len(METHOD_ORDER)), method_name)
+
+
+def lr_sort_key(lr: str) -> float:
+    return float(lr)
+
+
+def collect_cosine_rows(run_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in collect_eval_summaries(
+        run_dir=run_dir,
+        eval_root_name="checkpoint_evals",
+        summary_name="COS_SIM_SUMMARY.json",
+    ):
+        metrics = load_json(Path(row["summary_path"]))
+        merged_row = {
+            "label": row["label"],
+            "checkpoint": row["label"],
+            "step": row["step"],
+            "epoch": row["epoch"],
+        }
+        for key, value in metrics.items():
+            merged_row[key] = float(value) if value is not None else None
+        rows.append(merged_row)
+    return rows
+
+
+def build_params_payload(
+    run_dir: Path,
+    split_bucket: str,
+    lr: str,
+    method_key: str,
+    config: dict[str, Any],
+    overrides: list[Any],
+) -> dict[str, Any]:
+    override_map = extract_override_map(overrides)
+    trainer = config.get("trainer", {}) if isinstance(config.get("trainer"), dict) else {}
+    model = config.get("model", {}) if isinstance(config.get("model"), dict) else {}
+    dataset_summary = {
+        "forget_split": resolve_simple_reference(config.get("forget_split"), config),
+        "retain_split": resolve_simple_reference(config.get("retain_split"), config),
+        "holdout_split": resolve_simple_reference(config.get("holdout_split"), config),
+        "question_key": resolve_simple_reference(config.get("question_key"), config),
+    }
+
+    return {
+        "run_name": run_dir.name,
+        "source_run_dir": str(run_dir),
+        "split_bucket": split_bucket,
+        "lr": lr,
+        "method": method_key,
+        "experiment": override_map.get("experiment"),
+        "trainer_name": override_map.get("trainer"),
+        "model_name": override_map.get("model"),
+        "trainer_handler": trainer.get("handler"),
+        "dataset": dataset_summary,
+        "model_summary": {
+            "use_lora": model.get("use_lora"),
+            "pretrained_model_name_or_path": (
+                model.get("model_args", {}).get("pretrained_model_name_or_path")
+                if isinstance(model.get("model_args"), dict)
+                else None
+            ),
+            "model_subfolder": (
+                model.get("model_args", {}).get("subfolder")
+                if isinstance(model.get("model_args"), dict)
+                else None
+            ),
+            "tokenizer_pretrained_model_name_or_path": (
+                model.get("tokenizer_args", {}).get("pretrained_model_name_or_path")
+                if isinstance(model.get("tokenizer_args"), dict)
+                else None
+            ),
+            "tokenizer_subfolder": (
+                model.get("tokenizer_args", {}).get("subfolder")
+                if isinstance(model.get("tokenizer_args"), dict)
+                else None
+            ),
+            "lora_config": model.get("lora_config"),
+        },
+        "trainer_args": trainer.get("args"),
+        "method_args": trainer.get("method_args"),
+        "overrides": overrides,
+        "hydra_config": config,
+        "source_files": {
+            "config_yaml": str(run_dir / ".hydra" / "config.yaml"),
+            "overrides_yaml": str(run_dir / ".hydra" / "overrides.yaml"),
+            "merged_summary_tsv": str(run_dir / "checkpoint_evals_merged" / "summary.tsv"),
+            "trajectory_metrics_json": str(run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json"),
+        },
+    }
+
+
+def flatten_trajectory(prefix: str, value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        flattened: dict[str, Any] = {}
+        for key, subvalue in value.items():
+            next_prefix = f"{prefix}.{key}" if prefix else str(key)
+            flattened.update(flatten_trajectory(next_prefix, subvalue))
+        return flattened
+    return {prefix: value}
+
+
+def sanitize_metric_name(metric_name: str) -> str:
+    return metric_name.replace("/", "_").replace(".", "_")
+
+
+def main() -> None:
+    args = parse_args()
+    unlearn_root = resolve_unlearn_root(args.input_root)
+    output_root = prepare_output_root(args.output_root, overwrite=args.overwrite)
+
+    run_dirs = sorted(path for path in unlearn_root.iterdir() if path.is_dir())
+
+    params_dir = output_root / "params"
+    params_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped_runs: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    params_index_rows: list[dict[str, Any]] = []
+
+    for run_dir in run_dirs:
+        config_path = run_dir / ".hydra" / "config.yaml"
+        overrides_path = run_dir / ".hydra" / "overrides.yaml"
+        merged_summary_path = run_dir / "checkpoint_evals_merged" / "summary.tsv"
+        trajectory_path = run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json"
+
+        if not config_path.exists() or not overrides_path.exists() or not merged_summary_path.exists():
+            continue
+
+        config = load_yaml(config_path)
+        overrides = load_yaml(overrides_path) or []
+        merged_rows = load_tsv_rows(merged_summary_path)
+        cosine_rows = collect_cosine_rows(run_dir)
+        trajectory_metrics = load_json(trajectory_path) if trajectory_path.exists() else {}
+
+        split_bucket = infer_split_bucket(run_dir.name, config)
+        lr = extract_lr(run_dir.name)
+        method_key = extract_method_key(run_dir.name)
+        params_payload = build_params_payload(run_dir, split_bucket, lr, method_key, config, overrides)
+
+        params_file = params_dir / f"{run_dir.name}.yaml"
+        with params_file.open("w", encoding="utf-8") as handle:
+            yaml.dump(
+                params_payload,
+                handle,
+                Dumper=NoAliasSafeDumper,
+                allow_unicode=False,
+                sort_keys=False,
+                default_flow_style=False,
+            )
+
+        params_index_rows.append(
+            {
+                "split_bucket": split_bucket,
+                "lr": lr,
+                "method": method_key,
+                "run_name": run_dir.name,
+                "trainer_handler": params_payload.get("trainer_handler"),
+                "experiment": params_payload.get("experiment"),
+                "forget_split": params_payload["dataset"]["forget_split"],
+                "retain_split": params_payload["dataset"]["retain_split"],
+                "holdout_split": params_payload["dataset"]["holdout_split"],
+                "params_file": str(params_file.relative_to(output_root)),
+                "source_run_dir": str(run_dir),
+            }
+        )
+
+        grouped_runs[(split_bucket, lr)].append(
+            {
+                "run_name": run_dir.name,
+                "run_dir": run_dir,
+                "split_bucket": split_bucket,
+                "lr": lr,
+                "method": method_key,
+                "params_file": params_file,
+                "merged_rows": merged_rows,
+                "cosine_rows": cosine_rows,
+                "trajectory_metrics": trajectory_metrics,
+            }
+        )
+
+    params_index_rows.sort(
+        key=lambda row: (row["split_bucket"], lr_sort_key(row["lr"]), method_sort_key(row["method"]))
+    )
+    write_tsv(
+        params_dir / "params_index.tsv",
+        [
+            "split_bucket",
+            "lr",
+            "method",
+            "run_name",
+            "trainer_handler",
+            "experiment",
+            "forget_split",
+            "retain_split",
+            "holdout_split",
+            "params_file",
+            "source_run_dir",
+        ],
+        params_index_rows,
+    )
+
+    for (split_bucket, lr), runs in sorted(
+        grouped_runs.items(),
+        key=lambda item: (item[0][0], lr_sort_key(item[0][1])),
+    ):
+        split_lr_root = output_root / split_bucket / lr
+        split_lr_root.mkdir(parents=True, exist_ok=True)
+
+        runs.sort(key=lambda row: method_sort_key(row["method"]))
+        epoch_rows, epoch_slots = build_epoch_slots(runs[0]["merged_rows"])
+
+        write_tsv(
+            split_lr_root / "epoch_reference.tsv",
+            ["slot", "label", "checkpoint", "step", "actual_epoch"],
+            epoch_rows,
+        )
+
+        write_tsv(
+            split_lr_root / "runs_index.tsv",
+            ["method", "run_name", "params_file", "source_run_dir"],
+            [
+                {
+                    "method": run["method"],
+                    "run_name": run["run_name"],
+                    "params_file": str(run["params_file"].relative_to(output_root)),
+                    "source_run_dir": str(run["run_dir"]),
+                }
+                for run in runs
+            ],
+        )
+
+        merged_metric_names = collect_metric_keys(runs[0]["merged_rows"])
+        cosine_metric_names = collect_metric_keys(runs[0]["cosine_rows"])
+        all_metric_names = merged_metric_names + [
+            metric for metric in cosine_metric_names if metric not in merged_metric_names
+        ]
+
+        for metric_name in all_metric_names:
+            fieldnames = ["method"] + epoch_slots
+            table_rows: list[dict[str, Any]] = []
+            for run in runs:
+                source_rows = run["cosine_rows"] if metric_name.endswith("_cos_sim") else run["merged_rows"]
+                slot_rows, _ = build_epoch_slots(source_rows)
+                metric_values_by_slot = {
+                    slot_row["slot"]: source_row.get(metric_name)
+                    for slot_row, source_row in zip(slot_rows, dedupe_representative_rows(source_rows))
+                }
+                row = {"method": run["method"]}
+                for slot in epoch_slots:
+                    row[slot] = metric_values_by_slot.get(slot)
+                table_rows.append(row)
+
+            write_tsv(
+                split_lr_root / f"{sanitize_metric_name(metric_name)}.tsv",
+                fieldnames,
+                table_rows,
+            )
+
+        trajectory_rows: list[dict[str, Any]] = []
+        trajectory_fieldnames = ["method"]
+        flattened_payloads: list[tuple[str, dict[str, Any]]] = []
+        for run in runs:
+            flattened = flatten_trajectory("", run["trajectory_metrics"])
+            flattened_payloads.append((run["method"], flattened))
+            for key in flattened:
+                if key not in trajectory_fieldnames:
+                    trajectory_fieldnames.append(key)
+
+        for method_name, flattened in flattened_payloads:
+            row = {"method": method_name}
+            row.update(flattened)
+            trajectory_rows.append(row)
+
+        write_tsv(
+            split_lr_root / "trajectory_summary.tsv",
+            trajectory_fieldnames,
+            trajectory_rows,
+        )
 
 
 if __name__ == "__main__":

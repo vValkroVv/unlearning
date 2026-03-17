@@ -1,0 +1,67 @@
+model:
+  model_args:
+    device_map: auto
+    pretrained_model_name_or_path: /data/home/vkropoti/unlearning/saves/unlearn/duet_Llama-3.1-8B-Instruct_city_forget_popular_5_npo_lora_r32_lalpha64_ldrop0p0_lr1e-4_beta0p5_alpha1p0_gamma1p0/checkpoint-16
+    attn_implementation: eager
+    torch_dtype: bfloat16
+    base_model_name_or_path: /data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models
+    low_cpu_mem_usage: true
+    subfolder: llama-3.1-8b-instruct-tripunlamb-ft
+  use_lora: true
+  tokenizer_args:
+    pretrained_model_name_or_path: /data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models
+    subfolder: llama-3.1-8b-instruct-tripunlamb-ft
+  lora_config:
+    target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    lora_alpha: 128
+    lora_dropout: 0.05
+    r: 64
+    bias: none
+    task_type: CAUSAL_LM
+  template_args:
+    apply_chat_template: true
+    system_prompt: You are terse and fact-only QA assistant. Reply to the question
+      clearly with few-words correct answer.
+    system_prompt_with_special_tokens: '<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+
+      You are terse and fact-only QA assistant. Reply to the question clearly with
+      few-words correct answer.<|eot_id|>'
+    user_start_tag: '<|start_header_id|>user<|end_header_id|>
+
+
+      '
+    user_end_tag: <|eot_id|>
+    asst_start_tag: '<|start_header_id|>assistant<|end_header_id|>
+
+
+      '
+    asst_end_tag: <|eot_id|>
+    date_string: 10 Apr 2025
+mode: eval
+task_name: duet_Llama-3.1-8B-Instruct_city_forget_popular_5_npo_lora_r32_lalpha64_ldrop0p0_lr1e-4_beta0p5_alpha1p0_gamma1p0_checkpoint-16_utility1k
+seed: 0
+eval:
+  lm_eval:
+    handler: LMEvalEvaluator
+    output_dir: ${paths.output_dir}
+    overwrite: true
+    include_subtask_metrics: true
+    include_path: /data/home/vkropoti/unlearning/saves/unlearn/duet_Llama-3.1-8B-Instruct_city_forget_popular_5_npo_lora_r32_lalpha64_ldrop0p0_lr1e-4_beta0p5_alpha1p0_gamma1p0/checkpoint_evals_utility/_task_defs
+    tasks:
+    - utility_1k
+    simple_evaluate_args:
+      batch_size: 512
+      num_fewshot: 0
+      apply_chat_template: true
+      system_instruction: null
+paths:
+  root_dir: .
+  data_dir: ${paths.root_dir}/data/
+  datasets: ${paths.root_dir}/configs/data/datasets
+  output_dir: /data/home/vkropoti/unlearning/saves/unlearn/duet_Llama-3.1-8B-Instruct_city_forget_popular_5_npo_lora_r32_lalpha64_ldrop0p0_lr1e-4_beta0p5_alpha1p0_gamma1p0/checkpoint_evals_utility/checkpoint-16
+  work_dir: ${hydra:runtime.cwd}

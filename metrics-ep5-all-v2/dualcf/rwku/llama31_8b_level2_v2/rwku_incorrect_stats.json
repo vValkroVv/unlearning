@@ -1,0 +1,162 @@
+{
+  "out_dir": "/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2",
+  "stage_stats": {
+    "raw": {
+      "path": "/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2/step1_counterfactuals_raw.jsonl",
+      "rows": 2879,
+      "unique_indices": 2879,
+      "duplicate_indices": 0,
+      "valid_rows": 2415,
+      "invalid_rows": 464,
+      "invalid_ratio": 0.16116707189996526,
+      "invalid_reason_counts": {
+        "empty": 416,
+        "exact_match": 5,
+        "gold_substring": 43
+      },
+      "source_counts": {
+        "vllm_primary": 2792,
+        "vllm_retry": 87
+      },
+      "rows_with_retry": 551,
+      "alternate_words": {
+        "min": 0.0,
+        "mean": 2.1229593608891975,
+        "median": 2.0,
+        "p95": 5.0,
+        "max": 10.0
+      },
+      "alternate_chars": {
+        "min": 0.0,
+        "mean": 12.85863146926016,
+        "median": 13.0,
+        "p95": 29.0,
+        "max": 64.0
+      },
+      "overlap_ratio": {
+        "min": 0.0,
+        "mean": 0.12981399365560534,
+        "median": 0.0,
+        "p95": 0.6666666666666666,
+        "max": 1.0
+      }
+    },
+    "clean": {
+      "path": "/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2/step1b_counterfactuals_clean.jsonl",
+      "rows": 2829,
+      "unique_indices": 2829,
+      "duplicate_indices": 0,
+      "valid_rows": 2829,
+      "invalid_rows": 0,
+      "invalid_ratio": 0.0,
+      "invalid_reason_counts": {},
+      "source_counts": {
+        "numeric_rule_fallback": 414,
+        "vllm_primary": 2328,
+        "vllm_retry": 87
+      },
+      "rows_with_retry": 501,
+      "alternate_words": {
+        "min": 1.0,
+        "mean": 2.2569812654648285,
+        "median": 2.0,
+        "p95": 5.0,
+        "max": 10.0
+      },
+      "alternate_chars": {
+        "min": 1.0,
+        "mean": 13.347826086956522,
+        "median": 12.0,
+        "p95": 29.0,
+        "max": 64.0
+      },
+      "overlap_ratio": {
+        "min": 0.0,
+        "mean": 0.12236991436355169,
+        "median": 0.0,
+        "p95": 0.6666666666666666,
+        "max": 0.8333333333333334
+      }
+    },
+    "final": {
+      "path": "/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2/dualcf_forget_level2_v2.jsonl",
+      "rows": 2829,
+      "unique_indices": 2829,
+      "duplicate_indices": 0,
+      "valid_rows": 2829,
+      "invalid_rows": 0,
+      "invalid_ratio": 0.0,
+      "invalid_reason_counts": {},
+      "source_counts": {
+        "numeric_rule_fallback": 414,
+        "vllm_primary": 2328,
+        "vllm_retry": 87
+      },
+      "rows_with_retry": 501,
+      "alternate_words": {
+        "min": 1.0,
+        "mean": 2.2569812654648285,
+        "median": 2.0,
+        "p95": 5.0,
+        "max": 10.0
+      },
+      "alternate_chars": {
+        "min": 1.0,
+        "mean": 13.347826086956522,
+        "median": 12.0,
+        "p95": 29.0,
+        "max": 64.0
+      },
+      "overlap_ratio": {
+        "min": 0.0,
+        "mean": 0.12236991436355169,
+        "median": 0.0,
+        "p95": 0.6666666666666666,
+        "max": 0.8333333333333334
+      }
+    }
+  },
+  "comparisons": {
+    "raw_to_clean": {
+      "from_stage": "raw",
+      "to_stage": "clean",
+      "dropped_rows": 50,
+      "dropped_invalid_rows": 50,
+      "repaired_rows": 414,
+      "alternate_changed_rows": 414,
+      "dropped_index_sample": [
+        "1070",
+        "1087",
+        "1113",
+        "1142",
+        "1144",
+        "1145",
+        "1258",
+        "127",
+        "1470",
+        "1627",
+        "1634",
+        "1637",
+        "1657",
+        "1679",
+        "1691",
+        "1694",
+        "172",
+        "175",
+        "1833",
+        "1839"
+      ]
+    },
+    "clean_to_final": {
+      "from_stage": "clean",
+      "to_stage": "final",
+      "dropped_rows": 0,
+      "dropped_invalid_rows": 0,
+      "repaired_rows": 0,
+      "alternate_changed_rows": 0,
+      "dropped_index_sample": []
+    }
+  },
+  "incorrect_count": 464,
+  "incorrect_output": "/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2/rwku_incorrect_samples.jsonl"
+}

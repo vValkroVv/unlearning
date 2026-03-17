@@ -1,0 +1,11 @@
+{
+    "utility_1k/": " ",
+    "utility_arc_200/acc": 0.85,
+    "utility_arc_200/acc_stderr": 0.02531212194953126,
+    "utility_mmlu_pro_400/acc": 0.3875,
+    "utility_mmlu_pro_400/acc_stderr": 0.024389475009275425,
+    "utility_truthfulqa_bin_200/acc": 0.69,
+    "utility_truthfulqa_bin_200/acc_stderr": 0.032785276754349606,
+    "utility_winogrande_200/acc": 0.705,
+    "utility_winogrande_200/acc_stderr": 0.032328014206142654
+}

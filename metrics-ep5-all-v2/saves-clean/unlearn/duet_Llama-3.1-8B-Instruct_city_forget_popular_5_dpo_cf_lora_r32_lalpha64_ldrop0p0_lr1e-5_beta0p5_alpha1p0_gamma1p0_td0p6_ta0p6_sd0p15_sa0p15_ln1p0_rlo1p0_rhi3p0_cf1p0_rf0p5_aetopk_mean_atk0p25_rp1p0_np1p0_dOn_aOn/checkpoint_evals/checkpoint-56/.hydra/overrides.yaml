@@ -1,0 +1,16 @@
+- experiment=eval/duet/default.yaml
+- model=Llama-3.1-8B-Instruct-lora
+- forget_split=city_forget_popular_5
+- holdout_split=city_fast_retain_500
+- task_name=duet_Llama-3.1-8B-Instruct_city_forget_popular_5_dpo_cf_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p5_alpha1p0_gamma1p0_td0p6_ta0p6_sd0p15_sa0p15_ln1p0_rlo1p0_rhi3p0_cf1p0_rf0p5_aetopk_mean_atk0p25_rp1p0_np1p0_dOn_aOn_checkpoint-56
+- model.model_args.pretrained_model_name_or_path=/data/home/vkropoti/unlearning/saves/unlearn/duet_Llama-3.1-8B-Instruct_city_forget_popular_5_dpo_cf_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p5_alpha1p0_gamma1p0_td0p6_ta0p6_sd0p15_sa0p15_ln1p0_rlo1p0_rhi3p0_cf1p0_rf0p5_aetopk_mean_atk0p25_rp1p0_np1p0_dOn_aOn/checkpoint-56
+- ++model.model_args.base_model_name_or_path=/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models
+- model.tokenizer_args.pretrained_model_name_or_path=/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models
+- model.model_args.device_map=auto
+- ++model.model_args.low_cpu_mem_usage=true
+- eval.duet.batch_size=512
+- eval.duet.overwrite=true
+- paths.output_dir=/data/home/vkropoti/unlearning/saves/unlearn/duet_Llama-3.1-8B-Instruct_city_forget_popular_5_dpo_cf_lora_r32_lalpha64_ldrop0p0_lr1e-5_beta0p5_alpha1p0_gamma1p0_td0p6_ta0p6_sd0p15_sa0p15_ln1p0_rlo1p0_rhi3p0_cf1p0_rf0p5_aetopk_mean_atk0p25_rp1p0_np1p0_dOn_aOn/checkpoint_evals/checkpoint-56
+- retain_logs_path=null
+- ++model.model_args.subfolder=llama-3.1-8b-instruct-tripunlamb-ft
+- ++model.tokenizer_args.subfolder=llama-3.1-8b-instruct-tripunlamb-ft

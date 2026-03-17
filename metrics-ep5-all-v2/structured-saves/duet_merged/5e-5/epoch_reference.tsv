@@ -1,0 +1,12 @@
+slot	label	checkpoint	step	actual_epoch
+0.0	base_model_orig	base_model_orig	0	0
+0.5	checkpoint-16	checkpoint-16	16	0.524590163934
+1.0	checkpoint-32	checkpoint-32	32	1.04918032787
+1.5	checkpoint-48	checkpoint-48	48	1.5737704918
+2.0	checkpoint-64	checkpoint-64	64	2.09836065574
+2.5	checkpoint-80	checkpoint-80	80	2.62295081967
+3.0	checkpoint-96	checkpoint-96	96	3.14754098361
+3.5	checkpoint-112	checkpoint-112	112	3.67213114754
+4.0	checkpoint-128	checkpoint-128	128	4.19672131148
+4.5	checkpoint-144	checkpoint-144	144	4.72131147541
+5.0	final	final	150	4.91803278689

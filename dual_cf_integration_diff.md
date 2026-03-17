@@ -242,6 +242,19 @@ Operational update:
   - `EVAL_BATCH_SIZE=192`
   in both the shared campaign wrapper and the direct DUET/RWKU launcher
   defaults, so direct reruns and campaign runs stay aligned.
+- `scripts/dualcf/run_campaign_one_lr.sh` now resolves the DUET SFT base to a
+  real local directory before launch and defaults it to the offline filesystem
+  path `/data/home/vkropoti/unlearning/SwetieePawsss/DUET_ft_models`, instead
+  of relying on a repo-style HF identifier that can fail in offline mode.
+- after wrapper-only OOMs in the 4-run campaign path,
+  `scripts/dualcf/run_campaign_one_lr.sh` was pulled back to the previously
+  stable train defaults:
+  - `PER_DEVICE_TRAIN_BS=16`
+  - `GRAD_ACCUM=2`
+  while leaving the direct DUET/RWKU launcher defaults unchanged
+- the offline dataset symlink step
+  `ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss /home/vkropoti/diploma/open-unlearning/SwetieePawsss`
+  was moved into the common setup block of `prod-run-dual-gpu.md`
 - the GPU validation playbook now lives in `plan-test-dual.md`, including:
   - explicit split-matched artifact preparation for DUET rare / popular / merged
   - stronger artifact validation and provenance requirements
@@ -1636,3 +1649,150 @@ Updates:
 - the runbook also now records the clean-only rebuild path for DUET:
   - `SKIP_CF_GENERATION=1`
   - `REBUILD_CLEAN_CF=1`
+
+## Campaign save checker added (2026-03-16)
+
+Changed files:
+
+- `check_saves.py`
+
+Updates:
+
+- added a root-level helper to verify the expected `run_campaign_one_lr.sh`
+  save layout under `saves/` or `saves/unlearn`
+- the checker matches the current 4-LR, 4-phase, 8-method campaign shape and
+  validates:
+  - endpoint eval files under `evals/`
+  - checkpoint eval summaries under `checkpoint_evals/`
+  - Utility-1K summaries under `checkpoint_evals_utility/`
+  - merged checkpoint + utility summaries under `checkpoint_evals_merged/`
+- the script exits nonzero if any expected run is missing, duplicated, or has
+  missing summary artifacts
+- updated the default LR set in the checker to match the intended 4-GPU launch
+  block:
+  - `5e-6`
+  - `1e-5`
+  - `5e-5`
+  - `1e-4`
+- fixed LR matching so GA-style runs that end exactly at `_lr...` are detected
+  correctly instead of being reported as both `missing` and `extra`
+- fixed an RWKU LoKU naming leak in `run_campaign_one_lr.sh` where DUET's last
+  `FORGET_LABEL` value could carry into RWKU and produce legacy run names like
+  `rwku_..._merged_loku_...` instead of `rwku_..._forget_level2_loku_...`
+- updated the checker to treat those already-written legacy RWKU LoKU run names
+  as valid matches for the RWKU LoKU slot
+- updated the checker to require cosine-sim artifacts alongside every DUET eval
+  directory:
+  - `COS_SIM_EVAL.json`
+  - `COS_SIM_SUMMARY.json`
+  for both top-level `evals/` and each `checkpoint_evals/checkpoint-*`
+
+## Cos-sim eval sweep now works on remote saves trees and checkpoint evals (2026-03-16)
+
+Changed files:
+
+- `scripts/calc_cos_sim.py`
+
+Updates:
+
+- the cos-sim helper now takes `--path_to_saves` instead of assuming the repo
+  root contains `saves/`
+- it resolves both `.../saves` and `.../saves/unlearn`
+- it now scans all `DUET_EVAL.json` files under the provided saves tree,
+  including:
+  - endpoint evals under `evals/`
+  - half-epoch / checkpoint evals under `checkpoint_evals/checkpoint-*`
+- each discovered eval directory now receives:
+  - `COS_SIM_EVAL.json` with per-example cosine similarities
+  - `COS_SIM_SUMMARY.json` with aggregated `*_cos_sim` values alongside the
+    existing `DUET_SUMMARY.json`
+- the helper now resolves the SBERT encoder from the local Hugging Face cache
+  under `HF_HOME` first and also accepts `--sbert_model_path` for explicit
+  offline model selection on GPU boxes
+
+## Saves packager now supports explicit paths and summary-only mode (2026-03-16)
+
+Changed files:
+
+- `package_saves.sh`
+
+Updates:
+
+- the saves packager no longer assumes repo-root `./saves`
+- it now takes:
+  - `--path_to_saves`
+  - `--out_path`
+  - `--save_eval 0|1`
+- `--save_eval 0` keeps only summary artifacts:
+  - `*_SUMMARY.json`
+  - `summary.tsv`
+  - `trajectory_metrics.json`
+  - `.hydra/*.yaml`
+- `--save_eval 1` additionally keeps `*_EVAL.json`
+- the script writes both:
+  - the cleaned output directory at `--out_path`
+  - the zip archive at `--out_path.zip`
+
+## Structured post-run metric tables for packaged saves (2026-03-16)
+
+Changed files:
+
+- `src/tools/build_structured_saves.py`
+
+Updates:
+
+- added a post-processing helper that reads packaged summary-only saves under
+  `saves-clean/unlearn` and writes comparison tables under a separate
+  `structured-saves/` tree
+- the helper creates `structured-saves/params/` with one YAML file per run that
+  bundles:
+  - split bucket
+  - LR
+  - method key
+  - override list
+  - selected config summary fields
+  - the full Hydra config payload
+- it also writes `structured-saves/params/params_index.tsv` so the full run list
+  can be filtered by:
+  - split bucket
+  - LR
+  - method
+  - trainer
+  - experiment
+- per split bucket (`duet_rare`, `duet_popular`, `duet_merged`, `rwku`) and per
+  LR (`5e-6`, `1e-5`, `5e-5`, `1e-4`), the helper now writes:
+  - `runs_index.tsv`
+  - `epoch_reference.tsv`
+  - one TSV per metric with methods on rows and half-epoch slots on columns
+  - `trajectory_summary.tsv` for merged trajectory-level utility stats
+- method row labels are normalized to the campaign's `METHOD_VARIANT` slots:
+  - `full`
+  - `d_only`
+  - `a_only`
+  - `dpo`
+  - `ga`
+  - `npo`
+  - `npo_sam`
+  - `loku`
+- metric tables currently include:
+  - forget / holdout ROUGE
+  - forget / holdout cosine similarity
+  - `utility_avg`
+  - `utility_delta_vs_base`
+  - Utility-1K split metrics:
+    - `mmlu_pro_400_acc`
+    - `truthfulqa_bin_200_acc`
+    - `arc_200_acc`
+    - `winogrande_200_acc`
+- DUET runs keep the nominal half-epoch table columns (`0.5`, `1.0`, ...,
+  `5.0`) while `epoch_reference.tsv` records the exact saved epoch values such
+  as `0.516129...` and `4.838709...`
+
+Example command:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-ep5-all/saves-clean/unlearn \
+  --output-root metrics-ep5-all/structured-saves \
+  --overwrite
+```
