@@ -60,6 +60,10 @@ def main():
     optional_numeric_keys = (
         "difficulty_score_raw",
         "attribution_score_raw",
+        "attribution_score_raw_global",
+        "attribution_score_raw_syntax",
+        "attribution_score_raw_semantic",
+        "attribution_score_raw_utility",
     )
     invalid_reason_counts = {}
 
@@ -129,6 +133,40 @@ def main():
                 for key in ("difficulty_components", "attribution_components"):
                     if key in row and not isinstance(row[key], dict):
                         bad_rows.append((line_no, f"{key} is not a dict"))
+                for key in ("candidate_answers", "external_alternates", "belief_candidates"):
+                    if key in row and not isinstance(row[key], list):
+                        bad_rows.append((line_no, f"{key} is not a list"))
+                for key in ("cf_pick_meta", "belief_pick_meta"):
+                    if key in row and not isinstance(row[key], dict):
+                        bad_rows.append((line_no, f"{key} is not a dict"))
+                for key in ("cf_is_valid",):
+                    if key in row and not isinstance(row[key], bool):
+                        bad_rows.append((line_no, f"{key} is not a bool"))
+                for key in ("belief_alternate",):
+                    if key in row and not isinstance(row[key], str):
+                        bad_rows.append((line_no, f"{key} is not a string"))
+
+            if "external_alternates" in row and "external_alternate_scores" in row:
+                alternates = row.get("external_alternates")
+                scores = row.get("external_alternate_scores")
+                if isinstance(alternates, list) and scores is not None and not isinstance(scores, list):
+                    bad_rows.append((line_no, "external_alternate_scores is not a list"))
+                if isinstance(alternates, list) and isinstance(scores, list):
+                    if len(scores) not in (0, len(alternates)):
+                        bad_rows.append(
+                            (
+                                line_no,
+                                "external_alternate_scores length does not match external_alternates",
+                            )
+                        )
+            if "belief_candidates" in row and "belief_alternate" in row:
+                beliefs = row.get("belief_candidates")
+                belief_alt = row.get("belief_alternate")
+                if isinstance(beliefs, list) and isinstance(belief_alt, str):
+                    if belief_alt and belief_alt not in beliefs:
+                        bad_rows.append(
+                            (line_no, "belief_alternate is not present in belief_candidates")
+                        )
 
     print(f"artifact={path}")
     print(f"rows={len(seen_indices)}")

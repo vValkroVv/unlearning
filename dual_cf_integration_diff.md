@@ -3,6 +3,82 @@
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
 
+## DualCF v3 Core Extension (2026-03-17)
+
+DualCF v3 extends the existing v2 integration without changing the trainer-side
+forget artifact contract. The required fields remain:
+
+```json
+{
+  "index": 17,
+  "question": "...",
+  "answer": "...",
+  "alternate": "...",
+  "difficulty_score": 0.73,
+  "attribution_score": 0.18
+}
+```
+
+What changed for v3:
+
+- artifact-side counterfactual selection now supports multi-candidate sidecars,
+  ranked validation, answer-type-aware fallback repair, and provenance metadata
+- proxy retain maps now carry `retain_indices` plus
+  `syntax_retain_indices`, `semantic_retain_indices`, and
+  `utility_anchor_indices`
+- attribution scoring now mixes global, syntax, semantic, and optional utility
+  anchors while preserving `attribution_score_raw` and `attribution_score`
+- forget artifacts can now optionally carry `belief_candidates` and
+  `belief_alternate` built offline from the base/SFT model
+- `DualCF` now supports belief-aware NPO suppression and localized negative
+  masking through `belief_neg_weight`, `belief_beta`, and `local_neg_mode`
+- `DualCFSAM` is available as a separate risk-gated SAM trainer for follow-up
+  optimizer ablations
+
+New or newly relevant files for the v3 extension:
+
+- `src/tools/build_forget_belief_bank.py`
+- `src/tools/make_counterfactuals.py`
+- `src/tools/clean_counterfactuals.py`
+- `src/tools/build_proxy_retain_map.py`
+- `src/tools/score_attribution.py`
+- `src/tools/build_utility_1k_panel.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `src/data/qa.py`
+- `src/trainer/utils.py`
+- `src/trainer/unlearn/dual_cf.py`
+- `src/trainer/unlearn/dual_cf_sam.py`
+- `configs/trainer/DualCFv3.yaml`
+- `configs/trainer/DualCFSAM.yaml`
+- `configs/experiment/unlearn/duet/dual_cf_v3_lora.yaml`
+- `configs/experiment/unlearn/rwku/dual_cf_v3_lora.yaml`
+- `scripts/duet/prepare_dual_cf_duet_v3.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v3.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+
+New launcher/runtime knobs:
+
+- `BELIEF_NEG_WEIGHTS`
+- `LOCAL_NEG_MODES`
+- `SAM_RHOS`
+- `SAM_RISK_THRESHOLDS`
+- `SAM_START_EPOCHS`
+
+Validation status for this v3 patch set:
+
+- completed:
+  - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/clean_counterfactuals.py src/tools/build_proxy_retain_map.py src/tools/score_attribution.py src/tools/build_utility_1k_panel.py src/tools/validate_dual_cf_artifact.py src/tools/build_forget_belief_bank.py src/data/qa.py src/trainer/utils.py src/trainer/unlearn/dual_cf.py src/trainer/unlearn/dual_cf_sam.py src/trainer/__init__.py`
+  - `python -m unittest discover -s tests -p 'test_dualcf_v3_helpers.py'`
+  - `bash -n scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh`
+  - CLI `--help` smoke for the updated artifact tools and the new belief-bank tool
+  - a CPU-only helper smoke covering ranked CF picking, answer-type fallback,
+    QA-anchor flattening, and belief validity filtering
+- not completed here:
+  - GPU-backed attribution scoring
+  - end-to-end belief generation against a real checkpoint
+  - 1-step or short functional train/eval runs
+
 ## What was added
 
 DualCF is integrated as a new routed unlearning method that keeps the repo's

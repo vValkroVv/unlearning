@@ -39,6 +39,15 @@ DATASET_OWNER_ALIASES = (
 CANONICAL_DATASET_OWNER = "SwetieePawsss"
 DATASET_SUFFIXES = {"DUET", "exp_r"}
 DEFAULT_LOCAL_DATA_ROOT = Path("/data/home/vkropoti/unlearning")
+_YEAR_RE = re.compile(r"^(?:c\.\s*)?(1[0-9]{3}|20[0-9]{2}|2100)s?$")
+_DATE_LIKE_RE = re.compile(r"^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$")
+_ORDINAL_RE = re.compile(r"^\d+(?:st|nd|rd|th)$", re.I)
+_DECIMAL_RE = re.compile(r"^[+-]?\d+\.\d+$")
+_INT_RE = re.compile(r"^[+-]?\d+$")
+_MONTH_NAME_RE = re.compile(
+    r"^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?$",
+    re.I,
+)
 
 
 def _normalize_optional_arg(value: Optional[str]):
@@ -306,6 +315,95 @@ def clean_counterfactual_text(text: Any, keep_first_line: bool = True) -> str:
     return cleaned
 
 
+def detect_answer_type(text: Any) -> str:
+    cleaned = clean_counterfactual_text(text)
+    normalized = normalize_text(cleaned)
+    if not normalized:
+        return "empty"
+    if _DATE_LIKE_RE.match(normalized) or _MONTH_NAME_RE.match(cleaned):
+        return "date"
+    if _YEAR_RE.match(normalized):
+        return "year"
+    if _ORDINAL_RE.match(normalized):
+        return "ordinal"
+    if _DECIMAL_RE.match(normalized):
+        return "decimal"
+    if _INT_RE.match(normalized):
+        return "int"
+    if len(cleaned.split()) <= 4:
+        return "short_span"
+    return "free"
+
+
+def answer_type_match(gold: Any, candidate: Any) -> float:
+    return 1.0 if detect_answer_type(gold) == detect_answer_type(candidate) else 0.0
+
+
+def short_answer_score(text: Any, target_words: int = 4) -> float:
+    words = clean_counterfactual_text(text).split()
+    if len(words) <= target_words:
+        return 1.0
+    return max(0.0, 1.0 - 0.15 * float(len(words) - target_words))
+
+
+def bank_membership_score(candidate: Any, candidate_answers: Sequence[str] | None) -> float:
+    if not candidate_answers:
+        return 0.0
+    candidate_norm = normalize_text(candidate)
+    bank_norm = {
+        normalize_text(value) for value in candidate_answers if str(value).strip()
+    }
+    return 1.0 if candidate_norm in bank_norm else 0.0
+
+
+def score_counterfactual_candidate(
+    *,
+    question: str,
+    answer: str,
+    candidate: str,
+    candidate_answers: Sequence[str] | None = None,
+    external_score: float | None = None,
+    reject_gold_substring: bool = True,
+    max_overlap_ratio: Optional[float] = 0.85,
+    require_short_answer: bool = True,
+    max_alt_length_chars: Optional[int] = 128,
+) -> tuple[float, Dict[str, Any]]:
+    del question  # Relation-level checks remain an offline heuristic for now.
+    reason = counterfactual_invalid_reason(
+        candidate,
+        answer,
+        reject_gold_substring=reject_gold_substring,
+        max_overlap_ratio=max_overlap_ratio,
+        require_short_answer=require_short_answer,
+        max_alt_length_chars=max_alt_length_chars,
+    )
+    if reason is not None:
+        return float("-inf"), {"invalid_reason": reason}
+
+    cleaned = clean_counterfactual_text(candidate)
+    overlap = lexical_overlap_ratio(cleaned, answer)
+    type_match = answer_type_match(answer, cleaned)
+    shortness = short_answer_score(cleaned)
+    bank_score = bank_membership_score(cleaned, candidate_answers)
+    judge = float(external_score) if external_score is not None else 0.0
+    score = (
+        0.35 * type_match
+        + 0.25 * shortness
+        + 0.25 * bank_score
+        + 0.15 * judge
+        - 0.30 * overlap
+    )
+    return score, {
+        "invalid_reason": None,
+        "type_match": type_match,
+        "shortness": shortness,
+        "bank_score": bank_score,
+        "external_score": judge,
+        "answer_overlap": overlap,
+        "answer_type": detect_answer_type(cleaned),
+    }
+
+
 def counterfactual_invalid_reason(
     alternate: Any,
     answer: Any,
@@ -342,6 +440,157 @@ def counterfactual_invalid_reason(
     return None
 
 
+def pick_best_counterfactual_v3(
+    *,
+    question: str,
+    answer: str,
+    candidates: Sequence[Any],
+    candidate_answers: Sequence[str] | None = None,
+    external_scores: Sequence[float] | None = None,
+    reject_gold_substring: bool = True,
+    max_overlap_ratio: Optional[float] = 0.85,
+    require_short_answer: bool = True,
+    max_alt_length_chars: Optional[int] = 128,
+) -> tuple[str, Dict[str, Any]]:
+    best_text = ""
+    best_meta: Dict[str, Any] = {"invalid_reason": "no_candidates"}
+    best_score = float("-inf")
+
+    for idx, candidate in enumerate(candidates):
+        if not str(candidate).strip():
+            continue
+        external_score = None
+        if external_scores is not None and idx < len(external_scores):
+            try:
+                external_score = float(external_scores[idx])
+            except Exception:
+                external_score = None
+
+        score, meta = score_counterfactual_candidate(
+            question=question,
+            answer=answer,
+            candidate=str(candidate),
+            candidate_answers=candidate_answers,
+            external_score=external_score,
+            reject_gold_substring=reject_gold_substring,
+            max_overlap_ratio=max_overlap_ratio,
+            require_short_answer=require_short_answer,
+            max_alt_length_chars=max_alt_length_chars,
+        )
+        if score > best_score:
+            best_score = score
+            best_text = clean_counterfactual_text(candidate)
+            best_meta = {"rank_score": float(score), **meta}
+
+    return best_text, best_meta
+
+
+def _perturb_int_text(text: str, seed: int) -> Optional[str]:
+    match = re.fullmatch(r"([+-]?)(\d+)", text)
+    if not match:
+        return None
+    sign, digits = match.groups()
+    value = int(f"{sign}{digits}")
+    step = 1 if seed % 2 == 0 else -1
+    if value == 0:
+        step = 1
+    if value > 0 and value + step <= 0:
+        step = 1
+    return str(value + step)
+
+
+def _perturb_decimal_text(text: str, seed: int) -> Optional[str]:
+    match = re.fullmatch(r"([+-]?\d+)(\.\d+)", text)
+    if not match:
+        return None
+    value = float(text)
+    step = 0.1 if seed % 2 == 0 else -0.1
+    decimals = len(match.group(2)) - 1
+    return f"{value + step:.{decimals}f}"
+
+
+def _perturb_decade_text(text: str, seed: int) -> Optional[str]:
+    match = re.fullmatch(r"(\d{3,4})s", text)
+    if not match:
+        return None
+    value = int(match.group(1))
+    step = 10 if seed % 2 == 0 else -10
+    return f"{max(0, value + step)}s"
+
+
+def _ordinal_suffix(value: int) -> str:
+    if 10 <= (value % 100) <= 20:
+        return "th"
+    return {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+
+
+def _perturb_ordinal_text(text: str, seed: int) -> Optional[str]:
+    match = re.fullmatch(r"(\d+)(st|nd|rd|th)", text.lower())
+    if not match:
+        return None
+    value = int(match.group(1))
+    step = 1 if seed % 2 == 0 else -1
+    if value <= 1 and step < 0:
+        step = 1
+    candidate = value + step
+    return f"{candidate}{_ordinal_suffix(candidate)}"
+
+
+def _perturb_month_name_date(text: str, seed: int) -> Optional[str]:
+    if not _MONTH_NAME_RE.match(text):
+        return None
+    parts = clean_counterfactual_text(text).split()
+    if len(parts) < 2:
+        return None
+    day_digits = re.sub(r"[^0-9]", "", parts[1])
+    if not day_digits:
+        return None
+    day_value = int(day_digits)
+    step = 1 if seed % 2 == 0 else -1
+    if day_value <= 1 and step < 0:
+        step = 1
+    next_day = max(1, min(28, day_value + step))
+    parts[1] = str(next_day) + ("," if "," in parts[1] else "")
+    return " ".join(parts)
+
+
+def build_answer_type_fallback_candidates(answer: Any, seed: int) -> list[str]:
+    text = clean_counterfactual_text(answer)
+    if not text:
+        return []
+
+    percent_suffix = "%" if text.endswith("%") else ""
+    normalized = text.replace(",", "").replace("%", "").strip()
+    candidates: list[str] = []
+    for builder in (
+        _perturb_ordinal_text,
+        _perturb_decade_text,
+        _perturb_decimal_text,
+        _perturb_int_text,
+        _perturb_month_name_date,
+    ):
+        candidate = builder(normalized if builder is not _perturb_month_name_date else text, seed)
+        if candidate is not None:
+            candidates.append(f"{candidate}{percent_suffix}" if builder is not _perturb_month_name_date else candidate)
+
+    answer_type = detect_answer_type(text)
+    if answer_type in {"year", "date"} and _INT_RE.match(normalized):
+        year = int(normalized)
+        candidates.append(str(year + (1 if seed % 2 == 0 else -1)))
+    if answer_type == "short_span":
+        normalized_answer = normalize_text(text)
+        if normalized_answer and not normalized_answer.startswith("not "):
+            candidates.append(f"not {text}")
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        cleaned = clean_counterfactual_text(candidate)
+        if cleaned and cleaned not in seen:
+            deduped.append(cleaned)
+            seen.add(cleaned)
+    return deduped
+
+
 def pick_valid_candidate(
     answer: Any,
     candidates: Sequence[Any],
@@ -351,19 +600,24 @@ def pick_valid_candidate(
     require_short_answer: bool = True,
     max_alt_length_chars: Optional[int] = 128,
 ) -> Optional[str]:
-    for candidate in candidates:
-        cleaned = clean_counterfactual_text(candidate)
-        reason = counterfactual_invalid_reason(
-            cleaned,
-            answer,
-            reject_gold_substring=reject_gold_substring,
-            max_overlap_ratio=max_overlap_ratio,
-            require_short_answer=require_short_answer,
-            max_alt_length_chars=max_alt_length_chars,
-        )
-        if reason is None:
-            return cleaned
-    return None
+    best_text, best_meta = pick_best_counterfactual_v3(
+        question="",
+        answer=str(answer),
+        candidates=candidates,
+        candidate_answers=[str(candidate) for candidate in candidates if str(candidate).strip()],
+        reject_gold_substring=reject_gold_substring,
+        max_overlap_ratio=max_overlap_ratio,
+        require_short_answer=require_short_answer,
+        max_alt_length_chars=max_alt_length_chars,
+    )
+    if best_meta.get("invalid_reason") is not None:
+        return None
+    return best_text
+
+
+def answer_type_aware_fallback(answer: Any, seed: int = 0) -> Optional[str]:
+    candidates = build_answer_type_fallback_candidates(answer, seed=seed)
+    return candidates[0] if candidates else None
 
 
 def read_jsonl(path: str) -> list[Dict[str, Any]]:

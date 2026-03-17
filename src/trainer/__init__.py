@@ -23,6 +23,7 @@ from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
 from trainer.unlearn.loku import LoKU
 from trainer.unlearn.dual_cf import DualCF
+from trainer.unlearn.dual_cf_sam import DualCFSAM
 from trainer.callbacks import JsonlTraceCallback
 
 
@@ -118,3 +119,4 @@ _register_trainer(FALCON)
 _register_trainer(R2D)
 _register_trainer(LoKU)
 _register_trainer(DualCF)
+_register_trainer(DualCFSAM)

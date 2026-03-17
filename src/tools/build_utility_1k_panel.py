@@ -41,6 +41,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to aliases/targets that should be excluded from the panel.",
     )
+    parser.add_argument(
+        "--qa-anchor-output-path",
+        default=None,
+        help=(
+            "Optional JSONL path for a flat QA anchor export used by DualCF attribution. "
+            "Each row contains index, source, category, question, and answer."
+        ),
+    )
+    parser.add_argument("--qa-anchor-mmlu-pro", type=int, default=-1)
+    parser.add_argument("--qa-anchor-truthfulqa-bin", type=int, default=-1)
+    parser.add_argument("--qa-anchor-arc", type=int, default=-1)
+    parser.add_argument("--qa-anchor-winogrande", type=int, default=-1)
 
     add_source_args(
         parser,
@@ -374,6 +386,46 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def build_qa_anchor_rows(
+    *,
+    rng: random.Random,
+    mmlu_rows: list[dict[str, Any]],
+    truthfulqa_rows: list[dict[str, Any]],
+    arc_rows: list[dict[str, Any]],
+    winogrande_rows: list[dict[str, Any]],
+    mmlu_limit: int,
+    truthfulqa_limit: int,
+    arc_limit: int,
+    winogrande_limit: int,
+) -> list[dict[str, Any]]:
+    anchor_rows: list[dict[str, Any]] = []
+    row_groups = (
+        (mmlu_rows, mmlu_limit),
+        (truthfulqa_rows, truthfulqa_limit),
+        (arc_rows, arc_limit),
+        (winogrande_rows, winogrande_limit),
+    )
+    for group, limit in row_groups:
+        if limit >= 0:
+            group = sample_rows(group, min(limit, len(group)), rng)
+        for row in group:
+            gold_idx = int(row["gold_idx"])
+            choices = list(row["choices"])
+            if gold_idx < 0 or gold_idx >= len(choices):
+                raise ValueError(f"Invalid gold_idx={gold_idx} for row id={row.get('id')}")
+            anchor_rows.append(
+                {
+                    "index": len(anchor_rows),
+                    "id": row.get("id"),
+                    "source": row.get("source"),
+                    "category": row.get("category"),
+                    "question": row["question"],
+                    "answer": choices[gold_idx],
+                }
+            )
+    return anchor_rows
+
+
 def main() -> None:
     args = parse_args()
     output_dir = Path(args.output_dir)
@@ -524,6 +576,52 @@ def main() -> None:
         json.dumps(stats, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+    if args.qa_anchor_output_path not in {None, "", "null", "None"}:
+        qa_anchor_path = Path(args.qa_anchor_output_path)
+        qa_anchor_path.parent.mkdir(parents=True, exist_ok=True)
+        qa_anchor_rows = build_qa_anchor_rows(
+            rng=rng,
+            mmlu_rows=sampled_mmlu_rows,
+            truthfulqa_rows=sampled_truthfulqa_rows,
+            arc_rows=sampled_arc_rows,
+            winogrande_rows=sampled_winogrande_rows,
+            mmlu_limit=int(args.qa_anchor_mmlu_pro),
+            truthfulqa_limit=int(args.qa_anchor_truthfulqa_bin),
+            arc_limit=int(args.qa_anchor_arc),
+            winogrande_limit=int(args.qa_anchor_winogrande),
+        )
+        write_jsonl(qa_anchor_path, qa_anchor_rows)
+        stats["qa_anchor_output_path"] = str(qa_anchor_path.resolve())
+        stats["qa_anchor_rows"] = len(qa_anchor_rows)
+        stats["qa_anchor_counts"] = {
+            "mmlu_pro": min(len(sampled_mmlu_rows), int(args.qa_anchor_mmlu_pro))
+            if int(args.qa_anchor_mmlu_pro) >= 0
+            else len(sampled_mmlu_rows),
+            "truthfulqa_binary": min(
+                len(sampled_truthfulqa_rows),
+                int(args.qa_anchor_truthfulqa_bin),
+            )
+            if int(args.qa_anchor_truthfulqa_bin) >= 0
+            else len(sampled_truthfulqa_rows),
+            "arc_challenge": min(len(sampled_arc_rows), int(args.qa_anchor_arc))
+            if int(args.qa_anchor_arc) >= 0
+            else len(sampled_arc_rows),
+            "winogrande": min(len(sampled_winogrande_rows), int(args.qa_anchor_winogrande))
+            if int(args.qa_anchor_winogrande) >= 0
+            else len(sampled_winogrande_rows),
+        }
+        manifest["qa_anchor_output_path"] = str(qa_anchor_path.resolve())
+        manifest["qa_anchor_rows"] = len(qa_anchor_rows)
+        manifest["qa_anchor_counts"] = stats["qa_anchor_counts"]
+        (output_dir / "panel_manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        (output_dir / "panel_stats.json").write_text(
+            json.dumps(stats, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

@@ -12,10 +12,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from tools.dual_cf_artifact_utils import (
+    build_answer_type_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
     load_keyed_jsonish,
-    pick_valid_candidate,
+    pick_best_counterfactual_v3,
     read_jsonl,
     save_jsonl,
 )
@@ -42,6 +43,18 @@ def parse_args():
     return parser.parse_args()
 
 
+def _filter_scored_candidates(candidates, scores):
+    filtered_candidates = []
+    filtered_scores = []
+    for index, candidate in enumerate(candidates):
+        candidate_text = clean_counterfactual_text(candidate)
+        if not candidate_text:
+            continue
+        filtered_candidates.append(candidate_text)
+        filtered_scores.append(scores[index] if index < len(scores) else None)
+    return filtered_candidates, filtered_scores
+
+
 def main():
     args = parse_args()
     rows = read_jsonl(args.input_path)
@@ -57,6 +70,7 @@ def main():
     still_invalid = 0
     for row in rows:
         updated = dict(row)
+        seed = int(updated.get(args.mapping_key, 0) or 0)
         raw_alternate = str(updated.get(args.alternate_key, ""))
         updated["cf_raw_alternate"] = raw_alternate
         updated[args.alternate_key] = clean_counterfactual_text(raw_alternate)
@@ -71,21 +85,44 @@ def main():
         )
         if invalid_reason and args.repair_invalid:
             bank_row = candidate_bank.get(str(updated.get(args.mapping_key, "")), {})
-            row_candidates = updated.get("candidate_answers") or bank_row.get(
-                "candidate_answers", []
+            row_candidates = list(
+                updated.get("candidate_answers") or bank_row.get("candidate_answers", [])
             )
-            repaired_alternate = pick_valid_candidate(
+            external_candidates = list(updated.get("external_alternates", []))
+            external_scores = updated.get("external_alternate_scores")
+            candidate_pool = [updated[args.alternate_key]]
+            score_pool = [None]
+            candidate_pool.extend(external_candidates)
+            if isinstance(external_scores, list):
+                score_pool.extend(list(external_scores))
+            else:
+                score_pool.extend([None] * len(external_candidates))
+            candidate_pool.extend(row_candidates)
+            score_pool.extend([None] * len(row_candidates))
+            fallback_candidates = build_answer_type_fallback_candidates(
                 updated.get(args.answer_key, ""),
-                row_candidates,
+                seed=seed,
+            )
+            candidate_pool.extend(fallback_candidates)
+            score_pool.extend([None] * len(fallback_candidates))
+            candidate_pool, score_pool = _filter_scored_candidates(candidate_pool, score_pool)
+            repaired_alternate, pick_meta = pick_best_counterfactual_v3(
+                question=str(updated.get("question") or updated.get("query") or ""),
+                answer=str(updated.get(args.answer_key, "")),
+                candidates=candidate_pool,
+                candidate_answers=row_candidates,
+                external_scores=score_pool,
                 reject_gold_substring=args.reject_gold_substring,
                 max_overlap_ratio=args.max_overlap_ratio,
                 require_short_answer=args.require_short_answer,
                 max_alt_length_chars=args.max_alt_length_chars,
             )
-            if repaired_alternate is not None:
+            if repaired_alternate:
                 updated[args.alternate_key] = repaired_alternate
-                invalid_reason = None
-                repaired += 1
+                updated["cf_pick_meta"] = pick_meta
+                invalid_reason = pick_meta.get("invalid_reason")
+                if invalid_reason is None:
+                    repaired += 1
 
         updated["cf_invalid_reason"] = invalid_reason
         updated["cf_is_valid"] = invalid_reason is None

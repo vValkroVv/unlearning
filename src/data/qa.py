@@ -141,13 +141,27 @@ class QAwithAlternateDataset(QADataset):
 
 
 class QAwithAlternateMetadataDataset(QAwithAlternateDataset):
-    def __init__(self, metadata_keys=None, *args, **kwargs):
+    def __init__(
+        self,
+        metadata_keys=None,
+        belief_key=None,
+        return_belief=False,
+        *args,
+        **kwargs,
+    ):
         self.metadata_keys = list(metadata_keys or [])
+        self.belief_key = belief_key
+        self.return_belief = bool(return_belief)
         super().__init__(*args, **kwargs)
         if self.metadata_keys and not self.return_original:
             raise ValueError(
                 "QAwithAlternateMetadataDataset requires return_original=True when "
                 "metadata_keys are requested."
+            )
+        if self.return_belief and not self.return_original:
+            raise ValueError(
+                "QAwithAlternateMetadataDataset requires return_original=True when "
+                "belief responses are requested."
             )
 
     def _coerce_metadata_value(self, key, value):
@@ -159,10 +173,17 @@ class QAwithAlternateMetadataDataset(QAwithAlternateDataset):
 
     def __getitem__(self, idx):
         item = super().__getitem__(idx)
-        if not self.metadata_keys:
-            return item
-
         row = self.data[idx]
+        question = row[self.question_key]
+
+        if self.return_belief and self.belief_key:
+            belief_value = str(row.get(self.belief_key, "")).strip()
+            if belief_value:
+                item["belief"] = self._process_sample(
+                    question=question,
+                    answer=belief_value,
+                )
+
         for key in self.metadata_keys:
             if key not in row:
                 raise KeyError(

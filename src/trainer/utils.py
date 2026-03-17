@@ -93,6 +93,110 @@ def compute_npo_per_sample(
     return loss, lose_outputs
 
 
+def compute_batch_nll_masked(
+    model,
+    inputs,
+    token_mask: torch.Tensor | None = None,
+):
+    """Return per-sequence NLL sums over a caller-provided shifted-token mask."""
+    inputs = _filter_model_inputs(inputs)
+    outputs = model(**inputs)
+    logits = outputs.logits[..., :-1, :].contiguous()
+    labels = inputs["labels"][..., 1:].contiguous()
+
+    loss_function = nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
+    token_loss = loss_function(logits.transpose(-1, -2), labels)
+
+    valid = labels != -100
+    if token_mask is not None:
+        token_mask = token_mask.to(device=labels.device, dtype=torch.bool)
+        if token_mask.shape != labels.shape:
+            raise ValueError(
+                f"token_mask shape {tuple(token_mask.shape)} != labels shape {tuple(labels.shape)}"
+            )
+        valid = valid & token_mask
+
+    token_loss = token_loss * valid
+    loss_sum = token_loss.sum(dim=-1)
+    counts = valid.sum(dim=-1).clamp_min(1)
+    return loss_sum, counts, outputs
+
+
+def compute_nll_per_sample_masked(
+    model,
+    inputs,
+    token_mask: torch.Tensor | None = None,
+    normalize_by_tokens: bool = True,
+):
+    loss_sum, counts, outputs = compute_batch_nll_masked(
+        model,
+        inputs,
+        token_mask=token_mask,
+    )
+    if normalize_by_tokens:
+        loss_sum = loss_sum / counts.to(loss_sum.device)
+    return loss_sum, outputs
+
+
+def compute_npo_per_sample_masked(
+    model,
+    ref_model,
+    lose_inputs,
+    beta: float = 1.0,
+    token_mask: torch.Tensor | None = None,
+    normalize_by_tokens: bool = True,
+):
+    lose_loss, lose_outputs = compute_nll_per_sample_masked(
+        model,
+        lose_inputs,
+        token_mask=token_mask,
+        normalize_by_tokens=normalize_by_tokens,
+    )
+    with torch.no_grad():
+        lose_ref_loss, _ = compute_nll_per_sample_masked(
+            ref_model,
+            lose_inputs,
+            token_mask=token_mask,
+            normalize_by_tokens=normalize_by_tokens,
+        )
+
+    lose_log_ratio = -(lose_loss - lose_ref_loss)
+    loss = -2.0 / beta * F.logsigmoid(beta * (-lose_log_ratio))
+    return loss, lose_outputs
+
+
+def build_answer_only_mask(inputs) -> torch.Tensor:
+    """Mask all shifted answer tokens that currently contribute to the loss."""
+    return inputs["labels"][..., 1:].contiguous() != -100
+
+
+def build_answer_minus_shared_mask(original_inputs, alternate_inputs) -> torch.Tensor:
+    """Mask original-answer tokens except those shared with the alternate target."""
+    labels = original_inputs["labels"][..., 1:].contiguous()
+    alt_labels = alternate_inputs["labels"][..., 1:].contiguous()
+    base_mask = labels != -100
+    mask = base_mask.clone()
+
+    for batch_idx in range(labels.size(0)):
+        alt_ids = set(alt_labels[batch_idx][alt_labels[batch_idx] != -100].tolist())
+        if not alt_ids:
+            continue
+
+        shared = torch.tensor(
+            [
+                token.item() in alt_ids if token.item() != -100 else False
+                for token in labels[batch_idx]
+            ],
+            device=labels.device,
+            dtype=torch.bool,
+        )
+        candidate_mask = base_mask[batch_idx] & (~shared)
+        if candidate_mask.any():
+            mask[batch_idx] = candidate_mask
+
+    return mask
+
+
 def compute_dpo_loss(model, ref_model, win_inputs=None, lose_inputs=None, beta=1.0):
     if win_inputs is None and lose_inputs is None:
         raise ValueError("Both win_inputs and lose_inputs can't be None")

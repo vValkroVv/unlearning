@@ -8,9 +8,11 @@ DUET_QA_forget_dual_cf:
     question_key: ${question_key}
     answer_key: "answer"
     alternate_key: "alternate"
+    belief_key: "belief_alternate"
     metadata_keys:
       - difficulty_score
       - attribution_score
       - index
     return_original: true
+    return_belief: true
     max_length: 512

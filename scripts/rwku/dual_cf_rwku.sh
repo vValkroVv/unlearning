@@ -170,6 +170,26 @@ raw_neg_powers="${NEG_POWERS:-1.0}"
 raw_neg_powers="${raw_neg_powers//,/ }"; raw_neg_powers="${raw_neg_powers//\"/}"; raw_neg_powers="${raw_neg_powers//\'/}"
 read -r -a neg_powers <<< "${raw_neg_powers}"
 
+raw_belief_neg_weights="${BELIEF_NEG_WEIGHTS:-__cfg__}"
+raw_belief_neg_weights="${raw_belief_neg_weights//,/ }"; raw_belief_neg_weights="${raw_belief_neg_weights//\"/}"; raw_belief_neg_weights="${raw_belief_neg_weights//\'/}"
+read -r -a belief_neg_weights <<< "${raw_belief_neg_weights}"
+
+raw_local_neg_modes="${LOCAL_NEG_MODES:-__cfg__}"
+raw_local_neg_modes="${raw_local_neg_modes//,/ }"; raw_local_neg_modes="${raw_local_neg_modes//\"/}"; raw_local_neg_modes="${raw_local_neg_modes//\'/}"
+read -r -a local_neg_modes <<< "${raw_local_neg_modes}"
+
+raw_sam_rhos="${SAM_RHOS:-__cfg__}"
+raw_sam_rhos="${raw_sam_rhos//,/ }"; raw_sam_rhos="${raw_sam_rhos//\"/}"; raw_sam_rhos="${raw_sam_rhos//\'/}"
+read -r -a sam_rhos <<< "${raw_sam_rhos}"
+
+raw_sam_risk_thresholds="${SAM_RISK_THRESHOLDS:-__cfg__}"
+raw_sam_risk_thresholds="${raw_sam_risk_thresholds//,/ }"; raw_sam_risk_thresholds="${raw_sam_risk_thresholds//\"/}"; raw_sam_risk_thresholds="${raw_sam_risk_thresholds//\'/}"
+read -r -a sam_risk_thresholds <<< "${raw_sam_risk_thresholds}"
+
+raw_sam_start_epochs="${SAM_START_EPOCHS:-__cfg__}"
+raw_sam_start_epochs="${raw_sam_start_epochs//,/ }"; raw_sam_start_epochs="${raw_sam_start_epochs//\"/}"; raw_sam_start_epochs="${raw_sam_start_epochs//\'/}"
+read -r -a sam_start_epochs <<< "${raw_sam_start_epochs}"
+
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
@@ -177,6 +197,22 @@ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+active_belief_neg_weights=("${belief_neg_weights[@]}")
+active_local_neg_modes=("${local_neg_modes[@]}")
+active_sam_rhos=("${sam_rhos[@]}")
+active_sam_risk_thresholds=("${sam_risk_thresholds[@]}")
+active_sam_start_epochs=("${sam_start_epochs[@]}")
+
+if [[ "${trainer}" != "DualCF" && "${trainer}" != "DualCFSAM" ]]; then
+    active_belief_neg_weights=("__cfg__")
+    active_local_neg_modes=("__cfg__")
+fi
+if [[ "${trainer}" != "DualCFSAM" ]]; then
+    active_sam_rhos=("__cfg__")
+    active_sam_risk_thresholds=("__cfg__")
+    active_sam_start_epochs=("__cfg__")
+fi
 
 for lr in "${lrs[@]}"; do
     for beta in "${betas[@]}"; do
@@ -211,6 +247,11 @@ for lr in "${lrs[@]}"; do
                                                                         for alpha_eff_topk_frac in "${alpha_eff_topk_fracs[@]}"; do
                                                                             for risk_power in "${risk_powers[@]}"; do
                                                                                 for neg_power in "${neg_powers[@]}"; do
+                                                                                    for belief_neg_weight in "${active_belief_neg_weights[@]}"; do
+                                                                                        for local_neg_mode in "${active_local_neg_modes[@]}"; do
+                                                                                            for sam_rho in "${active_sam_rhos[@]}"; do
+                                                                                                for sam_risk_threshold in "${active_sam_risk_thresholds[@]}"; do
+                                                                                                    for sam_start_epoch in "${active_sam_start_epochs[@]}"; do
                                                                                     for lora_r in "${lora_rs[@]}"; do
                                                                                         for lora_alpha in "${lora_alphas[@]}"; do
                                                                                             for lora_dropout in "${lora_dropouts[@]}"; do
@@ -220,14 +261,29 @@ for lr in "${lrs[@]}"; do
                                                                                                 neg_power_tag=${neg_power//./p}
                                                                                                 difficulty_tag="dOn"
                                                                                                 attribution_tag="aOn"
+                                                                                                variant_suffix=""
                                                                                                 if [[ "${disable_difficulty_route}" == "true" ]]; then
                                                                                                     difficulty_tag="dOff"
                                                                                                 fi
                                                                                                 if [[ "${disable_attribution_route}" == "true" ]]; then
                                                                                                     attribution_tag="aOff"
                                                                                                 fi
+                                                                                                if [[ "${belief_neg_weight}" != "__cfg__" ]]; then
+                                                                                                    belief_neg_tag=${belief_neg_weight//./p}
+                                                                                                    variant_suffix="${variant_suffix}_bw${belief_neg_tag}"
+                                                                                                fi
+                                                                                                if [[ "${local_neg_mode}" != "__cfg__" ]]; then
+                                                                                                    local_neg_tag=${local_neg_mode//[^[:alnum:]]/_}
+                                                                                                    variant_suffix="${variant_suffix}_lnm${local_neg_tag}"
+                                                                                                fi
+                                                                                                if [[ "${sam_rho}" != "__cfg__" ]]; then
+                                                                                                    sam_rho_tag=${sam_rho//./p}
+                                                                                                    sam_risk_tag=${sam_risk_threshold//./p}
+                                                                                                    sam_start_tag=${sam_start_epoch//./p}
+                                                                                                    variant_suffix="${variant_suffix}_sr${sam_rho_tag}_srt${sam_risk_tag}_sse${sam_start_tag}"
+                                                                                                fi
 
-                                                                                                task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}_${difficulty_tag}_${attribution_tag}
+                                                                                                task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}_${difficulty_tag}_${attribution_tag}${variant_suffix}
                                                                                                 run_dir=${output_root}/${task_name}
                                                                                                 eval_dir=${run_dir}/evals
                                                                                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -269,7 +325,7 @@ for lr in "${lrs[@]}"; do
                                                                                                         trainer.method_args.gamma=${gamma}
                                                                                                         trainer.method_args.retain_loss_type=NLL
                                                                                                     )
-                                                                                                    if [[ "${trainer}" == "DualCF" ]]; then
+                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "DualCFSAM" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.tau_d=${tau_d}
                                                                                                             trainer.method_args.tau_a=${tau_a}
@@ -289,6 +345,25 @@ for lr in "${lrs[@]}"; do
                                                                                                             trainer.method_args.risk_power=${risk_power}
                                                                                                             trainer.method_args.neg_power=${neg_power}
                                                                                                         )
+                                                                                                        if [[ "${belief_neg_weight}" != "__cfg__" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.belief_neg_weight=${belief_neg_weight}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                        if [[ "${local_neg_mode}" != "__cfg__" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.local_neg_mode=${local_neg_mode}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                    fi
+                                                                                                    if [[ "${trainer}" == "DualCFSAM" ]]; then
+                                                                                                        if [[ "${sam_rho}" != "__cfg__" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.sam_rho=${sam_rho}
+                                                                                                                trainer.method_args.sam_risk_threshold=${sam_risk_threshold}
+                                                                                                                trainer.method_args.sam_start_epoch=${sam_start_epoch}
+                                                                                                            )
+                                                                                                        fi
                                                                                                     fi
 
                                                                                                     train_cmd=(
@@ -370,6 +445,11 @@ for lr in "${lrs[@]}"; do
                                                                                                         echo "[rwku][${run_label}] Removed safetensors from ${run_dir}"
                                                                                                     fi
                                                                                                 fi
+                                                                                            done
+                                                                                        done
+                                                                                    done
+                                                                                                    done
+                                                                                                done
                                                                                             done
                                                                                         done
                                                                                     done

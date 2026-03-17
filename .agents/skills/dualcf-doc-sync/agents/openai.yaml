@@ -1,0 +1,7 @@
+interface:
+  display_name: "DualCF Doc Sync"
+  short_description: "Keep runbooks, diffs, and AGENTS guidance aligned with code"
+  default_prompt: "Update the relevant integration diffs, runbooks, and AGENTS guidance so they match the current code and clearly state the actual validation status."
+
+policy:
+  allow_implicit_invocation: true

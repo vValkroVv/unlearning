@@ -1,0 +1,11 @@
+defaults:
+  - DualCFv3
+
+handler: DualCFSAM
+
+method_args:
+  sam_rho: 0.05
+  sam_eps: 1.0e-12
+  sam_adaptive: false
+  sam_risk_threshold: 0.75
+  sam_start_epoch: 2.0

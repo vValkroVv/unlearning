@@ -1,0 +1,26 @@
+# Project-scoped Codex configuration.
+# Official docs:
+# - custom agents: .codex/agents/*.toml
+# - skills: .agents/skills/*/SKILL.md
+
+[agents]
+max_threads = 6
+max_depth = 1
+
+[profiles.spark-discovery]
+model = "gpt-5.3-codex-spark"
+model_reasoning_effort = "xhigh"
+approval_policy = "on-request"
+sandbox_mode = "read-only"
+
+[profiles.portable-runtime]
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[profiles.docs-sync]
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"

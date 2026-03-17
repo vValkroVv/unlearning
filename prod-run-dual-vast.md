@@ -145,6 +145,24 @@ python src/tools/build_utility_1k_panel.py \
   --winogrande 200
 ```
 
+For DualCF v3 utility-anchor attribution, export the flat QA anchor file in the
+same step:
+
+```bash
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
+  --mmlu-pro 400 \
+  --truthfulqa-bin 200 \
+  --arc 200 \
+  --winogrande 200 \
+  --qa-anchor-output-path "${UTILITY_ROOT}/utility_qa_anchor_v3.jsonl" \
+  --qa-anchor-truthfulqa-bin 128 \
+  --qa-anchor-mmlu-pro 64 \
+  --qa-anchor-arc 32 \
+  --qa-anchor-winogrande 32
+```
+
 If you already have a forget-target alias file, rebuild the panel with:
 
 ```bash
@@ -208,6 +226,44 @@ Each prep script now supports a two-phase flow:
 `DROP_INVALID_AFTER_CLEAN=1` is the default and should be left on for the
 validation profile. This drops rows that still fail strict alternate-answer
 validation after repair.
+
+### DualCF v3 entrypoints
+
+Use the additive v3 prep scripts when you want:
+
+- multi-alternate counterfactual selection
+- multi-bank attribution with semantic and utility anchors
+- offline belief-bank generation before calibration
+
+Common v3 env additions:
+
+```bash
+export UTILITY_ANCHOR_JSONL="${UTILITY_ROOT}/utility_qa_anchor_v3.jsonl"
+export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
+export PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+export BELIEF_MAX_NEW_TOKENS=${BELIEF_MAX_NEW_TOKENS:-16}
+export BELIEF_NUM_RETURN_SEQUENCES=${BELIEF_NUM_RETURN_SEQUENCES:-3}
+export BELIEF_NUM_BEAMS=${BELIEF_NUM_BEAMS:-4}
+```
+
+Optional external sidecar wiring for verified multi-alternate CFs:
+
+```bash
+export CF_SIDECAR_JSONL=/abs/path/to/counterfactual_sidecar.jsonl
+export CF_SIDECAR_ALTERNATE_KEY=alternates
+export CF_SIDECAR_SCORE_KEY=scores
+```
+
+Then replace the prep entrypoint:
+
+- DUET: `scripts/duet/prepare_dual_cf_duet_v3.sh`
+- RWKU: `scripts/rwku/prepare_dual_cf_rwku_v3.sh`
+
+The v3 scripts preserve the existing two-phase flow:
+
+- `STOP_AFTER_CLEAN_CF=1` for clean-counterfactual generation only
+- `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
+- `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
 
 ### Phase A: Qwen clean counterfactuals only
 
