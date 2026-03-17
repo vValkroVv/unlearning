@@ -1,9 +1,0 @@
-{
-  "count": 50,
-  "reason_counts": {
-    "empty": 2,
-    "exact_match": 5,
-    "gold_substring": 43
-  },
-  "output_file": "/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2/rwku_still_broken_50.jsonl"
-}

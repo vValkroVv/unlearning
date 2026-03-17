@@ -1,8 +1,0 @@
-{
-  "utility_metric": "utility_avg",
-  "utility_auc": 0.5919,
-  "utility_max_drawdown": 0.028000000000000025,
-  "utility_best_final_gap": 0.02300000000000002,
-  "endpoint_label": "final",
-  "u_at_forget_tau": null
-}

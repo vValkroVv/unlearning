@@ -192,6 +192,7 @@ cython_debug/
 
 # Local agent notes and local analysis scripts/notebooks (ignore)
 AGENTS.md
+metrics-ep5-all-v2/
 experiments_visualization.ipynb
 scripts/recalc_duet_rouge_recall.py
 
