@@ -1,9 +1,11 @@
 # https://hydra.cc/docs/configure_hydra/intro/
 
-# enable color logging
+# use Hydra's built-in logging defaults so local shells do not require the
+# optional `hydra-colorlog` plugin. Users who want colorlog can still override
+# these groups explicitly at launch time.
 defaults:
-  - override hydra_logging: colorlog
-  - override job_logging: colorlog
+  - override hydra_logging: default
+  - override job_logging: default
 
 # output directory, generated dynamically on each run
 run:

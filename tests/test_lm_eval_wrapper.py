@@ -1,3 +1,4 @@
+import importlib.util
 import sys
 import unittest
 from pathlib import Path
@@ -6,12 +7,16 @@ from unittest import mock
 from omegaconf import OmegaConf
 
 
-REPO_ROOT = Path("/workspace/unlearning")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from evals.lm_eval import LMEvalEvaluator
+LM_EVAL_AVAILABLE = importlib.util.find_spec("lm_eval") is not None
+if LM_EVAL_AVAILABLE:
+    from evals.lm_eval import LMEvalEvaluator
+else:
+    LMEvalEvaluator = None
 
 
 class _FakeTaskManager:
@@ -41,6 +46,7 @@ class _FakeHFLM:
         model.tie_weights()
 
 
+@unittest.skipUnless(LM_EVAL_AVAILABLE, "lm_eval package is not installed")
 class LMEvalWrapperTest(unittest.TestCase):
     def test_prepare_model_skips_second_tie_weights_for_peft_models(self) -> None:
         eval_cfg = OmegaConf.create(

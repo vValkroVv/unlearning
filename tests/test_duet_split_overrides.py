@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 
-REPO_ROOT = Path("/workspace/unlearning")
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DuetSplitOverrideTest(unittest.TestCase):

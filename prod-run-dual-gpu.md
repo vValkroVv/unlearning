@@ -1,15 +1,28 @@
-# Production DualCF GPU Runs (v2)
+# Production DualCF GPU Runs (v3 / Idea2)
 
-This is the offline production runbook for the current DualCF v2 campaign.
+This is the offline production runbook for the current DualCF v3 / Idea2
+campaign.
 
 Scope:
 
 - `Llama-3.1-8B-Instruct` only
-- DualCF v2 ablations plus matched baselines
+- DualCF v3 / Idea2 ablations plus matched baselines
 - DUET `rare -> popular -> merged`
 - Utility-1K built once and evaluated automatically during each run
 - RWKU kept as phase 2 until DUET is stable
 - sequential end-to-end shell blocks for one box; no per-GPU sharding in this file yet
+
+Validation status for this runbook refresh:
+
+- completed locally without GPUs:
+  - `python -m unittest discover -s tests -p 'test_*.py'` -> `OK (skipped=3)`
+- note:
+  - the three skipped tests require the optional `lm_eval` package
+- not completed for this refresh:
+  - GPU-backed vLLM generation checks
+  - GPU-backed attribution scoring
+  - prep smokes against a live GPU server
+  - train / eval runs
 
 ## Common setup
 
@@ -192,7 +205,7 @@ source /data/home/vkropoti/unlearning-venv/bin/activate
 export VLLM_BASE_URL=http://127.0.0.1:8000/v1
 export VLLM_API_KEY=EMPTY
 export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
-export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-0}
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
 ```
 
 Build all clean counterfactual files first, then stop the vLLM server before
@@ -221,20 +234,27 @@ Use the additive v3 prep scripts when you want:
 Runtime note:
 
 - sidecar mode supports real multi-alternate selection directly
-- vLLM mode supports real multi-alternate selection only when
+- `vllm_openai` with `NUM_ALTERNATES>1` now fails fast unless
   `VLLM_USE_STRUCTURED_OUTPUTS=1`
-- plain-text vLLM mode remains supported, but it returns one alternate per row
+- plain-text vLLM remains supported only for the legacy
+  `NUM_ALTERNATES=1` path
 
 Common v3 env additions:
 
 ```bash
 export UTILITY_ANCHOR_JSONL="${UTILITY_ROOT}/utility_qa_anchor_v3.jsonl"
 export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-export PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+export MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+export ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
 export BELIEF_MAX_NEW_TOKENS=${BELIEF_MAX_NEW_TOKENS:-16}
 export BELIEF_NUM_RETURN_SEQUENCES=${BELIEF_NUM_RETURN_SEQUENCES:-3}
 export BELIEF_NUM_BEAMS=${BELIEF_NUM_BEAMS:-4}
 ```
+
+Leave `PROMPT_FAMILY` unset unless you need to override the script defaults:
+
+- DUET defaults to `duet_relation_safe`
+- RWKU defaults to `rwku_shared_fact_safe`
 
 Optional external sidecar wiring for verified multi-alternate CFs:
 
@@ -242,6 +262,9 @@ Optional external sidecar wiring for verified multi-alternate CFs:
 export CF_SIDECAR_JSONL=/abs/path/to/counterfactual_sidecar.jsonl
 export CF_SIDECAR_ALTERNATE_KEY=alternates
 export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
 ```
 
 Then replace the prep entrypoint:
@@ -254,6 +277,20 @@ The v3 scripts preserve the existing two-phase flow:
 - `STOP_AFTER_CLEAN_CF=1` for clean-counterfactual generation only
 - `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
 - `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
+
+The standard train launchers now default to the v3 experiment configs, so
+regular DualCF runs do not need an `EXPERIMENT=` override:
+
+- `scripts/duet/dual_cf_duet.sh` -> `unlearn/duet/dual_cf_v3_lora.yaml`
+- `scripts/rwku/dual_cf_rwku.sh` -> `unlearn/rwku/dual_cf_v3_lora.yaml`
+
+Phase B also writes artifact-quality reports:
+
+- `${OUT_DIR}/step4_calibration_stats_v3.json` from
+  `calibrate_dual_cf_scores.py --sidecar-path ...`, including
+  `artifact_quality`
+- `${OUT_DIR}/step4_artifact_report_v3.json` from
+  `validate_dual_cf_artifact.py --report-path ...`
 
 ### 1. DUET Phase A
 

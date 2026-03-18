@@ -289,7 +289,7 @@ Directory Structure:
 ├── falcon_integration_diff.md
 ├── falcon.md
 ├── ga_integration_diff.md
-├── idea2_dualcf_verified_cf_plan_and_review.md
+├── idea2_dualcf_v3_verified_cf_plan_and_review_extended.md
 ├── LICENSE
 ├── loku_integration_diff.md
 ├── Makefile
@@ -3151,307 +3151,230 @@ For full runs with default script hyperparameters (same style as other algorithm
 
 </content>
 
-<content full_path="idea2_dualcf_verified_cf_plan_and_review.md">
+<content full_path="idea2_dualcf_v3_verified_cf_plan_and_review_extended.md">
 # Idea2 for DualCF: verified multi-alternate counterfactual supervision
 
-## What this idea is
+_Expanded research note + implementation review for the current DualCF v1/v2/v3 line._
 
-**Idea2** is the next step after your current DualCF v1/v2/v3 line:
+## 1. Scope and updated thesis claim
 
-> keep the routed unlearning core, but make the **positive branch** much stronger by replacing one weak counterfactual target with a **verified pool of relation-preserving, answer-type-matched, shared-fact-safe alternatives**, then train only on the best one.
+This note treats **Idea2** as the natural continuation of your current line:
 
-In plain terms:
+- **Idea1**: difficulty- and attribution-aware routing decides **how hard** and **how cautiously** to unlearn each forget sample.
+- **DualCF v2/v3**: you already implemented the routed core, broader artifact plumbing, multi-bank proxy retain maps, belief-bank generation, localized negative masking, and an optional SAM variant.
+- **Idea2**: improve the **quality of the forget-side positive supervision** itself by replacing one weak alternate answer with a **verified pool of relation-preserving, answer-type-matched, shared-fact-safe candidates**, then train on the best one.
 
-- v1/v2 proved that routing works for selectivity/locality.
-- v3 already added the right plumbing for multi-candidate alternates, utility anchors, belief-bank generation, localized negative masking, and optional DualCFSAM.
-- **Idea2** is the part that should improve **utility, TruthfulQA, and the quality of the forget/retain trade-off** by making the alternate targets much less noisy.
+A concise thesis-level claim is:
 
-This is the correct next move because your current results say:
+> **DualCF performance is now limited less by routing capacity than by the quality of forget-side positive supervision. Verified multi-alternate counterfactual supervision should improve broad utility and truthfulness by making the positive branch relation-faithful, answer-type-safe, and shared-fact-preserving, while leaving the routed unlearning core intact.**
 
-- DualCF is already **very strong on holdout/locality**.
-- DualCF is **not yet the best on Utility-1K**.
-- The weakest utility dimension is **truthfulness / broad generalization**, not ARC-style simple factual recall.
-- DualCF also still trails NPO-SAM on **forget cosine similarity**, which suggests that some of the current “forgetting” is still too surface-level.
+This framing is the most defensible one for your current results. Your runs already show that DualCF is strong on **holdout/locality**, but weaker on **broad utility**, with the largest deficits in **truthfulness/generalization** rather than ARC-style basic recall. That means the next improvement should target **target quality**, not simply stronger negative pressure.
 
-So the best improvement is **not** “push the negative branch harder”; it is:
+## 2. Why Idea2 is the right next step after Idea1 and v2/v3
 
-1. improve the quality of the target alternate,
-2. make the alternate preserve relation and shared facts,
-3. keep the rest of the routed system stable.
+### 2.1 What Idea1 already established
 
----
+Your original Idea1 note is fundamentally a **controlled unlearning** proposal:
 
-## Why this should improve over idea1 and v2
+- counterfactual supervision tells the model **where to move**,
+- difficulty tells the method **how hard the target is to erase**,
+- attribution tells it **how risky the update is for retained knowledge**.
 
-### 1. Your own report points at the positive branch as a bottleneck
+That makes Idea1 a policy for allocating unlearning regimes across forget samples, not just another forget loss.
 
-From your current aggregated results:
+### 2.2 Where the current bottleneck now sits
 
-- DualCF-full is better than DPO/NPO/NPO-SAM on many local forget/retain comparisons,
-- but it still trails them on `utility_avg`,
-- and the main utility weakness is **TruthfulQA-like behavior**.
+Once routing works reasonably well, the next failure mode is usually **counterfactual target quality**:
 
-That is a classic symptom of a counterfactual branch that is **fluent but not sufficiently truth-preserving**.
+- if the alternate is too noisy, the model learns the wrong positive target,
+- if the alternate breaks relation structure, it hurts truthfulness and utility,
+- if the alternate rewrites shared/public facts, it damages locality and broad capability,
+- if the alternate is only surface-different from the gold answer, the method may look good on lexical suppression but not on semantic forgetting.
 
-### 2. AltPO supports this direction directly
+That is exactly why Idea2 is complementary to Idea1 rather than a replacement for it.
 
-AltPO’s core claim is that many unlearning methods rely too much on **negative-only feedback**, which can produce nonsensical or inconsistent outputs, and that adding **positive supervision on the forget set** improves performance and preservation. That is almost exactly the theoretical justification for this idea. citeturn560873view0
+### 2.3 Literature motivation
 
-### 3. DUSK explains why the alternates must preserve shared facts
+Idea2 fits very cleanly into the current unlearning literature:
 
-DUSK argues that good unlearning should remove **unique target content** while preserving **shared/public knowledge**, and that many current methods only remove surface text while damaging shared content. That is directly relevant to DUET and especially RWKU. If your alternate rewrites too much of the fact structure instead of only changing the target answer, utility gets worse. citeturn560873view1
+- **AltPO** argues that negative-only forget objectives often produce nonsensical or inconsistent outputs, and that adding positive supervision on the forget set improves forget-side response quality and overall behavior.
+- **DUSK** argues that unlearning should remove **unique target content** while preserving **shared/public facts**; this is almost a direct formalization of what your counterfactual candidates should and should not change.
+- **GUARD** shows that adaptive, attribution-aware allocation of unlearning power improves retention, which means Idea2 should be added **on top of**, not instead of, the retention-aware routing you already built.
+- **Which Retain Set Matters?** shows that syntactic neighbors are especially fragile and especially useful as retain regularizers, which strongly supports your syntax/semantic/utility-anchor proxy bank design.
 
-### 4. Structured generation is now practical
+So the clean scientific story is:
 
-OpenAI’s structured-output guidance makes it realistic to generate multi-candidate alternates with a strict JSON schema, which is exactly what your current `alternate_jsonl` + `scores` sidecar path wants. That means the idea is not just theoretically attractive — it fits your current repo design cleanly. citeturn406693search0turn406693search2
+- Idea1 = better routing policy,
+- Idea2 = better positive supervision inside that routed policy.
 
----
+## 3. Problem setup
 
-## The exact scientific claim for Idea2
+For forget sample \(i\), define:
 
-A good thesis-ready statement is:
+- prompt: \(x_i\)
+- original answer / target memory: \(y_i^{orig}\)
+- candidate alternate pool: \(\mathcal{C}_i = \{c_{i1}, c_{i2}, \dots, c_{iK}\}\)
+- difficulty score: \(d_i\)
+- attribution / retention-risk score: \(a_i\)
 
-> **DualCF performance is currently limited less by routing capacity than by the quality of forget-side positive supervision. Verified multi-alternate counterfactual supervision should improve broad utility by preserving relation structure and shared facts while still providing a usable target for selective forgetting.**
+Idea1 already proposes a routed loss of the form:
 
-That is consistent with:
+\[
+L_i
+=
+\lambda_i^{cf} CE(y_i^{cf}\mid x_i)
++
+\lambda_i^{neg} L_{neg}(y_i^{orig}\mid x_i)
++
+\lambda_i^{ret} L_{ret}.
+\]
 
-- your v2/v3 design,
-- your current result profile,
-- AltPO,
-- DUSK.
+Idea2 changes **how** \(y_i^{cf}\) is chosen.
 
----
+Instead of using one fixed alternate, define a verifier score for each candidate:
 
-## The intended pipeline
+\[
+q_{ij}
+=
+ w_{type} s_{type}(c_{ij})
++
+ w_{short} s_{short}(c_{ij})
++
+ w_{bank} s_{bank}(c_{ij})
++
+ w_{judge} s_{judge}(c_{ij})
++
+ w_{rel} s_{rel}(c_{ij})
++
+ w_{shared} s_{shared}(c_{ij})
+-
+ w_{overlap} s_{overlap}(c_{ij}).
+\]
 
-## Phase A — generate 4 alternates, not 1
+Then choose either:
 
-For every forget example, generate a sidecar row like:
+### Hard selection
 
-```json
-{
-  "index": 17,
-  "alternates": [
-    "1997",
-    "1998",
-    "2001",
-    "1993"
-  ],
-  "scores": [0.94, 0.88, 0.76, 0.63],
-  "same_relation": [true, true, true, true],
-  "shared_fact_safe": [true, true, true, false],
-  "answer_type": "year",
-  "generator": "gpt-5.4",
-  "prompt_version": "cf_v2_idea2"
-}
-```
+\[
+y_i^{cf,*} = \arg\max_{c_{ij} \in \mathcal{C}_i} q_{ij}
+\]
 
-The sidecar should be generated **before** `clean_counterfactuals.py` and **before** `score_difficulty.py`.
+and train with:
 
-Use one schema for DUET and one for RWKU:
+\[
+L_i^{Idea2}
+=
+\lambda_i^{cf} CE(y_i^{cf,*}\mid x_i)
++
+\lambda_i^{neg} L_{NPO}(x_i, y_i^{orig})
++
+\lambda_i^{ret} L_{ret}.
+\]
 
-- **DUET**: same relation, same answer type, short answer, no explanation.
-- **RWKU**: same relation, preserve non-target/shared fact content, short answer, no explanation.
+### Soft mixture (optional later ablation)
 
----
+Define a normalized weight over candidates,
 
-## Phase B — verify and rerank locally
+\[
+p_{ij} = \frac{\exp(q_{ij}/T_q)}{\sum_k \exp(q_{ik}/T_q)}
+\]
 
-Do not trust the first external answer.
+and optimize:
 
-Instead, rerank candidates with a local score:
+\[
+L_i^{cf-mix} = \sum_j p_{ij} \cdot CE(c_{ij}\mid x_i).
+\]
 
-- answer-type match,
-- shortness,
-- candidate-bank consistency,
-- lexical overlap penalty,
-- external judge score,
-- relation-preservation bonus,
-- shared-fact-preservation bonus,
-- hard reject if explicit invalidity remains.
+For the first serious campaign, **hard selection is better** because it is easier to interpret and closer to your current artifact contract.
 
-The current v3 implementation already does:
+## 4. What “verified” means in Idea2
 
-- answer-type match,
-- shortness,
-- bank membership,
-- external score,
-- overlap penalty,
-- invalidity checks.
+“Verified” should not mean only “different from gold.” It should mean the candidate satisfies all of the following:
 
-What is still missing is:
+1. **Same relation as the original question**
+2. **Same answer type / granularity**
+3. **Short-answer style compatible with your evaluator**
+4. **Not the gold answer and not a trivial paraphrase/subspan of gold**
+5. **Safe with respect to shared/public facts**
+6. **Compatible with local candidate-bank evidence when available**
 
-- **explicit relation-preservation score**,
-- **explicit shared-fact-preservation score**,
-- **dataset-specific prompt families** beyond `default` / `strict_short`.
+This is the crucial difference between:
 
----
+- a merely **incorrect** answer,
+- and a **usable counterfactual target** for unlearning.
 
-## Phase C — hard-row repair only on failures
+## 5. Why Idea2 should help your exact metrics
 
-Rows that still fail after reranking should go through a second-pass repair:
+### 5.1 Utility and TruthfulQA
 
-1. existing candidate bank,
-2. external alternates,
-3. answer-type fallback,
-4. if still invalid: a targeted second external generation pass.
+If the positive branch is poorly controlled, the model can learn to produce fluent but structurally wrong answers. That tends to hurt:
 
-This should be done only for failed rows. Do not regenerate everything.
+- truthfulness,
+- factual calibration,
+- broader multiple-choice/general evals,
+- sometimes even retain-side locality.
 
----
+That matches your current pattern more than a generic collapse story.
 
-## What exactly to add in the repo
+### 5.2 Forget cosine similarity
 
-## 1. Strengthen `make_counterfactuals.py`
+If the alternate is only lexically different but not semantically well-separated, the model may suppress benchmark text overlap without really moving away in semantic space. Idea2 will not solve all of your cosine gap by itself, but **better alternates should reduce the amount of “surface-only” forgetting**.
 
-### What is already good
+### 5.3 Stability
 
-Your v3 `make_counterfactuals.py` already supports:
+Better counterfactual targets usually reduce gradient noise on the forget branch. Since Idea1 is about controlled unlearning, that matters not only for final metrics but for:
 
-- `--num-alternates`,
-- `--prompt-family`,
-- `--alternate-jsonl`,
-- `--allow-list-alternates`,
-- `--external-score-key`,
-- vLLM/OpenAI-style generator backends,
-- candidate-bank fusion,
-- local reranking.
+- smoother trajectories,
+- lower best-final gap,
+- less checkpoint brittleness,
+- lower seed variance.
 
-### What to add
+## 6. Data requirements on DUET and RWKU
 
-Add **two new prompt families**:
+## 6.1 DUET
 
-- `duet_relation_safe`
-- `rwku_shared_fact_safe`
+DUET is the cleaner place to test Idea2 because the relation structure is more controlled. For each forget sample, you want:
 
-Example prompt behavior:
+\[
+(x_i, y_i^{orig}, \mathcal{C}_i, d_i, a_i)
+\]
 
-#### `duet_relation_safe`
+where the candidate pool \(\mathcal{C}_i\) is built from:
 
-- preserve the question relation,
-- preserve answer type,
-- output 4 short alternatives,
-- no explanation,
-- do not repeat gold,
-- do not paraphrase gold.
+- candidate-bank neighbors from the same property / relation,
+- external generator outputs,
+- narrow answer-type-aware repair rules.
 
-#### `rwku_shared_fact_safe`
+The most informative DUET analysis is **not only merged**. You should still report:
 
-- change only the target answer,
-- preserve shared/public fact content,
-- preserve answer type,
-- output 4 short alternatives,
-- no explanation.
+- rare vs popular,
+- optionally stage-aware slices when relevant,
+- matched-forget utility and locality.
 
-### Concrete patch idea
+Idea2 should be strongest on the slices where the current alternate quality is likely to be the main bottleneck rather than raw forgetting capacity.
 
-Inside `build_hf_generator()` / the vLLM request formatter, extend:
+## 6.2 RWKU
 
-```python
-prompt_families = {
-    "default": [...],
-    "strict_short": [...],
-    "duet_relation_safe": [...],
-    "rwku_shared_fact_safe": [...],
-}
-```
+RWKU is the better realism stress test. There the alternates must be more conservative because the benchmark is closer to incomplete-information unlearning:
 
-and make the external sidecar generation use those names too.
+- you do not get a true forget corpus in the same way,
+- you do not get a perfect retain set,
+- adversarial/locality behavior matters more.
 
----
+So on RWKU the main goal of Idea2 is not “invent more diverse wrong answers.” It is:
 
-## 2. Fix duplicate-candidate bias in sidecar mode
+- preserve relation,
+- preserve shared/public fact structure,
+- only change the target answer span,
+- avoid long explanatory alternates.
 
-### Current problem
+That should help utility/locality more than raw forget aggression.
 
-When `alternate_jsonl` is used, the current flow does this:
+## 7. The intended pipeline
 
-- loads `external_candidates`,
-- sets `primary_candidates = external_candidates[:1] or external_candidates`,
-- then `select_best_alternate()` appends **both** `primary_candidates` and `external_candidates`.
+## Phase A — generate 4 candidates, not 1
 
-That duplicates the first external candidate in the ranking pool and biases selection toward it.
-
-### Fix
-
-Change the JSONL-sidecar branch to:
-
-```python
-external_candidates = _string_list(mapped_value)
-external_scores = _score_list(...)
-primary_candidates = []
-```
-
-or deduplicate inside `select_best_alternate()`.
-
-### Safe version
-
-```python
-def _dedupe_scored_candidates(candidates, scores):
-    seen = set()
-    out_cands, out_scores = [], []
-    for cand, score in zip(candidates, scores):
-        key = clean_counterfactual_text(cand)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        out_cands.append(cand)
-        out_scores.append(score)
-    return out_cands, out_scores
-```
-
-Then apply it before `pick_best_counterfactual_v3()`.
-
----
-
-## 3. Extend `pick_best_counterfactual_v3()` with semantic safety terms
-
-### Current score
-
-Right now the ranking is effectively:
-
-```python
-score = (
-    0.35 * type_match
-    + 0.25 * shortness
-    + 0.25 * bank_score
-    + 0.15 * judge
-    - 0.30 * overlap
-)
-```
-
-This is a decent v3 baseline, but it is still mostly **surface-form-aware**.
-
-### What to add
-
-Add:
-
-- `relation_score`
-- `shared_fact_score`
-
-New score sketch:
-
-```python
-score = (
-    0.25 * type_match
-    + 0.15 * shortness
-    + 0.15 * bank_score
-    + 0.15 * judge
-    + 0.15 * relation_score
-    + 0.15 * shared_fact_score
-    - 0.20 * overlap
-)
-```
-
-### How to get these scores
-
-Simplest practical path:
-
-- put them into the sidecar from GPT-5.4 / Codex generation,
-- or derive them with a second-pass external judge,
-- then pass them through `external_scores` or a new `external_meta` field.
-
-Minimal schema upgrade:
+For each forget sample, generate a sidecar row such as:
 
 ```json
 {
@@ -3459,178 +3382,182 @@ Minimal schema upgrade:
   "alternates": ["1997", "1998", "2001", "1993"],
   "scores": [0.94, 0.88, 0.76, 0.63],
   "relation_scores": [1.0, 1.0, 0.8, 0.6],
-  "shared_fact_scores": [1.0, 1.0, 0.9, 0.2]
+  "shared_fact_scores": [1.0, 1.0, 0.9, 0.2],
+  "answer_type": "year",
+  "generator": "gpt-5.4",
+  "prompt_version": "cf_v3_idea2"
 }
 ```
 
-Then in the loader, preserve these arrays and merge them in the ranking logic.
+This sidecar should be generated **before** cleaning, difficulty, attribution, and calibration.
 
----
+### DUET generation policy
 
-## 4. Downgrade unsafe fallback candidates
-
-### Current risk
-
-`build_answer_type_fallback_candidates()` includes things like:
-
-- numeric/date perturbations,
-- `not {text}` for `short_span`.
-
-The numeric/date part is useful.
-
-The `not {text}` fallback is dangerous for truthfulness because it often creates a linguistically valid but semantically low-quality answer.
-
-### Fix
-
-Keep `not {text}` only as:
-
-- a last-resort repair,
-- excluded from primary ranking unless no safer candidate exists,
-- tagged as low-confidence provenance.
-
-Example:
-
-```python
-if answer_type == "short_span":
-    normalized_answer = normalize_text(text)
-    if normalized_answer and not normalized_answer.startswith("not "):
-        low_conf_candidates.append(f"not {text}")
-```
-
-Then append `low_conf_candidates` only after all normal candidates fail.
-
----
-
-## 5. Make `clean_counterfactuals.py` stricter for Idea2
-
-`clean_counterfactuals.py` is already doing the right overall thing:
-
-- clean current alternate,
-- detect invalidity,
-- repool external + bank + fallback candidates,
-- rerank,
-- drop invalid rows if configured.
-
-For Idea2, tighten it with:
-
-- mandatory `DROP_INVALID_AFTER_CLEAN=1`,
-- a sidecar mismatch check,
-- a count report for:
-  - repaired by bank,
-  - repaired by external sidecar,
-  - repaired by answer-type fallback,
-  - dropped after all repairs.
-
-This should be logged per dataset split because RWKU and DUET have very different invalidity modes.
-
----
-
-## 6. Keep `build_forget_belief_bank.py` as-is for now
-
-This file is part of your v3 semantic-suppression branch, but it is **not the core of Idea2**.
-
-For this iteration:
-
-- keep it,
-- do not redesign it yet,
-- first improve the positive branch,
-- only then test whether belief suppression adds more on top.
-
-Why: otherwise you change two orthogonal things at once and the interpretation becomes messy.
-
----
-
-## 7. Add dataset-specific external generation policy
-
-For the external generator, use:
-
-### DUET
-
-- relation-preserving,
-- short answer,
+- same relation,
 - same answer type,
-- slightly more diverse candidates allowed.
+- short answer only,
+- no explanation,
+- moderate diversity allowed,
+- candidate-bank aware when possible.
 
-### RWKU
+### RWKU generation policy
 
-- preserve non-target/shared facts,
-- avoid multi-clause alternates,
-- prefer canonical short entities / dates / years,
-- heavily penalize invented explanations.
+- change only the target answer,
+- preserve shared/public facts,
+- same answer type,
+- short answer only,
+- stronger penalty on fabricated explanations,
+- more conservative than DUET.
 
-This is the clearest dataset-specific part of Idea2.
+## Phase B — verify and rerank locally
 
----
+The reranker should not trust the first external candidate. Instead it should combine:
 
-## The most important implementation review findings
+- answer-type match,
+- shortness,
+- candidate-bank consistency,
+- lexical overlap penalty,
+- external quality score,
+- relation-preservation bonus,
+- shared-fact-preservation bonus.
 
-## Status: overall good, but not yet ready for a serious GPU campaign
+The current repo is already close to this, but still incomplete.
 
-### Update after current CPU-only fixes (March 17, 2026)
+## Phase C — repair only failed rows
 
-The following items from this review are now fixed in the repo code:
+A good repair ladder is:
 
-- `Red-1`: route-disable semantics in `src/trainer/unlearn/dual_cf.py`
-- `Red-2`: duplicate-candidate bias in `src/tools/make_counterfactuals.py`
-- prompt-family coverage is no longer limited to `default` / `strict_short`; `duet_relation_safe` and `rwku_shared_fact_safe` were added in both HF and vLLM generation paths
-- `not {answer}` fallback was demoted to last-resort repair only
-- the vLLM/retry path now accepts `num_alternates` / `prompt_family`, normalizes multi-candidate payloads, and reranks retry candidates locally
+1. existing alternate,
+2. external sidecar candidates,
+3. candidate-bank neighbors,
+4. narrow numeric/date/ordinal fallback,
+5. second-pass generator call only for the remaining invalid rows.
 
-Still not fixed by the current patch:
+Do not regenerate all rows if only a small tail is bad.
 
-- `Red-3`: the reranker is still mostly surface-form-aware and does not yet use explicit relation-preservation or shared-fact-preservation scores
-- richer sidecar metadata for relation/shared-fact scoring is still a next-step Idea2 feature, not part of the current correctness patch
-- no GPU-backed generation, train smoke, or short train+eval validation was run yet
+## 8. Relation to Idea1: how the two ideas compose
 
-Your v3 plumbing is **substantially in place**:
+Idea2 should **not** change the routed core.
 
-- multi-alternate sidecars exist,
-- ranked alternate selection exists,
-- answer-type fallback exists,
-- multi-bank proxy attribution exists,
+The intended composition is:
+
+- Idea1 decides how hard/cautious to unlearn each sample.
+- Idea2 decides what the positive target should be for that sample.
+
+In other words:
+
+- difficulty and attribution decide the **magnitude and risk policy**,
+- verified multi-alternate supervision decides the **quality of the destination**.
+
+That makes the combined method much cleaner scientifically than mixing many optimizer-level changes at once.
+
+## 9. Minimal formal ablation tree
+
+To isolate the value of Idea2, the minimum ablation tree should be:
+
+1. **Current v3 artifact flow** (single best current alternate)
+2. **4 candidates + current reranker**
+3. **4 candidates + relation/shared-fact-aware reranker**
+4. **4 candidates + relation/shared-fact-aware reranker + dataset-specific prompts**
+5. Optional later: **top-2 soft mixture** instead of argmax single target
+
+To keep the story clean, do **not** introduce strong new optimizer changes at the same time.
+
+## 10. Expected empirical behavior
+
+## 10.1 On DUET
+
+Expected improvements:
+
+- utility should improve more than raw forgetting,
+- TruthfulQA-like behavior should improve first,
+- holdout/locality should stay strong,
+- forget ROUGE should stay similar or improve modestly,
+- trajectory should become smoother.
+
+Idea2 gains may be clearer on split-aware analysis than on a fully merged summary.
+
+## 10.2 On RWKU
+
+Expected improvements:
+
+- locality / neighbor preservation,
+- broad utility retention,
+- robustness of artifact validity,
+- cleaner forget-side behavior.
+
+More cautious expectation:
+
+- big gains on semantic forget metrics may still require your belief-suppression / localized-negative branch in addition to Idea2.
+
+## 11. Evaluation protocol
+
+Because this is still part of a controlled-unlearning claim, evaluation should not stop at endpoint metrics.
+
+### Primary task metrics
+
+- `forget_qa_rouge`
+- `holdout_qa_rouge`
+- `forget_qa_cos_sim`
+- `holdout_qa_cos_sim`
+- `utility_avg`
+- `truthfulqa_bin_200_acc`
+- `mmlu_pro_400_acc`
+- `arc_200_acc`
+- `winogrande_200_acc`
+
+### Trajectory metrics
+
+- time-to-threshold
+- `U@F_tau`
+- utility AUC
+- max drawdown
+- best-final gap
+- seed variance
+
+### Artifact-quality metrics (new for Idea2)
+
+These are important because Idea2 is directly about counterfactual quality.
+
+Per artifact build, log:
+
+- valid-row rate,
+- exact-match rate,
+- gold-substring rejection rate,
+- average candidate count,
+- repair-source counts,
+- sidecar coverage,
+- relation-safe coverage,
+- shared-fact-safe coverage,
+- fraction repaired by fallback rules.
+
+Without this, it will be hard to explain why one artifact regime helped more than another.
+
+## 12. Current implementation review against the updated repo dump
+
+## 12.1 What is genuinely in place
+
+Your current repo dump is **substantially more mature than early v2**. The following are real and aligned with the v3 plan:
+
+- multi-candidate sidecars and ranked picking exist,
+- candidate-bank fusion exists,
+- answer-type-aware fallback exists,
+- proxy retain maps now include syntax, semantic, and utility anchors,
 - belief-bank generation exists,
-- DualCFv3 / DualCFSAM configs exist,
-- prep scripts are properly staged,
-- validation tooling is much stronger than in early v2.
+- `DualCFv3` and `DualCFSAM` configs exist,
+- localized negative masking exists,
+- launchers expose belief/local-neg/SAM knobs,
+- validation notes in `dual_cf_integration_diff.md` are much stronger than before.
 
-So the repo is not in “broken prototype” state. It is in **“strong v3 skeleton, but several high-value corrections still needed”** state.
+So this is **not** a broken prototype. It is a real v3 scaffold.
 
-### Green (good / aligned with the plan)
+## 12.2 Where the current Idea2 review comments overstate the state of the code
 
-1. **Artifact-side multi-candidate support is real.**
-   `make_counterfactuals.py` now supports list-valued sidecars, external scores, provenance, vLLM generation, and prompt families.
+The most important finding from the actual repo-to-text dump is that **several “fixed in the current patch” comments in the older Idea2 note are ahead of the code**.
 
-2. **Counterfactual reranking exists.**
-   `pick_best_counterfactual_v3()` is a genuine candidate selector, not just first-valid fallback.
+### A. Route-disable semantics are still not neutralized in code
 
-3. **Repair path is much better than v2.**
-   `clean_counterfactuals.py` repools external candidates, bank candidates, and answer-type fallbacks.
-
-4. **Attribution side is much broader than v2.**
-   `build_proxy_retain_map.py` now carries syntax, semantic, and utility-anchor neighborhoods.
-
-5. **Belief suppression is correctly placed offline.**
-   `build_forget_belief_bank.py` writes `belief_candidates` / `belief_alternate` before training.
-
-### Yellow (partially implemented; scientifically right direction, but still incomplete)
-
-1. **Idea2 is only partially realized.**
-   The reranker still does not visibly use an explicit **relation-preservation** score or **shared-fact-preservation** score.
-
-2. **Prompt family coverage is still too narrow.**
-   Only `default` and `strict_short` are visible in the current generator path.
-   For Idea2 you need at least one DUET-specific and one RWKU-specific strict prompt family.
-
-   > Fixed in the current patch: `duet_relation_safe` and `rwku_shared_fact_safe` now exist in both HF and vLLM generation paths. What is still missing is semantic reranking that uses relation/shared-fact scores explicitly.
-
-3. **The external sidecar is underused.**
-   You already pass `scores`, but the richer semantics that should drive Idea2 are not yet represented explicitly.
-
-### Red (fix before GPU debugging)
-
-#### Red-1. Route-disable logic in `DualCF` is wrong
-
-Current behavior is effectively:
+Current `DualCF._routing_state()` still does:
 
 ```python
 if self.disable_difficulty_route:
@@ -3642,75 +3569,49 @@ difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
 risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
 ```
 
-That does **not** neutralize the routes.
+That means the ablations are still not clean:
 
-With default `tau_d=0.6`, `temp_d=0.15`, setting `difficulty=0` makes `difficulty_gate` very small, not `1.0`.
-With default `tau_a=0.6`, `temp_a=0.15`, setting `attribution=0` makes `risk_gate` small but not exactly `0.0`.
+- difficulty-off is not the same as `difficulty_gate = 1`,
+- attribution-off is not the same as `risk_gate = 0`.
 
-So:
+So the route-disable bug is **still present in the repo dump**.
 
-- `disable_difficulty_route` is not a clean “no difficulty routing” ablation,
-- `disable_attribution_route` is not a clean “no attribution routing” ablation.
+### B. Duplicate-candidate bias is still present
 
-### Fix
-
-```python
-difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
-risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
-
-if self.disable_difficulty_route:
-    difficulty_gate = torch.ones_like(difficulty_gate)
-if self.disable_attribution_route:
-    risk_gate = torch.zeros_like(risk_gate)
-
-difficulty_gate = difficulty_gate.pow(self.neg_power)
-risk_gate = risk_gate.pow(self.risk_power)
-```
-
-This is the **highest-priority bug** before any ablation.
-
-> Fixed in the current patch: disabled routes now force neutral gates directly (`difficulty_gate=1`, `risk_gate=0`) while preserving the raw artifact scores for logging.
-
-#### Red-2. Sidecar mode duplicates the first external candidate
-
-In sidecar mode, you currently do:
+The sidecar path still seeds:
 
 ```python
-external_candidates = _string_list(mapped_value)
 primary_candidates = external_candidates[:1] or external_candidates
 ```
 
-and later:
+and then `select_best_alternate()` appends both `primary_candidates` and `external_candidates` into the same pool.
 
-```python
-for candidate in primary_candidates:
-    candidate_pool.append(candidate)
-...
-for candidate in external_candidates:
-    candidate_pool.append(candidate)
-```
+That duplicates the first external candidate.
 
-So the first external candidate is inserted twice.
+The same pattern is still present in the vLLM primary path, where `response_candidates` are passed in both places.
 
-That biases ranking toward the first sidecar answer.
+So duplicate bias is **still present in the repo dump**.
 
-### Fix
+### C. Prompt-family coverage is still narrow in the actual generator code
 
-Either:
+The HF generator still only exposes:
 
-```python
-primary_candidates = []
-```
+- `default`
+- `strict_short`
 
-for sidecar mode,
+I do **not** see `duet_relation_safe` or `rwku_shared_fact_safe` in the actual generator prompt-family table from the repo-to-text dump.
 
-or dedupe the candidate pool before ranking.
+Also, the vLLM generator does not appear to take a `prompt_family` argument at all. It has a single generic system prompt and a small structured schema with:
 
-> Fixed in the current patch: sidecar mode no longer seeds `primary_candidates` from `external_candidates`, and candidate pools are deduped by cleaned text before ranking. The same fix also removed equivalent duplication in the vLLM path.
+- `alternate`
+- `same_relation`
+- `answer_type`
 
-#### Red-3. Idea2 review target is still more surface-form-safe than fact-structure-safe
+That means dataset-specific prompting is still not actually implemented in the dump you gave me.
 
-The current scoring uses:
+### D. The reranker is still surface-form-aware, not Idea2-aware
+
+Current `score_counterfactual_candidate()` still effectively uses:
 
 - type match,
 - shortness,
@@ -3718,135 +3619,125 @@ The current scoring uses:
 - external score,
 - overlap penalty.
 
-That is a solid v3 baseline, but it is **not yet the full Idea2 design** because it still lacks explicit scoring for:
+It literally drops `question` with:
+
+```python
+del question  # Relation-level checks remain an offline heuristic for now.
+```
+
+So the reranker still does **not** explicitly score:
 
 - relation preservation,
 - shared-fact preservation.
 
-This is exactly the part that is supposed to improve TruthfulQA / utility.
+This is the biggest remaining scientific gap for Idea2.
 
-> Still open after the current patch: the reranker remains a strong v3 baseline, but not the full Idea2 relation/shared-fact-aware reranker.
+### E. The fallback policy is still more permissive than the older note says
 
----
+`build_answer_type_fallback_candidates()` still includes:
 
-## The fix order I recommend
+```python
+if answer_type == "short_span":
+    ...
+    candidates.append(f"not {text}")
+```
 
-### Before GPU debug
+and those fallback candidates still enter the ordinary repair pool. So the `not {text}` fallback has **not** yet been fully demoted to a last-resort, low-confidence repair path.
 
-1. fix route-disable semantics in `dual_cf.py`
-2. fix duplicate-candidate bias in `make_counterfactuals.py`
-3. add `duet_relation_safe` and `rwku_shared_fact_safe` prompt families
-4. demote `not {answer}` fallback to last-resort only
-5. add a richer sidecar schema for relation/shared-fact metadata
+### F. Sidecar semantics are still too shallow for full Idea2
 
-Status after the current patch:
+The structured vLLM schema currently exposes:
 
-- items 1-4 are done
-- item 5 is still pending
+- `alternate`
+- `same_relation`
+- `answer_type`
 
-### Then do a tiny validation ladder
+That is useful, but it is still weaker than the richer Idea2 sidecar we want, which should support per-candidate arrays such as:
 
-For each of DUET rare and RWKU:
+- `scores`
+- `relation_scores`
+- `shared_fact_scores`
+- potentially candidate provenance or judge notes.
 
-1. build 16-row clean artifact,
-2. run `validate_dual_cf_artifact.py`,
-3. inspect:
-   - invalid counts,
-   - repair-source counts,
-   - external score coverage,
-   - relation/shared-fact tag coverage,
-4. run 1-step train smoke,
-5. run short train + eval,
-6. only then run the H100 ablation.
+So the external sidecar is still underpowered for full Idea2.
 
----
+## 12.3 What is still correctly claimed in `dual_cf_integration_diff.md`
 
-## The minimal ablation for Idea2
+Your updated `dual_cf_integration_diff.md` is mostly aligned with the repo dump on the major v3 facts:
 
-Do not blow up the search space yet. Use your best 8 split×LR cells.
+- trainer-side contract is unchanged,
+- multi-bank proxy maps exist,
+- belief-bank support exists,
+- localized negative masking exists,
+- `DualCFSAM` exists,
+- validation status still explicitly says GPU-backed attribution/generation and real short train/eval validation were not completed for this patch set.
 
-### Core ablations
+That is a good and honest integration note.
 
-1. **v2/v3 current single-best alternate**
-2. **4 candidates + current reranker**
-3. **4 candidates + relation/shared-fact-aware reranker**
-4. **4 candidates + relation/shared-fact-aware reranker + strict dataset prompts**
+The mismatch is mainly between:
 
-### What to compare
+- the **code dump**, and
+- the more optimistic “fixed now” comments inside the older Idea2 review note.
 
-Track:
+## 13. Fix order before GPU debugging
 
-- `forget_qa_rouge`
-- `holdout_qa_rouge`
-- `forget_qa_cos_sim`
-- `holdout_qa_cos_sim`
-- `utility_avg`
-- `truthfulqa_bin_200_acc`
-- `mmlu_pro_400_acc`
-- trajectory stability metrics
+1. **Fix route-disable semantics in `src/trainer/unlearn/dual_cf.py`**
+2. **Remove duplicate candidate bias in both sidecar and vLLM primary paths**
+3. **Add DUET- and RWKU-specific prompt families to both HF and vLLM generation paths**
+4. **Extend sidecar schema with per-candidate relation/shared-fact metadata**
+5. **Use those signals in `score_counterfactual_candidate()`**
+6. **Demote `not {text}` to genuine last-resort repair only**
+7. **Only then run the small GPU smoke and short-train validation ladder**
 
-### Expected movement
+## 14. Tiny validation ladder before the H100 campaign
 
-If Idea2 works:
+For each of:
 
-- `utility_avg` should improve,
-- `truthfulqa_bin_200_acc` should improve the most,
-- holdout/locality should stay strong,
-- forget ROUGE should stay similar or improve slightly,
-- forget cosine may improve a little, but the bigger cosine gains will likely still come from belief suppression / semantic negative work.
+- DUET rare,
+- DUET popular,
+- RWKU,
 
----
+run:
 
-## Final recommendation
+1. 16-row artifact build
+2. strict artifact validation
+3. artifact-quality report
+4. 1-step train smoke
+5. short train + eval
+6. only then the real sweep
 
-For your next serious run, do **not** change everything at once.
+The validation output should explicitly include:
 
-The cleanest next thesis step is:
+- invalid counts,
+- repair-source counts,
+- duplicate-candidate detection,
+- sidecar coverage,
+- relation/shared-fact metadata coverage.
 
-1. keep DualCF routing exactly as your current v3 intends,
-2. repair the two real logic bugs,
+## 15. Final recommendation
+
+The clean next thesis step is:
+
+1. keep the current routed DualCF v3 core,
+2. correct the remaining implementation mismatches,
 3. implement Idea2 as **verified multi-alternate counterfactual supervision**,
-4. run a controlled ablation against the current v3 artifact flow,
-5. only after that add belief-heavy or DualCFSAM-heavy combinations.
+4. run a controlled ablation against current v3,
+5. add heavier belief / SAM combinations only after the positive branch is fixed.
 
-That gives you the cleanest scientific story:
+That gives the cleanest scientific progression:
 
-- v1/v2: routing works,
-- v3: routing + broader artifact/control plumbing,
-- **Idea2**: better positive supervision improves utility without giving up locality.
-
----
+- **Idea1**: routing policy for controlled unlearning,
+- **v2/v3**: routed implementation with broader artifact plumbing,
+- **Idea2**: better positive supervision for utility-, truth-, and locality-preserving forgetting.
 
 ## References
 
-### Repo evidence
-
-- `dualcf_detailed_report.md` — current DualCF vs baselines summary
-- `dual_cf_integration_diff.md` — v2/v3 integration notes
-- `src/tools/make_counterfactuals.py`
-- `src/tools/clean_counterfactuals.py`
-- `src/tools/build_proxy_retain_map.py`
-- `src/tools/score_attribution.py`
-- `src/tools/build_forget_belief_bank.py`
-- `src/trainer/unlearn/dual_cf.py`
-- `configs/trainer/DualCFv3.yaml`
-
-### Papers / docs
-
-- AltPO: *Alternate Preference Optimization for Unlearning Factual Knowledge in Large Language Models*  
-  https://arxiv.org/abs/2409.13474
-
-- DUSK: *Do Not Unlearn Shared Knowledge*  
-  https://arxiv.org/abs/2505.15209
-
-- GUARD: *Gradient-aware Unlearning with Adaptive Retention Distribution*  
-  https://arxiv.org/abs/2506.10946
-
-- OpenAI Structured Outputs guide  
-  https://platform.openai.com/docs/guides/structured-outputs
-
-- OpenAI response_format JSON schema strict example  
-  https://platform.openai.com/docs/api-reference/chat/create
+- AltPO — Alternate Preference Optimization for Unlearning Factual Knowledge in Large Language Models
+- DUSK — Do Not Unlearn Shared Knowledge
+- GUARD — Guided Unlearning and Retention via Data Attribution for Large Language Models
+- Which Retain Set Matters? — A Case Study on Entity Unlearning
+- your `difficulty_attribution_counterfactual_unlearning_idea1_extended.md`
+- your `dual_cf_integration_diff.md`
 
 </content>
 

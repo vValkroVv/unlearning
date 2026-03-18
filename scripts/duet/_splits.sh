@@ -15,27 +15,37 @@ set_forget_retain_splits() {
     if [[ "${merge_flag}" != "1" ]]; then
         forget_retain_splits=("${DUET_SPLITS[@]}")
     else
-        declare -A merge_forget
-        declare -A merge_label
-        local pair forget retain base key
+        local pair forget retain base key retain_value found idx
+        local -a merge_keys=()
+        local -a merge_forgets=()
+        local -a merge_labels=()
         for pair in "${DUET_SPLITS[@]}"; do
             forget=$(echo "$pair" | cut -d' ' -f1)
             retain=$(echo "$pair" | cut -d' ' -f2)
             base=${forget/_rare_/_}
             base=${base/_popular_/_}
             key="${base}|${retain}"
-            if [[ -z "${merge_forget[$key]+x}" ]]; then
-                merge_forget[$key]="${forget}"
-            else
-                merge_forget[$key]="${merge_forget[$key]}+${forget}"
+            found=0
+            for idx in "${!merge_keys[@]}"; do
+                if [[ "${merge_keys[$idx]}" == "${key}" ]]; then
+                    merge_forgets[$idx]="${merge_forgets[$idx]}+${forget}"
+                    found=1
+                    break
+                fi
+            done
+            if [[ "${found}" != "1" ]]; then
+                merge_keys+=("${key}")
+                merge_forgets+=("${forget}")
+                merge_labels+=("${base}")
             fi
-            merge_label[$key]="${base}"
         done
 
         forget_retain_splits=()
-        for key in "${!merge_forget[@]}"; do
-            retain=${key#*|}
-            forget_retain_splits+=("${merge_forget[$key]} ${retain} ${merge_label[$key]}")
+        for idx in "${!merge_keys[@]}"; do
+            retain_value=${merge_keys[$idx]#*|}
+            forget_retain_splits+=(
+                "${merge_forgets[$idx]} ${retain_value} ${merge_labels[$idx]}"
+            )
         done
     fi
 

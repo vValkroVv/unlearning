@@ -29,6 +29,15 @@ UTILITY_SYSTEM_INSTRUCTION=${UTILITY_SYSTEM_INSTRUCTION:-null}
 EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
 BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-}
 
+resolve_path_portable() {
+  python - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+}
+
 normalize_model_config_name() {
   local raw="${1:-}"
   raw="${raw##*/}"
@@ -147,7 +156,7 @@ evaluate_label() {
 
 BASE_MODEL_CFG=$(normalize_model_config_name "${BASE_MODEL_CFG_RAW}")
 LORA_MODEL_CFG=$(normalize_model_config_name "${LORA_MODEL_CFG_RAW}")
-UTILITY_ROOT=$(realpath -m "${UTILITY_ROOT}")
+UTILITY_ROOT=$(resolve_path_portable "${UTILITY_ROOT}")
 LORA_MODEL_SUBFOLDER_VALUE=${LORA_BASE_MODEL_SUBFOLDER}
 
 if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then

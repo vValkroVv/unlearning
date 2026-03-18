@@ -27,7 +27,15 @@ class RetryInvalidCounterfactualsTest(unittest.TestCase):
         )
 
     def test_choose_retry_alternate_reranks_multi_candidate_response(self) -> None:
-        alternate, candidates, scores, pick_meta = (
+        (
+            alternate,
+            candidates,
+            scores,
+            relation_scores,
+            shared_fact_scores,
+            sources,
+            pick_meta,
+        ) = (
             retry_invalid_counterfactuals.choose_retry_alternate(
                 self._args(),
                 {
@@ -38,6 +46,9 @@ class RetryInvalidCounterfactualsTest(unittest.TestCase):
                 {
                     "alternates": ["1998", "2001"],
                     "scores": [0.1, 0.9],
+                    "relation_scores": [0.5, 1.0],
+                    "shared_fact_scores": [0.6, 1.0],
+                    "candidate_sources": ["sidecar", "sidecar"],
                     "answer_type": "year",
                 },
             )
@@ -45,6 +56,9 @@ class RetryInvalidCounterfactualsTest(unittest.TestCase):
         self.assertEqual(alternate, "2001")
         self.assertEqual(candidates, ["1998", "2001"])
         self.assertEqual(scores, [0.1, 0.9])
+        self.assertEqual(relation_scores, [0.5, 1.0])
+        self.assertEqual(shared_fact_scores, [0.6, 1.0])
+        self.assertEqual(sources, ["sidecar", "sidecar"])
         self.assertEqual(pick_meta["external_score"], 0.9)
 
     def test_main_persists_retry_metadata_for_multi_candidate_response(self) -> None:
@@ -66,6 +80,9 @@ class RetryInvalidCounterfactualsTest(unittest.TestCase):
                         {
                             "alternates": ["1998", "2001"],
                             "scores": [0.1, 0.9],
+                            "relation_scores": [0.4, 1.0],
+                            "shared_fact_scores": [0.5, 1.0],
+                            "candidate_sources": ["sidecar", "sidecar"],
                             "same_relation": True,
                             "answer_type": "year",
                         }
@@ -102,6 +119,11 @@ class RetryInvalidCounterfactualsTest(unittest.TestCase):
             self.assertEqual(saved_row["alternate"], "2001")
             self.assertEqual(saved_row["cf_retry_last_alternates"], ["1998", "2001"])
             self.assertEqual(saved_row["cf_retry_last_scores"], [0.1, 0.9])
+            self.assertEqual(saved_row["cf_retry_last_relation_scores"], [0.4, 1.0])
+            self.assertEqual(saved_row["cf_retry_last_shared_fact_scores"], [0.5, 1.0])
+            self.assertEqual(saved_row["cf_retry_last_sources"], ["sidecar", "sidecar"])
+            self.assertEqual(saved_row["external_alternate_sources"], ["sidecar", "sidecar"])
+            self.assertEqual(saved_row["cf_pick_meta"]["selected_source"], "sidecar")
             self.assertTrue(saved_row["cf_retry_success"])
 
 

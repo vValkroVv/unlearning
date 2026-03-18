@@ -1,6 +1,8 @@
+import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,8 +14,9 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import AutoModelForCausalLM, LlamaConfig, PreTrainedTokenizerFast
 
 
-REPO_ROOT = Path("/workspace/unlearning")
-PYTHON_BIN = REPO_ROOT / ".venv/bin/python"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PYTHON_BIN = Path(sys.executable)
+LM_EVAL_AVAILABLE = importlib.util.find_spec("lm_eval") is not None
 
 
 def write_jsonl(path: Path, rows) -> None:
@@ -259,6 +262,7 @@ class UtilityPipelineTest(unittest.TestCase):
             self.assertEqual(stats["sources"]["mmlu_pro"]["excluded_due_overlap"], 1)
             self.assertEqual(stats["sources"]["truthfulqa_binary"]["excluded_due_overlap"], 1)
 
+    @unittest.skipUnless(LM_EVAL_AVAILABLE, "lm_eval package is not installed")
     def test_utility_eval_and_merge_smoke(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -414,6 +418,7 @@ class UtilityPipelineTest(unittest.TestCase):
             self.assertEqual(trajectory["endpoint_label"], "final")
             self.assertEqual(trajectory["u_at_forget_tau"]["label"], "final")
 
+    @unittest.skipUnless(LM_EVAL_AVAILABLE, "lm_eval package is not installed")
     def test_utility_eval_uses_last_checkpoint_as_final_proxy(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

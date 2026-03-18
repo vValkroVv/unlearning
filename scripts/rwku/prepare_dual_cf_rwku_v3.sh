@@ -88,7 +88,12 @@ GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
 GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
 GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
 NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+PROMPT_FAMILY=${PROMPT_FAMILY:-rwku_shared_fact_safe}
+MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
+if [[ "${GENERATOR_BACKEND}" == "vllm_openai" && "${NUM_ALTERNATES}" != "1" ]]; then
+  export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
+fi
 
 DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
 ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
@@ -126,6 +131,9 @@ UTILITY_ANCHOR_JSONL=${UTILITY_ANCHOR_JSONL:-}
 CF_SIDECAR_JSONL=${CF_SIDECAR_JSONL:-}
 CF_SIDECAR_ALTERNATE_KEY=${CF_SIDECAR_ALTERNATE_KEY:-alternates}
 CF_SIDECAR_SCORE_KEY=${CF_SIDECAR_SCORE_KEY:-scores}
+CF_SIDECAR_RELATION_SCORE_KEY=${CF_SIDECAR_RELATION_SCORE_KEY:-relation_scores}
+CF_SIDECAR_SHARED_FACT_SCORE_KEY=${CF_SIDECAR_SHARED_FACT_SCORE_KEY:-shared_fact_scores}
+CF_SIDECAR_SOURCE_KEY=${CF_SIDECAR_SOURCE_KEY:-candidate_sources}
 
 RAW_CF=${OUT_DIR}/step1_counterfactuals_raw_v3.jsonl
 CLEAN_CF=${OUT_DIR}/step1b_counterfactuals_clean_v3.jsonl
@@ -134,6 +142,7 @@ PROXY_MAP_JSONL=${OUT_DIR}/step2b_proxy_map_v3.jsonl
 ATTR_JSONL=${OUT_DIR}/step3_attribution_raw_v3.jsonl
 BELIEF_JSONL=${OUT_DIR}/step3b_belief_raw_v3.jsonl
 FINAL_JSONL=${OUT_DIR}/dualcf_${FORGET_SPLIT}_v3.jsonl
+ARTIFACT_REPORT_JSON=${OUT_DIR}/step4_artifact_report_v3.json
 
 stop_after_clean_cf="${STOP_AFTER_CLEAN_CF:-0}"
 skip_cf_generation="${SKIP_CF_GENERATION:-0}"
@@ -146,6 +155,9 @@ retry_invalid_cf_batch_size="${RETRY_INVALID_CF_BATCH_SIZE:-${GENERATOR_BATCH_SI
 clean_extra_args=()
 if [[ "${drop_invalid_after_clean}" == "1" ]]; then
   clean_extra_args+=(--drop-invalid)
+fi
+if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
+  clean_extra_args+=(--allow-low-confidence-fallback)
 fi
 
 make_cf_args=(
@@ -167,17 +179,24 @@ make_cf_args=(
   --num-alternates "${NUM_ALTERNATES}"
   --prompt-family "${PROMPT_FAMILY}"
   --repair-invalid
+  --max-examples "${MAX_EXAMPLES}"
   --reject-gold-substring
   --require-short-answer
   --max-overlap-ratio 0.85
   --max-alt-length-chars 128
 )
+if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
+  make_cf_args+=(--allow-low-confidence-fallback)
+fi
 if [[ -n "${CF_SIDECAR_JSONL}" ]]; then
   make_cf_args+=(
     --alternate-jsonl "${CF_SIDECAR_JSONL}"
     --mapping-key index
     --mapping-alternate-key "${CF_SIDECAR_ALTERNATE_KEY}"
     --external-score-key "${CF_SIDECAR_SCORE_KEY}"
+    --external-relation-score-key "${CF_SIDECAR_RELATION_SCORE_KEY}"
+    --external-shared-fact-score-key "${CF_SIDECAR_SHARED_FACT_SCORE_KEY}"
+    --external-source-key "${CF_SIDECAR_SOURCE_KEY}"
     --allow-list-alternates
   )
 fi
@@ -248,6 +267,7 @@ python "${repo_root}/src/tools/score_difficulty.py" \
   --question-key "${QUESTION_KEY}" \
   --answer-key "${ANSWER_KEY}" \
   --batch-size "${DIFFICULTY_BATCH_SIZE}" \
+  --max-examples "${MAX_EXAMPLES}" \
   --model-cfg "${MODEL_CFG}" \
   --model-path "${BASE_MODEL_PATH}" \
   --tokenizer-path "${BASE_MODEL_PATH}" \
@@ -288,6 +308,7 @@ python "${repo_root}/src/tools/build_proxy_retain_map.py" \
   --output-path "${PROXY_MAP_JSONL}" \
   --forget-question-key "${QUESTION_KEY}" \
   --retain-question-key "${QUESTION_KEY}" \
+  --max-examples "${MAX_EXAMPLES}" \
   --top-k 16 \
   --fallback-top-k 8 \
   --semantic-top-k "${SEMANTIC_TOP_K}" \
@@ -310,6 +331,7 @@ python "${repo_root}/src/tools/score_attribution.py" \
   --output-path "${ATTR_JSONL}" \
   --question-key "${QUESTION_KEY}" \
   --retain-batch-size "${ATTR_RETAIN_BATCH_SIZE}" \
+  --forget-max-examples "${MAX_EXAMPLES}" \
   --retain-max-steps "${ATTR_RETAIN_MAX_STEPS}" \
   --forget-max-steps "${ATTR_FORGET_MAX_STEPS}" \
   --retain-proxy-mode multi_bank \
@@ -368,6 +390,7 @@ python "${repo_root}/src/tools/validate_dual_cf_artifact.py" \
   --require-short-answer \
   --max-alt-length-chars 128 \
   --check-overlap-ratio 0.85 \
-  --strict
+  --strict \
+  --report-path "${ARTIFACT_REPORT_JSON}"
 
 echo "[prepare_dual_cf_rwku_v3] Final artifact: ${FINAL_JSONL}"

@@ -48,7 +48,7 @@ fi
 
 echo "[rwku][DualCF] Using Hugging Face base checkpoint ${base_model_path}"
 
-experiment="${EXPERIMENT:-unlearn/rwku/dual_cf_v2_lora.yaml}"
+experiment="${EXPERIMENT:-unlearn/rwku/dual_cf_v3_lora.yaml}"
 trainer="${TRAINER:-DualCF}"
 method_name="${METHOD_NAME:-dual_cf}"
 run_label="${RUN_LABEL:-DualCF}"

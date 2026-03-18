@@ -21,6 +21,7 @@ class DualCFV3CounterfactualSelectionTest(unittest.TestCase):
     def _args(self, **overrides):
         values = {
             "repair_invalid": True,
+            "allow_low_confidence_fallback": False,
             "reject_gold_substring": True,
             "max_overlap_ratio": 0.85,
             "require_short_answer": True,
@@ -52,6 +53,7 @@ class DualCFV3CounterfactualSelectionTest(unittest.TestCase):
         self.assertIsNone(invalid_reason)
         self.assertTrue(repaired)
         self.assertEqual(best_meta["external_score"], 0.9)
+        self.assertEqual(best_meta["candidate_pool_size"], 2)
 
     def test_select_best_alternate_dedupes_external_candidates_before_ranking(self) -> None:
         best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
@@ -68,6 +70,61 @@ class DualCFV3CounterfactualSelectionTest(unittest.TestCase):
         self.assertIsNone(invalid_reason)
         self.assertFalse(repaired)
         self.assertEqual(best_meta["external_score"], 0.9)
+        self.assertEqual(best_meta["duplicate_candidates_removed"], 1)
+
+    def test_relation_and_shared_fact_scores_can_break_external_score_ties(self) -> None:
+        best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
+            args=self._args(repair_invalid=False, reject_gold_substring=False),
+            question="When was the event?",
+            answer="1999",
+            seed=3,
+            primary_candidates=[],
+            row_candidates=[],
+            external_candidates=["1998", "2001"],
+            external_scores=[0.5, 0.5],
+            external_relation_scores=[0.1, 1.0],
+            external_shared_fact_scores=[0.1, 1.0],
+            external_sources=["sidecar", "sidecar"],
+        )
+        self.assertEqual(best_alt, "2001")
+        self.assertIsNone(invalid_reason)
+        self.assertTrue(repaired)
+        self.assertEqual(best_meta["relation_score"], 1.0)
+        self.assertEqual(best_meta["shared_fact_score"], 1.0)
+        self.assertEqual(best_meta["selected_source"], "sidecar")
+
+    def test_low_confidence_fallback_requires_explicit_flag(self) -> None:
+        best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
+            args=self._args(
+                reject_gold_substring=False,
+                allow_low_confidence_fallback=False,
+            ),
+            question="What is the capital of France?",
+            answer="Paris",
+            seed=0,
+            primary_candidates=[],
+            row_candidates=[],
+        )
+        self.assertEqual(best_alt, "")
+        self.assertEqual(invalid_reason, "empty")
+        self.assertFalse(repaired)
+        self.assertEqual(best_meta["invalid_reason"], "no_candidates")
+
+        best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
+            args=self._args(
+                reject_gold_substring=False,
+                allow_low_confidence_fallback=True,
+            ),
+            question="What is the capital of France?",
+            answer="Paris",
+            seed=0,
+            primary_candidates=[],
+            row_candidates=[],
+        )
+        self.assertEqual(best_alt, "not Paris")
+        self.assertIsNone(invalid_reason)
+        self.assertTrue(repaired)
+        self.assertTrue(best_meta["used_low_confidence_fallback"])
 
     def test_low_confidence_not_fallback_is_separate_from_primary_fallbacks(self) -> None:
         self.assertEqual(build_answer_type_fallback_candidates("Paris", seed=0), [])

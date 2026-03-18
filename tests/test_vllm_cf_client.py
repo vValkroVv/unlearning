@@ -20,7 +20,7 @@ class VLLMCFClientTest(unittest.TestCase):
             "api_key": "EMPTY",
             "model": "dummy-model",
             "prompt_family": "strict_short",
-            "num_alternates": 4,
+            "num_alternates": 1,
         }
         values.update(overrides)
         return VLLMCFGenerator(**values)
@@ -35,6 +35,7 @@ class VLLMCFClientTest(unittest.TestCase):
         self.assertEqual(payload["alternate"], "Milan")
         self.assertEqual(payload["alternates"], ["Milan"])
         self.assertEqual(payload["scores"], [])
+        self.assertEqual(payload["candidate_sources"], [])
 
     def test_parse_single_json_response_is_backward_compatible(self) -> None:
         generator = self._generator()
@@ -70,6 +71,26 @@ class VLLMCFClientTest(unittest.TestCase):
             )
         self.assertIn("shared facts", messages[0]["content"])
         self.assertIn("Generate up to 3", messages[1]["content"])
+        self.assertIn("candidate_sources", messages[0]["content"])
+
+    def test_parse_multi_json_response_preserves_relation_and_shared_fact_scores(self) -> None:
+        generator = self._generator()
+        payload = generator._parse_payload(
+            '{"alternates":["Milan","Turin"],'
+            '"scores":[0.2,0.9],'
+            '"relation_scores":[1.0,0.7],'
+            '"shared_fact_scores":[0.9,0.6],'
+            '"candidate_sources":["sidecar","vllm_generated"],'
+            '"same_relation":true,"answer_type":"city"}'
+        )
+        self.assertEqual(payload["relation_scores"], [1.0, 0.7])
+        self.assertEqual(payload["shared_fact_scores"], [0.9, 0.6])
+        self.assertEqual(payload["candidate_sources"], ["sidecar", "vllm_generated"])
+
+    def test_multi_alternate_requires_structured_outputs(self) -> None:
+        with mock.patch.dict(os.environ, {"VLLM_USE_STRUCTURED_OUTPUTS": "0"}, clear=False):
+            with self.assertRaises(ValueError):
+                self._generator(num_alternates=2)
 
 
 if __name__ == "__main__":

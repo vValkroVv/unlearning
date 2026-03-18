@@ -12,7 +12,12 @@ SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from tools.dual_cf_artifact_utils import percentile_rank, read_jsonl, save_jsonl
+from tools.dual_cf_artifact_utils import (
+    build_artifact_quality_report,
+    percentile_rank,
+    read_jsonl,
+    save_jsonl,
+)
 
 
 def log(message: str) -> None:
@@ -29,6 +34,7 @@ def parse_args():
     parser.add_argument("--attribution-out", default="attribution_score")
     parser.add_argument("--method", choices=("percentile",), default="percentile")
     parser.add_argument("--sidecar-path", default=None)
+    parser.add_argument("--report-path", default=None)
     return parser.parse_args()
 
 
@@ -56,6 +62,13 @@ def main():
     save_jsonl(rows, args.output_path)
     log(f"Saved calibrated rows={len(rows)} path={args.output_path}")
 
+    report = build_artifact_quality_report(
+        rows,
+        question_key="question" if rows and "question" in rows[0] else "query",
+        answer_key="answer",
+        alternate_key="alternate",
+    )
+
     if args.sidecar_path:
         sidecar = {
             "rows": len(rows),
@@ -68,10 +81,15 @@ def main():
             "difficulty_raw_max": max(difficulty_values),
             "attribution_raw_min": min(attribution_values),
             "attribution_raw_max": max(attribution_values),
+            "artifact_quality": report,
         }
         with open(args.sidecar_path, "w", encoding="utf-8") as handle:
             json.dump(sidecar, handle, indent=2, ensure_ascii=True)
         log(f"Saved sidecar to {args.sidecar_path}")
+    if args.report_path not in (None, "", "null", "None"):
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=True)
+        log(f"Saved artifact-quality report to {args.report_path}")
 
 
 if __name__ == "__main__":

@@ -52,6 +52,19 @@ def _normalize_scores(value: Any, expected_length: int) -> list[Any]:
     return normalized
 
 
+def _normalize_optional_text_list(value: Any, expected_length: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[Any] = []
+    for raw_value in value[:expected_length]:
+        text = str(raw_value or "").strip()
+        normalized.append(text or None)
+    if len(normalized) < expected_length:
+        normalized.extend([None] * (expected_length - len(normalized)))
+    return normalized
+
+
 @dataclass
 class VLLMCFGenerator:
     base_url: str
@@ -71,6 +84,10 @@ class VLLMCFGenerator:
             in {"1", "true", "yes"}
         )
         candidate_limit = max(1, int(self.num_alternates))
+        if candidate_limit > 1 and not self.use_structured_outputs:
+            raise ValueError(
+                "Multi-alternate vLLM generation requires VLLM_USE_STRUCTURED_OUTPUTS=1."
+            )
         self.schema = {
             "type": "object",
             "additionalProperties": False,
@@ -88,6 +105,18 @@ class VLLMCFGenerator:
                 "scores": {
                     "type": "array",
                     "items": {"type": "number"},
+                },
+                "relation_scores": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                },
+                "shared_fact_scores": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                },
+                "candidate_sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
                 },
                 "same_relation": {"type": "boolean"},
                 "answer_type": {"type": "string"},
@@ -153,6 +182,7 @@ class VLLMCFGenerator:
         if self.use_structured_outputs:
             system += (
                 "\n6. Return valid JSON only with keys `alternates`, optional `scores`, "
+                "`relation_scores`, `shared_fact_scores`, optional `candidate_sources`, "
                 "`same_relation`, and `answer_type`."
             )
         else:
@@ -170,7 +200,8 @@ class VLLMCFGenerator:
             if self.use_structured_outputs:
                 user += (
                     f"Select up to {max(1, int(self.num_alternates))} best short alternatives from the candidate list "
-                    "or minimal rewrites of that list. If you provide `scores`, align them with `alternates`."
+                    "or minimal rewrites of that list. If you provide `scores`, `relation_scores`, "
+                    "`shared_fact_scores`, or `candidate_sources`, align them with `alternates`."
                 )
             else:
                 user += (
@@ -206,16 +237,34 @@ class VLLMCFGenerator:
         *,
         alternates: Sequence[Any],
         scores: Sequence[Any] | None = None,
+        relation_scores: Sequence[Any] | None = None,
+        shared_fact_scores: Sequence[Any] | None = None,
+        candidate_sources: Sequence[Any] | None = None,
         same_relation: bool = True,
         answer_type: str = "unknown",
     ) -> Dict[str, Any]:
         normalized_alternates = _normalize_alternates(list(alternates))
         normalized_scores = _normalize_scores(scores, len(normalized_alternates))
+        normalized_relation_scores = _normalize_scores(
+            relation_scores,
+            len(normalized_alternates),
+        )
+        normalized_shared_fact_scores = _normalize_scores(
+            shared_fact_scores,
+            len(normalized_alternates),
+        )
+        normalized_candidate_sources = _normalize_optional_text_list(
+            candidate_sources,
+            len(normalized_alternates),
+        )
         alternate = normalized_alternates[0] if normalized_alternates else ""
         return {
             "alternate": alternate,
             "alternates": normalized_alternates,
             "scores": normalized_scores,
+            "relation_scores": normalized_relation_scores,
+            "shared_fact_scores": normalized_shared_fact_scores,
+            "candidate_sources": normalized_candidate_sources,
             "same_relation": bool(same_relation),
             "answer_type": str(answer_type),
         }
@@ -291,6 +340,9 @@ class VLLMCFGenerator:
             scores=payload.get("scores"),
             same_relation=bool(payload.get("same_relation", bool(normalized_alternates))),
             answer_type=str(payload.get("answer_type", "invalid_schema")),
+            relation_scores=payload.get("relation_scores"),
+            shared_fact_scores=payload.get("shared_fact_scores"),
+            candidate_sources=payload.get("candidate_sources"),
         )
 
     async def many(self, rows: Sequence[Dict[str, Any]]) -> list[Dict[str, Any]]:

@@ -64,7 +64,7 @@ if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
     extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
 fi
 
-experiment="${EXPERIMENT:-unlearn/duet/dual_cf_v2_lora.yaml}"
+experiment="${EXPERIMENT:-unlearn/duet/dual_cf_v3_lora.yaml}"
 trainer="${TRAINER:-DualCF}"
 method_name="${METHOD_NAME:-dual_cf}"
 run_label="${RUN_LABEL:-DualCF}"

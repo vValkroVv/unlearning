@@ -1,12 +1,24 @@
-# Production DualCF GPU Runs (v2)
+# Production DualCF GPU Runs (v3 / Idea2)
 
-This runbook is for the DualCF v2 iteration:
+This runbook is for the DualCF v3 / Idea2 iteration:
 
 - clean counterfactuals first
 - percentile-calibrate routing offline
 - use hybrid retain attribution
 - run DUET `rare -> popular -> merged`
 - save / evaluate half-epoch checkpoints
+
+Validation status for this runbook refresh:
+
+- completed locally without GPUs:
+  - `python -m unittest discover -s tests -p 'test_*.py'` -> `OK (skipped=3)`
+- note:
+  - the three skipped tests require the optional `lm_eval` package
+- not completed for this refresh:
+  - GPU-backed vLLM generation checks
+  - GPU-backed attribution scoring
+  - prep smokes against a live GPU server
+  - train / eval runs
 
 The validation profile below is the workspace-tested small-model setup:
 
@@ -206,10 +218,14 @@ In the training shell:
 export VLLM_BASE_URL=http://127.0.0.1:8000/v1
 export VLLM_API_KEY=EMPTY
 export VLLM_MODEL=Qwen/Qwen3-1.7B
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
 ```
 
-After all `step1b_counterfactuals_clean.jsonl` files are ready, stop the vLLM
-server to free GPU memory before the Llama scoring / training steps.
+Because the default v3 path uses `NUM_ALTERNATES=4`, keep structured outputs on
+unless you intentionally drop back to the legacy single-alternate mode.
+
+After all `step1b_counterfactuals_clean_v3.jsonl` files are ready, stop the
+vLLM server to free GPU memory before the Llama scoring / training steps.
 
 ## Artifact prep
 
@@ -220,8 +236,8 @@ Each prep script now supports a two-phase flow:
 - `SKIP_CF_GENERATION=1`:
   reuse the cleaned counterfactual file and run the Llama scoring stages
 - `REBUILD_CLEAN_CF=1`:
-  rebuild `step1b_counterfactuals_clean.jsonl` from the saved raw Qwen output
-  before scoring
+  rebuild `step1b_counterfactuals_clean_v3.jsonl` from the saved raw Qwen
+  output before scoring
 
 `DROP_INVALID_AFTER_CLEAN=1` is the default and should be left on for the
 validation profile. This drops rows that still fail strict alternate-answer
@@ -235,16 +251,30 @@ Use the additive v3 prep scripts when you want:
 - multi-bank attribution with semantic and utility anchors
 - offline belief-bank generation before calibration
 
+Runtime note:
+
+- sidecar mode supports real multi-alternate selection directly
+- `vllm_openai` with `NUM_ALTERNATES>1` now fails fast unless
+  `VLLM_USE_STRUCTURED_OUTPUTS=1`
+- plain-text vLLM remains supported only for the legacy
+  `NUM_ALTERNATES=1` path
+
 Common v3 env additions:
 
 ```bash
 export UTILITY_ANCHOR_JSONL="${UTILITY_ROOT}/utility_qa_anchor_v3.jsonl"
 export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-export PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+export MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+export ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
 export BELIEF_MAX_NEW_TOKENS=${BELIEF_MAX_NEW_TOKENS:-16}
 export BELIEF_NUM_RETURN_SEQUENCES=${BELIEF_NUM_RETURN_SEQUENCES:-3}
 export BELIEF_NUM_BEAMS=${BELIEF_NUM_BEAMS:-4}
 ```
+
+Leave `PROMPT_FAMILY` unset unless you need to override the script defaults:
+
+- DUET defaults to `duet_relation_safe`
+- RWKU defaults to `rwku_shared_fact_safe`
 
 Optional external sidecar wiring for verified multi-alternate CFs:
 
@@ -252,6 +282,9 @@ Optional external sidecar wiring for verified multi-alternate CFs:
 export CF_SIDECAR_JSONL=/abs/path/to/counterfactual_sidecar.jsonl
 export CF_SIDECAR_ALTERNATE_KEY=alternates
 export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
 ```
 
 Then replace the prep entrypoint:
@@ -265,20 +298,41 @@ The v3 scripts preserve the existing two-phase flow:
 - `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
 - `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
 
+The standard train launchers now default to the v3 experiment configs:
+
+- `scripts/duet/dual_cf_duet.sh` -> `unlearn/duet/dual_cf_v3_lora.yaml`
+- `scripts/rwku/dual_cf_rwku.sh` -> `unlearn/rwku/dual_cf_v3_lora.yaml`
+
+Phase B also writes artifact-quality reports:
+
+- `${OUT_DIR}/step4_calibration_stats_v3.json` from
+  `calibrate_dual_cf_scores.py --sidecar-path ...`, including
+  `artifact_quality`
+- `${OUT_DIR}/step4_artifact_report_v3.json` from
+  `validate_dual_cf_artifact.py --report-path ...`
+
 ### Phase A: Qwen clean counterfactuals only
 
 Run these while the vLLM server is up.
+
+```bash
+export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
+export MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+export ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
+```
 
 ### DUET rare
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_LABEL=rare
-export OUT_DIR=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2
+export OUT_DIR=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+scripts/duet/prepare_dual_cf_duet_v3.sh
 ```
 
 ### DUET popular
@@ -286,11 +340,12 @@ scripts/duet/prepare_dual_cf_duet_v2.sh
 ```bash
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_LABEL=popular
-export OUT_DIR=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v2
+export OUT_DIR=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+scripts/duet/prepare_dual_cf_duet_v3.sh
 ```
 
 ### DUET merged
@@ -300,11 +355,12 @@ Run this only after rare and popular are clean.
 ```bash
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_LABEL=merged
-export OUT_DIR=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v2
+export OUT_DIR=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+scripts/duet/prepare_dual_cf_duet_v3.sh
 ```
 
 ### RWKU
@@ -313,15 +369,16 @@ scripts/duet/prepare_dual_cf_duet_v2.sh
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
-export OUT_DIR=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2
+export OUT_DIR=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-rwku_shared_fact_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/rwku/prepare_dual_cf_rwku_v2.sh
+scripts/rwku/prepare_dual_cf_rwku_v3.sh
 ```
 
-After all `step1b_counterfactuals_clean.jsonl` files are written, stop the vLLM
-server and confirm the GPU is free before continuing.
+After all `step1b_counterfactuals_clean_v3.jsonl` files are written, stop the
+vLLM server and confirm the GPU is free before continuing.
 
 ### Phase B: Llama scoring / calibration only
 
@@ -349,13 +406,18 @@ The scoring stages use:
 
 ## DUET training
 
+The ablation wrappers keep their historical `*_v2.sh` names, but the `full`,
+`d_only`, `a_only`, and `dpo` DualCF paths now delegate into
+`scripts/duet/dual_cf_duet.sh` and `scripts/rwku/dual_cf_rwku.sh`, which
+default to the v3 experiment configs.
+
 ### Full DualCF
 
 Rare:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v3/dualcf_rare_v3.jsonl
 export METHOD_VARIANT=full
 export FORGET_LABEL=rare
 export MAX_STEPS=0
@@ -367,7 +429,7 @@ Popular:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v2/dualcf_popular_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v3/dualcf_popular_v3.jsonl
 export METHOD_VARIANT=full
 export FORGET_LABEL=popular
 export MAX_STEPS=0
@@ -379,7 +441,7 @@ Merged:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v2/dualcf_merged_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v3/dualcf_merged_v3.jsonl
 export METHOD_VARIANT=full
 export FORGET_LABEL=merged
 export MAX_STEPS=0
@@ -439,7 +501,7 @@ Every method variant above uses the same trajectory-saving behavior:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2/dualcf_forget_level2_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v3/dualcf_forget_level2_v3.jsonl
 export METHOD_VARIANT=full
 export MAX_STEPS=0
 

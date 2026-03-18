@@ -10,7 +10,6 @@ from trainer.unlearn.npo import NPO
 from trainer.unlearn.npo_sam import NPOSAM
 from trainer.unlearn.dpo import DPO
 from trainer.unlearn.simnpo import SimNPO
-from trainer.unlearn.rmu import RMU
 from trainer.unlearn.undial import UNDIAL
 from trainer.unlearn.ceu import CEU
 from trainer.unlearn.satimp import SatImp
@@ -30,6 +29,18 @@ from trainer.callbacks import JsonlTraceCallback
 import logging
 
 logger = logging.getLogger(__name__)
+OPTIONAL_TRAINER_IMPORT_ERRORS: Dict[str, Exception] = {}
+
+try:
+    from trainer.unlearn.rmu import RMU
+except ModuleNotFoundError as exc:
+    if exc.name != "deepspeed":
+        raise
+    RMU = None
+    OPTIONAL_TRAINER_IMPORT_ERRORS["RMU"] = exc
+    logger.warning(
+        "Skipping RMU trainer registration because optional dependency `deepspeed` is not installed."
+    )
 
 TRAINER_REGISTRY: Dict[str, Any] = {}
 
@@ -73,6 +84,11 @@ def load_trainer(
         f"{trainer_handler_name} handler not set"
     )
     trainer_cls = TRAINER_REGISTRY.get(trainer_handler_name, None)
+    if trainer_cls is None and trainer_handler_name in OPTIONAL_TRAINER_IMPORT_ERRORS:
+        raise ModuleNotFoundError(
+            f"{trainer_handler_name} requires an optional dependency that is not installed. "
+            "Install `deepspeed` to use this trainer."
+        ) from OPTIONAL_TRAINER_IMPORT_ERRORS[trainer_handler_name]
     assert trainer_cls is not None, NotImplementedError(
         f"{trainer_handler_name} not implemented or not registered"
     )
@@ -106,7 +122,8 @@ _register_trainer(NPO)
 _register_trainer(NPOSAM)
 _register_trainer(DPO)
 _register_trainer(SimNPO)
-_register_trainer(RMU)
+if RMU is not None:
+    _register_trainer(RMU)
 _register_trainer(UNDIAL)
 _register_trainer(CEU)
 _register_trainer(SatImp)

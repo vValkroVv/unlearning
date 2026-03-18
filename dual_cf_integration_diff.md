@@ -84,6 +84,89 @@ Validation status for this v3 patch set:
   - end-to-end belief generation against a real checkpoint
   - 1-step or short functional train/eval runs
 
+## Idea2 verified multi-candidate artifact sync (2026-03-18)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `src/tools/make_counterfactuals.py`
+- `src/tools/vllm_cf_client.py`
+- `src/tools/clean_counterfactuals.py`
+- `src/tools/retry_invalid_counterfactuals.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `src/tools/calibrate_dual_cf_scores.py`
+- `src/tools/build_duet_candidate_bank.py`
+- `src/trainer/__init__.py`
+- `src/evals/__init__.py`
+- `configs/hydra/default.yaml`
+- `scripts/duet/_splits.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `scripts/duet/prepare_dual_cf_duet_v3.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v3.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `tests/test_make_counterfactuals_vllm_primary.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- verified multi-candidate sidecars and structured vLLM payloads now accept
+  per-candidate `relation_scores`, `shared_fact_scores`, and
+  `candidate_sources`; the final rows preserve these through
+  `external_alternate_relation_scores`,
+  `external_alternate_shared_fact_scores`, and
+  `external_alternate_sources`
+- best-of-k counterfactual reranking keeps the previous validity and overlap
+  gates, but now adds candidate-level relation and shared-fact terms when that
+  metadata is present; missing arrays are omitted instead of zero-filled
+- `cf_pick_meta` now records the selected candidate index, selected source,
+  selected pool, low-confidence-fallback usage, and the winning feature values
+  used for the final rank score
+- the repair ladder is now aligned across raw generation, clean rebuilds, and
+  retry passes: existing alternate, external sidecar or structured vLLM pool,
+  candidate-bank neighbors, typed fallback, then optional low-confidence
+  fallback gated by `--allow-low-confidence-fallback`
+- the batched `vllm_primary` path now preserves per-row candidate-bank
+  relation/shared-fact metadata and sources instead of reusing the last row's
+  metadata across the whole batch; this keeps reranking and `cf_pick_meta`
+  source attribution aligned with the correct forget row
+- `vllm_openai` multi-alternate generation now fails fast unless
+  `VLLM_USE_STRUCTURED_OUTPUTS=1`; plain-text vLLM remains valid only for the
+  legacy single-alternate path
+- the v3 prep launchers now default to:
+  - DUET `PROMPT_FAMILY=duet_relation_safe`
+  - RWKU `PROMPT_FAMILY=rwku_shared_fact_safe`
+  - `MAX_EXAMPLES=0`
+  - `ALLOW_LOW_CONFIDENCE_FALLBACK=0`
+  - `CF_SIDECAR_RELATION_SCORE_KEY=relation_scores`
+  - `CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores`
+  - `CF_SIDECAR_SOURCE_KEY=candidate_sources`
+- `scripts/duet/dual_cf_duet.sh` and `scripts/rwku/dual_cf_rwku.sh` now
+  default to the v3 experiment configs; the historical
+  `run_dualcf_ablation_v2.sh` wrappers still exist, but `full`, `d_only`,
+  `a_only`, and `dpo` variants now inherit those v3 defaults through the
+  underlying `dual_cf_*` launchers
+- `validate_dual_cf_artifact.py --report-path` now writes a JSON payload with
+  validator failures plus nested `artifact_quality`; `calibrate_dual_cf_scores.py`
+  now also supports `--report-path`, while the v3 prep launchers persist the
+  same artifact-quality summary inside `step4_calibration_stats_v3.json`
+
+Validation status for this follow-up:
+
+- completed:
+  - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/vllm_cf_client.py src/tools/clean_counterfactuals.py src/tools/retry_invalid_counterfactuals.py src/tools/validate_dual_cf_artifact.py src/tools/calibrate_dual_cf_scores.py src/tools/build_duet_candidate_bank.py src/trainer/__init__.py src/evals/__init__.py`
+  - `bash -n scripts/duet/_splits.sh scripts/utility/eval_checkpoints_utility.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
+  - `python -m unittest discover -s tests -p 'test_*.py'`
+- results:
+  - full non-GPU unittest suite passed with `OK (skipped=3)`
+  - the three skips are the optional `lm_eval`-dependent tests
+- not completed here:
+  - GPU-backed vLLM generation checks
+  - GPU-backed attribution scoring
+  - GPU-backed prep smokes
+  - 1-step or short functional train/eval runs
+
 ## What was added
 
 DualCF is integrated as a new routed unlearning method that keeps the repo's

@@ -18,11 +18,13 @@ if str(SRC_ROOT) not in sys.path:
 
 from data.utils import preprocess_chat_instance
 from tools.dual_cf_artifact_utils import (
+    build_artifact_quality_report,
     build_answer_type_fallback_candidates,
     build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
-    dedupe_scored_candidates,
+    dedupe_candidate_metadata,
+    duplicate_candidate_count,
     load_dataset_split,
     load_keyed_jsonish,
     load_model_bundle,
@@ -53,6 +55,9 @@ def parse_args():
     parser.add_argument("--mapping-key", default="index")
     parser.add_argument("--mapping-alternate-key", default="alternate")
     parser.add_argument("--external-score-key", default="scores")
+    parser.add_argument("--external-relation-score-key", default="relation_scores")
+    parser.add_argument("--external-shared-fact-score-key", default="shared_fact_scores")
+    parser.add_argument("--external-source-key", default="candidate_sources")
     parser.add_argument("--allow-list-alternates", action="store_true")
     parser.add_argument("--candidate-bank", default=None)
     parser.add_argument("--generator-backend", choices=("hf", "vllm_openai"), default="hf")
@@ -75,10 +80,12 @@ def parse_args():
     parser.add_argument("--num-alternates", type=int, default=1)
     parser.add_argument("--prompt-family", default="default")
     parser.add_argument("--repair-invalid", action="store_true")
+    parser.add_argument("--allow-low-confidence-fallback", action="store_true")
     parser.add_argument("--reject-gold-substring", action="store_true")
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
     parser.add_argument("--max-alt-length-chars", type=int, default=128)
+    parser.add_argument("--report-path", default=None)
     return parser.parse_args()
 
 
@@ -97,6 +104,41 @@ def _score_list(value: Any, expected_length: int) -> list[Any]:
     if len(scores) < expected_length:
         scores.extend([None] * (expected_length - len(scores)))
     return scores
+
+
+def _source_list(value: Any, expected_length: int, default_value: str | None = None) -> list[Any]:
+    if not isinstance(value, list):
+        return [default_value] * expected_length
+    sources = [str(item).strip() if str(item).strip() else default_value for item in value[:expected_length]]
+    if len(sources) < expected_length:
+        sources.extend([default_value] * (expected_length - len(sources)))
+    return sources
+
+
+def _candidate_bank_metadata(
+    bank_row: Dict[str, Any],
+    row_candidates: list[str],
+) -> tuple[list[Any], list[Any], list[Any]]:
+    expected_length = len(row_candidates)
+    return (
+        _score_list(bank_row.get("candidate_relation_scores"), expected_length),
+        _score_list(bank_row.get("candidate_shared_fact_scores"), expected_length),
+        _source_list(
+            bank_row.get("candidate_sources"),
+            expected_length,
+            default_value="candidate_bank",
+        ),
+    )
+
+
+def _default_prompt_version(
+    *,
+    backend: str,
+    prompt_family: str,
+) -> str:
+    backend_name = str(backend or "unknown")
+    prompt_name = str(prompt_family or "default")
+    return f"{backend_name}:{prompt_name}:v1"
 
 
 def load_mapping(path: str, key_field: str, alternate_field: str) -> Dict[str, Dict[str, Any]]:
@@ -274,11 +316,21 @@ def build_cf_provenance(
         "generator_backend": backend or args.generator_backend,
         "prompt_family": args.prompt_family,
         "candidate_count": max(1, int(args.num_alternates)),
+        "prompt_version": _default_prompt_version(
+            backend=backend or args.generator_backend,
+            prompt_family=args.prompt_family,
+        ),
     }
     if model_name not in (None, "", "null", "None"):
         provenance["generator_model"] = model_name
     if source_row:
-        for key in ("generator", "prompt_version", "temperature", "top_p"):
+        for key in (
+            "generator",
+            "prompt_version",
+            "temperature",
+            "top_p",
+            "structured_outputs",
+        ):
             value = source_row.get(key)
             if value not in (None, "", "null", "None"):
                 provenance[key] = value
@@ -296,43 +348,103 @@ def select_best_alternate(
     seed: int,
     primary_candidates: list[str],
     row_candidates: list[str],
+    row_relation_scores: list[Any] | None = None,
+    row_shared_fact_scores: list[Any] | None = None,
+    row_sources: list[Any] | None = None,
     external_candidates: list[str] | None = None,
     external_scores: list[Any] | None = None,
+    external_relation_scores: list[Any] | None = None,
+    external_shared_fact_scores: list[Any] | None = None,
+    external_sources: list[Any] | None = None,
+    default_relation_score: float | None = None,
 ):
     external_candidates = list(external_candidates or [])
     candidate_pool = []
     score_pool = []
+    relation_score_pool = []
+    shared_fact_score_pool = []
+    source_pool = []
     low_confidence_candidates: list[str] = []
+    duplicate_candidates_removed = 0
 
     for candidate in primary_candidates:
         candidate_pool.append(candidate)
         score_pool.append(None)
+        relation_score_pool.append(None)
+        shared_fact_score_pool.append(None)
+        source_pool.append("primary")
     for idx, candidate in enumerate(external_candidates):
         candidate_pool.append(candidate)
         score_pool.append(
             external_scores[idx] if external_scores is not None and idx < len(external_scores) else None
         )
+        relation_score_pool.append(
+            external_relation_scores[idx]
+            if external_relation_scores is not None and idx < len(external_relation_scores)
+            else None
+        )
+        shared_fact_score_pool.append(
+            external_shared_fact_scores[idx]
+            if external_shared_fact_scores is not None and idx < len(external_shared_fact_scores)
+            else None
+        )
+        source_pool.append(
+            external_sources[idx]
+            if external_sources is not None and idx < len(external_sources)
+            else "external"
+        )
     for candidate in row_candidates:
         candidate_pool.append(candidate)
         score_pool.append(None)
+    row_relation_scores = _score_list(row_relation_scores, len(row_candidates))
+    row_shared_fact_scores = _score_list(row_shared_fact_scores, len(row_candidates))
+    row_sources = _source_list(row_sources, len(row_candidates), default_value="candidate_bank")
+    relation_score_pool.extend(row_relation_scores)
+    shared_fact_score_pool.extend(row_shared_fact_scores)
+    source_pool.extend(row_sources)
     if args.repair_invalid:
         for candidate in build_answer_type_fallback_candidates(answer, seed=seed):
             candidate_pool.append(candidate)
             score_pool.append(None)
-        low_confidence_candidates = build_low_confidence_fallback_candidates(answer)
+            relation_score_pool.append(None)
+            shared_fact_score_pool.append(None)
+            source_pool.append("typed_fallback")
+        if args.allow_low_confidence_fallback:
+            low_confidence_candidates = build_low_confidence_fallback_candidates(answer)
 
-    candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+    duplicate_candidates_removed = duplicate_candidate_count(candidate_pool)
+
+    (
+        candidate_pool,
+        score_pool,
+        relation_score_pool,
+        shared_fact_score_pool,
+        source_pool,
+    ) = dedupe_candidate_metadata(
+        candidate_pool,
+        scores=score_pool,
+        relation_scores=relation_score_pool,
+        shared_fact_scores=shared_fact_score_pool,
+        candidate_sources=source_pool,
+    )
     best_alt, best_meta = pick_best_counterfactual_v3(
         question=question,
         answer=answer,
         candidates=candidate_pool,
         candidate_answers=row_candidates,
         external_scores=score_pool,
+        relation_scores=relation_score_pool,
+        shared_fact_scores=shared_fact_score_pool,
+        candidate_sources=source_pool,
+        default_relation_score=default_relation_score,
         reject_gold_substring=args.reject_gold_substring,
         max_overlap_ratio=args.max_overlap_ratio,
         require_short_answer=args.require_short_answer,
         max_alt_length_chars=args.max_alt_length_chars,
     )
+    best_meta["selected_candidate"] = best_meta.get("selected_candidate_text", best_alt)
+    best_meta["candidate_pool_size"] = len(candidate_pool)
+    best_meta["duplicate_candidates_removed"] = int(duplicate_candidates_removed)
     invalid_reason = counterfactual_invalid_reason(
         best_alt,
         answer,
@@ -344,18 +456,41 @@ def select_best_alternate(
     if invalid_reason is not None and args.repair_invalid and low_confidence_candidates:
         candidate_pool.extend(low_confidence_candidates)
         score_pool.extend([None] * len(low_confidence_candidates))
-        candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+        relation_score_pool.extend([None] * len(low_confidence_candidates))
+        shared_fact_score_pool.extend([None] * len(low_confidence_candidates))
+        source_pool.extend(["low_confidence_fallback"] * len(low_confidence_candidates))
+        duplicate_candidates_removed = duplicate_candidate_count(candidate_pool)
+        (
+            candidate_pool,
+            score_pool,
+            relation_score_pool,
+            shared_fact_score_pool,
+            source_pool,
+        ) = dedupe_candidate_metadata(
+            candidate_pool,
+            scores=score_pool,
+            relation_scores=relation_score_pool,
+            shared_fact_scores=shared_fact_score_pool,
+            candidate_sources=source_pool,
+        )
         best_alt, best_meta = pick_best_counterfactual_v3(
             question=question,
             answer=answer,
             candidates=candidate_pool,
             candidate_answers=row_candidates,
             external_scores=score_pool,
+            relation_scores=relation_score_pool,
+            shared_fact_scores=shared_fact_score_pool,
+            candidate_sources=source_pool,
+            default_relation_score=default_relation_score,
             reject_gold_substring=args.reject_gold_substring,
             max_overlap_ratio=args.max_overlap_ratio,
             require_short_answer=args.require_short_answer,
             max_alt_length_chars=args.max_alt_length_chars,
         )
+        best_meta["selected_candidate"] = best_meta.get("selected_candidate_text", best_alt)
+        best_meta["candidate_pool_size"] = len(candidate_pool)
+        best_meta["duplicate_candidates_removed"] = int(duplicate_candidates_removed)
         invalid_reason = counterfactual_invalid_reason(
             best_alt,
             answer,
@@ -370,6 +505,9 @@ def select_best_alternate(
         if baseline_candidate:
             break
     repaired = bool(best_alt) and clean_counterfactual_text(best_alt) != baseline_candidate
+    best_meta["selected_candidate"] = best_meta.get("selected_candidate_text", best_alt)
+    best_meta["candidate_pool_size"] = len(candidate_pool)
+    best_meta["duplicate_candidates_removed"] = int(duplicate_candidates_removed)
     return best_alt, invalid_reason, repaired, best_meta
 
 
@@ -443,14 +581,23 @@ def main():
         question = str(row[args.question_key])
         bank_row = candidate_bank.get(str(row.get(args.mapping_key, "")), {})
         row_candidates = list(bank_row.get("candidate_answers", []))
+        (
+            row_relation_scores,
+            row_shared_fact_scores,
+            row_sources,
+        ) = _candidate_bank_metadata(bank_row, row_candidates)
 
         if args.alternate_column or mapping is not None or generate_alternates is not None:
             try:
                 mapping_row: dict[str, Any] | None = None
                 external_candidates: list[str] = []
                 external_scores: list[Any] | None = None
+                external_relation_scores: list[Any] | None = None
+                external_shared_fact_scores: list[Any] | None = None
+                external_sources: list[Any] | None = None
                 primary_candidates: list[str] = []
                 cf_source = "hf_generator"
+                default_relation_score = None
 
                 if args.alternate_column:
                     primary_candidates = _string_list(row[args.alternate_column])
@@ -473,6 +620,21 @@ def main():
                         mapping_row.get(args.external_score_key),
                         expected_length=len(external_candidates),
                     )
+                    external_relation_scores = _score_list(
+                        mapping_row.get(args.external_relation_score_key),
+                        expected_length=len(external_candidates),
+                    )
+                    external_shared_fact_scores = _score_list(
+                        mapping_row.get(args.external_shared_fact_score_key),
+                        expected_length=len(external_candidates),
+                    )
+                    external_sources = _source_list(
+                        mapping_row.get(args.external_source_key),
+                        expected_length=len(external_candidates),
+                        default_value="sidecar",
+                    )
+                    if mapping_row.get("same_relation") not in (None, "", "null", "None"):
+                        default_relation_score = 1.0 if bool(mapping_row.get("same_relation")) else 0.0
                     primary_candidates = []
                     cf_source = "alternate_jsonl_multi" if len(external_candidates) > 1 else "alternate_jsonl"
                 else:
@@ -485,16 +647,29 @@ def main():
                     seed=int(row.get(args.mapping_key, row_no) or row_no),
                     primary_candidates=primary_candidates,
                     row_candidates=row_candidates,
+                    row_relation_scores=row_relation_scores,
+                    row_shared_fact_scores=row_shared_fact_scores,
+                    row_sources=row_sources,
                     external_candidates=external_candidates,
                     external_scores=external_scores,
+                    external_relation_scores=external_relation_scores,
+                    external_shared_fact_scores=external_shared_fact_scores,
+                    external_sources=external_sources,
+                    default_relation_score=default_relation_score,
                 )
 
                 updated = dict(row)
                 updated["answer"] = answer
                 updated["alternate"] = best_alt
                 updated["candidate_answers"] = row_candidates
+                updated["candidate_relation_scores"] = row_relation_scores
+                updated["candidate_shared_fact_scores"] = row_shared_fact_scores
+                updated["candidate_sources"] = row_sources
                 updated["external_alternates"] = external_candidates
                 updated["external_alternate_scores"] = external_scores
+                updated["external_alternate_relation_scores"] = external_relation_scores
+                updated["external_alternate_shared_fact_scores"] = external_shared_fact_scores
+                updated["external_alternate_sources"] = external_sources
                 updated["cf_pick_meta"] = best_meta
                 updated["cf_source"] = cf_source
                 updated["cf_generator_backend"] = args.generator_backend
@@ -532,7 +707,18 @@ def main():
                     "candidate_answers": row_candidates,
                 }
             )
-            pending_vllm_meta.append((row_no, dict(row), answer, question, row_candidates))
+            pending_vllm_meta.append(
+                (
+                    row_no,
+                    dict(row),
+                    answer,
+                    question,
+                    row_candidates,
+                    row_relation_scores,
+                    row_shared_fact_scores,
+                    row_sources,
+                )
+            )
 
     if vllm_generator is not None and pending_vllm_rows:
         log(f"Sending {len(pending_vllm_rows)} rows to vLLM generator")
@@ -541,7 +727,16 @@ def main():
             chunked(pending_vllm_meta, args.generator_batch_size),
         ):
             outputs = vllm_generator.many_sync(list(row_chunk))
-            for response, (row_no, row, answer, question, row_candidates) in zip(outputs, meta_chunk):
+            for response, (
+                row_no,
+                row,
+                answer,
+                question,
+                row_candidates,
+                row_relation_scores,
+                row_shared_fact_scores,
+                row_sources,
+            ) in zip(outputs, meta_chunk):
                 row_index = row.get("index", "<missing>")
                 try:
                     response_candidates = _string_list(
@@ -553,6 +748,24 @@ def main():
                         response.get(args.external_score_key),
                         expected_length=len(response_candidates),
                     )
+                    response_relation_scores = _score_list(
+                        response.get(args.external_relation_score_key),
+                        expected_length=len(response_candidates),
+                    )
+                    response_shared_fact_scores = _score_list(
+                        response.get(args.external_shared_fact_score_key),
+                        expected_length=len(response_candidates),
+                    )
+                    response_sources = _source_list(
+                        response.get(args.external_source_key),
+                        expected_length=len(response_candidates),
+                        default_value="vllm_generated",
+                    )
+                    default_relation_score = (
+                        1.0
+                        if bool(response.get("same_relation", True))
+                        else 0.0
+                    )
                     best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
                         args=args,
                         question=question,
@@ -560,15 +773,28 @@ def main():
                         seed=int(row.get(args.mapping_key, row_no) or row_no),
                         primary_candidates=[],
                         row_candidates=row_candidates,
+                        row_relation_scores=row_relation_scores,
+                        row_shared_fact_scores=row_shared_fact_scores,
+                        row_sources=row_sources,
                         external_candidates=response_candidates,
                         external_scores=response_scores,
+                        external_relation_scores=response_relation_scores,
+                        external_shared_fact_scores=response_shared_fact_scores,
+                        external_sources=response_sources,
+                        default_relation_score=default_relation_score,
                     )
                     updated = dict(row)
                     updated["answer"] = answer
                     updated["alternate"] = best_alt
                     updated["candidate_answers"] = row_candidates
+                    updated["candidate_relation_scores"] = row_relation_scores
+                    updated["candidate_shared_fact_scores"] = row_shared_fact_scores
+                    updated["candidate_sources"] = row_sources
                     updated["external_alternates"] = response_candidates
                     updated["external_alternate_scores"] = response_scores
+                    updated["external_alternate_relation_scores"] = response_relation_scores
+                    updated["external_alternate_shared_fact_scores"] = response_shared_fact_scores
+                    updated["external_alternate_sources"] = response_sources
                     updated["cf_pick_meta"] = best_meta
                     updated["cf_source"] = "vllm_primary"
                     updated["cf_generator_backend"] = "vllm_openai"
@@ -602,6 +828,16 @@ def main():
 
     log(f"Saving {len(rows)} rows to {args.output_path}")
     save_jsonl(rows, args.output_path)
+    if args.report_path not in (None, "", "null", "None"):
+        report = build_artifact_quality_report(
+            rows,
+            question_key=args.question_key,
+            answer_key="answer",
+            alternate_key="alternate",
+        )
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=True)
+        log(f"Saved artifact-quality report to {args.report_path}")
     log(
         "Done. "
         f"rows={len(rows)} empty_alternates={empty_alternate_count} "
