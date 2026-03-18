@@ -597,6 +597,8 @@ def main():
                 external_sources: list[Any] | None = None
                 primary_candidates: list[str] = []
                 cf_source = "hf_generator"
+                resolved_backend = args.generator_backend
+                resolved_model_name = (args.model_path or args.model_cfg) if args.model_cfg else None
                 default_relation_score = None
 
                 if args.alternate_column:
@@ -637,6 +639,14 @@ def main():
                         default_relation_score = 1.0 if bool(mapping_row.get("same_relation")) else 0.0
                     primary_candidates = []
                     cf_source = "alternate_jsonl_multi" if len(external_candidates) > 1 else "alternate_jsonl"
+                    mapping_backend = mapping_row.get("generator_backend")
+                    if mapping_backend not in (None, "", "null", "None"):
+                        resolved_backend = str(mapping_backend)
+                    else:
+                        resolved_backend = "alternate_jsonl"
+                    mapping_model = mapping_row.get("generator_model", mapping_row.get("model"))
+                    if mapping_model not in (None, "", "null", "None"):
+                        resolved_model_name = str(mapping_model)
                 else:
                     primary_candidates = generate_alternates(question, str(answer))
 
@@ -672,7 +682,7 @@ def main():
                 updated["external_alternate_sources"] = external_sources
                 updated["cf_pick_meta"] = best_meta
                 updated["cf_source"] = cf_source
-                updated["cf_generator_backend"] = args.generator_backend
+                updated["cf_generator_backend"] = resolved_backend
                 updated["cf_prompt_family"] = args.prompt_family
                 updated["cf_num_alternates"] = max(1, int(args.num_alternates))
                 updated["cf_invalid_reason"] = invalid_reason
@@ -680,11 +690,11 @@ def main():
                 updated["cf_provenance"] = build_cf_provenance(
                     args=args,
                     source_row=mapping_row,
-                    backend=args.generator_backend,
-                    model_name=(args.model_path or args.model_cfg) if args.model_cfg else None,
+                    backend=resolved_backend,
+                    model_name=resolved_model_name,
                 )
-                if args.model_cfg:
-                    updated["cf_generator_model"] = args.model_path or args.model_cfg
+                if resolved_model_name not in (None, "", "null", "None"):
+                    updated["cf_generator_model"] = resolved_model_name
                 if repaired:
                     repaired_count += 1
                 if invalid_reason is not None:

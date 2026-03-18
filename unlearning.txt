@@ -462,8 +462,10 @@ Directory Structure:
 │   ├── tests/test_dualcf_v3_routing.py
 │   ├── tests/test_duet_split_overrides.py
 │   ├── tests/test_lm_eval_wrapper.py
+│   ├── tests/test_make_counterfactuals_vllm_primary.py
 │   ├── tests/test_retry_invalid_counterfactuals.py
 │   ├── tests/test_utility_pipeline.py
+│   ├── tests/test_validate_dual_cf_artifact.py
 │   └── tests/test_vllm_cf_client.py
 ├── tmp_rwku_apply_manual_fixes.py
 ├── tmp_rwku_verify_clean.py
@@ -6169,15 +6171,27 @@ test:
 </content>
 
 <content full_path="prod-run-dual-vast.md">
-# Production DualCF GPU Runs (v2)
+# Production DualCF GPU Runs (v3 / Idea2)
 
-This runbook is for the DualCF v2 iteration:
+This runbook is for the DualCF v3 / Idea2 iteration:
 
 - clean counterfactuals first
 - percentile-calibrate routing offline
 - use hybrid retain attribution
 - run DUET `rare -> popular -> merged`
 - save / evaluate half-epoch checkpoints
+
+Validation status for this runbook refresh:
+
+- completed locally without GPUs:
+  - `python -m unittest discover -s tests -p 'test_*.py'` -> `OK (skipped=3)`
+- note:
+  - the three skipped tests require the optional `lm_eval` package
+- not completed for this refresh:
+  - GPU-backed vLLM generation checks
+  - GPU-backed attribution scoring
+  - prep smokes against a live GPU server
+  - train / eval runs
 
 The validation profile below is the workspace-tested small-model setup:
 
@@ -6377,10 +6391,14 @@ In the training shell:
 export VLLM_BASE_URL=http://127.0.0.1:8000/v1
 export VLLM_API_KEY=EMPTY
 export VLLM_MODEL=Qwen/Qwen3-1.7B
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
 ```
 
-After all `step1b_counterfactuals_clean.jsonl` files are ready, stop the vLLM
-server to free GPU memory before the Llama scoring / training steps.
+Because the default v3 path uses `NUM_ALTERNATES=4`, keep structured outputs on
+unless you intentionally drop back to the legacy single-alternate mode.
+
+After all `step1b_counterfactuals_clean_v3.jsonl` files are ready, stop the
+vLLM server to free GPU memory before the Llama scoring / training steps.
 
 ## Artifact prep
 
@@ -6391,8 +6409,8 @@ Each prep script now supports a two-phase flow:
 - `SKIP_CF_GENERATION=1`:
   reuse the cleaned counterfactual file and run the Llama scoring stages
 - `REBUILD_CLEAN_CF=1`:
-  rebuild `step1b_counterfactuals_clean.jsonl` from the saved raw Qwen output
-  before scoring
+  rebuild `step1b_counterfactuals_clean_v3.jsonl` from the saved raw Qwen
+  output before scoring
 
 `DROP_INVALID_AFTER_CLEAN=1` is the default and should be left on for the
 validation profile. This drops rows that still fail strict alternate-answer
@@ -6406,16 +6424,30 @@ Use the additive v3 prep scripts when you want:
 - multi-bank attribution with semantic and utility anchors
 - offline belief-bank generation before calibration
 
+Runtime note:
+
+- sidecar mode supports real multi-alternate selection directly
+- `vllm_openai` with `NUM_ALTERNATES>1` now fails fast unless
+  `VLLM_USE_STRUCTURED_OUTPUTS=1`
+- plain-text vLLM remains supported only for the legacy
+  `NUM_ALTERNATES=1` path
+
 Common v3 env additions:
 
 ```bash
 export UTILITY_ANCHOR_JSONL="${UTILITY_ROOT}/utility_qa_anchor_v3.jsonl"
 export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-export PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+export MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+export ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
 export BELIEF_MAX_NEW_TOKENS=${BELIEF_MAX_NEW_TOKENS:-16}
 export BELIEF_NUM_RETURN_SEQUENCES=${BELIEF_NUM_RETURN_SEQUENCES:-3}
 export BELIEF_NUM_BEAMS=${BELIEF_NUM_BEAMS:-4}
 ```
+
+Leave `PROMPT_FAMILY` unset unless you need to override the script defaults:
+
+- DUET defaults to `duet_relation_safe`
+- RWKU defaults to `rwku_shared_fact_safe`
 
 Optional external sidecar wiring for verified multi-alternate CFs:
 
@@ -6423,6 +6455,9 @@ Optional external sidecar wiring for verified multi-alternate CFs:
 export CF_SIDECAR_JSONL=/abs/path/to/counterfactual_sidecar.jsonl
 export CF_SIDECAR_ALTERNATE_KEY=alternates
 export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
 ```
 
 Then replace the prep entrypoint:
@@ -6436,20 +6471,41 @@ The v3 scripts preserve the existing two-phase flow:
 - `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
 - `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
 
+The standard train launchers now default to the v3 experiment configs:
+
+- `scripts/duet/dual_cf_duet.sh` -> `unlearn/duet/dual_cf_v3_lora.yaml`
+- `scripts/rwku/dual_cf_rwku.sh` -> `unlearn/rwku/dual_cf_v3_lora.yaml`
+
+Phase B also writes artifact-quality reports:
+
+- `${OUT_DIR}/step4_calibration_stats_v3.json` from
+  `calibrate_dual_cf_scores.py --sidecar-path ...`, including
+  `artifact_quality`
+- `${OUT_DIR}/step4_artifact_report_v3.json` from
+  `validate_dual_cf_artifact.py --report-path ...`
+
 ### Phase A: Qwen clean counterfactuals only
 
 Run these while the vLLM server is up.
+
+```bash
+export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
+export MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+export ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
+```
 
 ### DUET rare
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_LABEL=rare
-export OUT_DIR=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2
+export OUT_DIR=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+scripts/duet/prepare_dual_cf_duet_v3.sh
 ```
 
 ### DUET popular
@@ -6457,11 +6513,12 @@ scripts/duet/prepare_dual_cf_duet_v2.sh
 ```bash
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_LABEL=popular
-export OUT_DIR=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v2
+export OUT_DIR=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+scripts/duet/prepare_dual_cf_duet_v3.sh
 ```
 
 ### DUET merged
@@ -6471,11 +6528,12 @@ Run this only after rare and popular are clean.
 ```bash
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_LABEL=merged
-export OUT_DIR=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v2
+export OUT_DIR=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/duet/prepare_dual_cf_duet_v2.sh
+scripts/duet/prepare_dual_cf_duet_v3.sh
 ```
 
 ### RWKU
@@ -6484,15 +6542,16 @@ scripts/duet/prepare_dual_cf_duet_v2.sh
 export CUDA_VISIBLE_DEVICES=0
 export FORGET_SPLIT=forget_level2
 export RETAIN_SPLIT=neighbor_level2
-export OUT_DIR=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2
+export OUT_DIR=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v3
+export PROMPT_FAMILY=${PROMPT_FAMILY:-rwku_shared_fact_safe}
 export STOP_AFTER_CLEAN_CF=1
 unset SKIP_CF_GENERATION
 
-scripts/rwku/prepare_dual_cf_rwku_v2.sh
+scripts/rwku/prepare_dual_cf_rwku_v3.sh
 ```
 
-After all `step1b_counterfactuals_clean.jsonl` files are written, stop the vLLM
-server and confirm the GPU is free before continuing.
+After all `step1b_counterfactuals_clean_v3.jsonl` files are written, stop the
+vLLM server and confirm the GPU is free before continuing.
 
 ### Phase B: Llama scoring / calibration only
 
@@ -6520,13 +6579,18 @@ The scoring stages use:
 
 ## DUET training
 
+The ablation wrappers keep their historical `*_v2.sh` names, but the `full`,
+`d_only`, `a_only`, and `dpo` DualCF paths now delegate into
+`scripts/duet/dual_cf_duet.sh` and `scripts/rwku/dual_cf_rwku.sh`, which
+default to the v3 experiment configs.
+
 ### Full DualCF
 
 Rare:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v3/dualcf_rare_v3.jsonl
 export METHOD_VARIANT=full
 export FORGET_LABEL=rare
 export MAX_STEPS=0
@@ -6538,7 +6602,7 @@ Popular:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v2/dualcf_popular_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/popular_llama32_1b_v3/dualcf_popular_v3.jsonl
 export METHOD_VARIANT=full
 export FORGET_LABEL=popular
 export MAX_STEPS=0
@@ -6550,7 +6614,7 @@ Merged:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v2/dualcf_merged_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/merged_llama32_1b_v3/dualcf_merged_v3.jsonl
 export METHOD_VARIANT=full
 export FORGET_LABEL=merged
 export MAX_STEPS=0
@@ -6610,7 +6674,7 @@ Every method variant above uses the same trajectory-saving behavior:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2/dualcf_forget_level2_v2.jsonl
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v3/dualcf_forget_level2_v3.jsonl
 export METHOD_VARIANT=full
 export MAX_STEPS=0
 
@@ -14182,18 +14246,31 @@ prefix: /mnt/extremessd10tb/borisiuk/miniconda3/envs/MU
 </content>
 
 <content full_path="prod-run-dual-gpu.md">
-# Production DualCF GPU Runs (v2)
+# Production DualCF GPU Runs (v3 / Idea2)
 
-This is the offline production runbook for the current DualCF v2 campaign.
+This is the offline production runbook for the current DualCF v3 / Idea2
+campaign.
 
 Scope:
 
 - `Llama-3.1-8B-Instruct` only
-- DualCF v2 ablations plus matched baselines
+- DualCF v3 / Idea2 ablations plus matched baselines
 - DUET `rare -> popular -> merged`
 - Utility-1K built once and evaluated automatically during each run
 - RWKU kept as phase 2 until DUET is stable
 - sequential end-to-end shell blocks for one box; no per-GPU sharding in this file yet
+
+Validation status for this runbook refresh:
+
+- completed locally without GPUs:
+  - `python -m unittest discover -s tests -p 'test_*.py'` -> `OK (skipped=3)`
+- note:
+  - the three skipped tests require the optional `lm_eval` package
+- not completed for this refresh:
+  - GPU-backed vLLM generation checks
+  - GPU-backed attribution scoring
+  - prep smokes against a live GPU server
+  - train / eval runs
 
 ## Common setup
 
@@ -14376,7 +14453,7 @@ source /data/home/vkropoti/unlearning-venv/bin/activate
 export VLLM_BASE_URL=http://127.0.0.1:8000/v1
 export VLLM_API_KEY=EMPTY
 export VLLM_MODEL=${VLLM_MODEL:-/data/home/vkropoti/models/Qwen3.5-27B}
-export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-0}
+export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
 ```
 
 Build all clean counterfactual files first, then stop the vLLM server before
@@ -14405,20 +14482,27 @@ Use the additive v3 prep scripts when you want:
 Runtime note:
 
 - sidecar mode supports real multi-alternate selection directly
-- vLLM mode supports real multi-alternate selection only when
+- `vllm_openai` with `NUM_ALTERNATES>1` now fails fast unless
   `VLLM_USE_STRUCTURED_OUTPUTS=1`
-- plain-text vLLM mode remains supported, but it returns one alternate per row
+- plain-text vLLM remains supported only for the legacy
+  `NUM_ALTERNATES=1` path
 
 Common v3 env additions:
 
 ```bash
 export UTILITY_ANCHOR_JSONL="${UTILITY_ROOT}/utility_qa_anchor_v3.jsonl"
 export NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-export PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+export MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+export ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
 export BELIEF_MAX_NEW_TOKENS=${BELIEF_MAX_NEW_TOKENS:-16}
 export BELIEF_NUM_RETURN_SEQUENCES=${BELIEF_NUM_RETURN_SEQUENCES:-3}
 export BELIEF_NUM_BEAMS=${BELIEF_NUM_BEAMS:-4}
 ```
+
+Leave `PROMPT_FAMILY` unset unless you need to override the script defaults:
+
+- DUET defaults to `duet_relation_safe`
+- RWKU defaults to `rwku_shared_fact_safe`
 
 Optional external sidecar wiring for verified multi-alternate CFs:
 
@@ -14426,6 +14510,9 @@ Optional external sidecar wiring for verified multi-alternate CFs:
 export CF_SIDECAR_JSONL=/abs/path/to/counterfactual_sidecar.jsonl
 export CF_SIDECAR_ALTERNATE_KEY=alternates
 export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
 ```
 
 Then replace the prep entrypoint:
@@ -14438,6 +14525,20 @@ The v3 scripts preserve the existing two-phase flow:
 - `STOP_AFTER_CLEAN_CF=1` for clean-counterfactual generation only
 - `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
 - `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
+
+The standard train launchers now default to the v3 experiment configs, so
+regular DualCF runs do not need an `EXPERIMENT=` override:
+
+- `scripts/duet/dual_cf_duet.sh` -> `unlearn/duet/dual_cf_v3_lora.yaml`
+- `scripts/rwku/dual_cf_rwku.sh` -> `unlearn/rwku/dual_cf_v3_lora.yaml`
+
+Phase B also writes artifact-quality reports:
+
+- `${OUT_DIR}/step4_calibration_stats_v3.json` from
+  `calibrate_dual_cf_scores.py --sidecar-path ...`, including
+  `artifact_quality`
+- `${OUT_DIR}/step4_artifact_report_v3.json` from
+  `validate_dual_cf_artifact.py --report-path ...`
 
 ### 1. DUET Phase A
 
@@ -14747,6 +14848,89 @@ Validation status for this v3 patch set:
   - GPU-backed vLLM generation checks
   - GPU-backed attribution scoring
   - end-to-end belief generation against a real checkpoint
+  - 1-step or short functional train/eval runs
+
+## Idea2 verified multi-candidate artifact sync (2026-03-18)
+
+Changed files:
+
+- `src/tools/dual_cf_artifact_utils.py`
+- `src/tools/make_counterfactuals.py`
+- `src/tools/vllm_cf_client.py`
+- `src/tools/clean_counterfactuals.py`
+- `src/tools/retry_invalid_counterfactuals.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `src/tools/calibrate_dual_cf_scores.py`
+- `src/tools/build_duet_candidate_bank.py`
+- `src/trainer/__init__.py`
+- `src/evals/__init__.py`
+- `configs/hydra/default.yaml`
+- `scripts/duet/_splits.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `scripts/duet/prepare_dual_cf_duet_v3.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v3.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `tests/test_make_counterfactuals_vllm_primary.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- verified multi-candidate sidecars and structured vLLM payloads now accept
+  per-candidate `relation_scores`, `shared_fact_scores`, and
+  `candidate_sources`; the final rows preserve these through
+  `external_alternate_relation_scores`,
+  `external_alternate_shared_fact_scores`, and
+  `external_alternate_sources`
+- best-of-k counterfactual reranking keeps the previous validity and overlap
+  gates, but now adds candidate-level relation and shared-fact terms when that
+  metadata is present; missing arrays are omitted instead of zero-filled
+- `cf_pick_meta` now records the selected candidate index, selected source,
+  selected pool, low-confidence-fallback usage, and the winning feature values
+  used for the final rank score
+- the repair ladder is now aligned across raw generation, clean rebuilds, and
+  retry passes: existing alternate, external sidecar or structured vLLM pool,
+  candidate-bank neighbors, typed fallback, then optional low-confidence
+  fallback gated by `--allow-low-confidence-fallback`
+- the batched `vllm_primary` path now preserves per-row candidate-bank
+  relation/shared-fact metadata and sources instead of reusing the last row's
+  metadata across the whole batch; this keeps reranking and `cf_pick_meta`
+  source attribution aligned with the correct forget row
+- `vllm_openai` multi-alternate generation now fails fast unless
+  `VLLM_USE_STRUCTURED_OUTPUTS=1`; plain-text vLLM remains valid only for the
+  legacy single-alternate path
+- the v3 prep launchers now default to:
+  - DUET `PROMPT_FAMILY=duet_relation_safe`
+  - RWKU `PROMPT_FAMILY=rwku_shared_fact_safe`
+  - `MAX_EXAMPLES=0`
+  - `ALLOW_LOW_CONFIDENCE_FALLBACK=0`
+  - `CF_SIDECAR_RELATION_SCORE_KEY=relation_scores`
+  - `CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores`
+  - `CF_SIDECAR_SOURCE_KEY=candidate_sources`
+- `scripts/duet/dual_cf_duet.sh` and `scripts/rwku/dual_cf_rwku.sh` now
+  default to the v3 experiment configs; the historical
+  `run_dualcf_ablation_v2.sh` wrappers still exist, but `full`, `d_only`,
+  `a_only`, and `dpo` variants now inherit those v3 defaults through the
+  underlying `dual_cf_*` launchers
+- `validate_dual_cf_artifact.py --report-path` now writes a JSON payload with
+  validator failures plus nested `artifact_quality`; `calibrate_dual_cf_scores.py`
+  now also supports `--report-path`, while the v3 prep launchers persist the
+  same artifact-quality summary inside `step4_calibration_stats_v3.json`
+
+Validation status for this follow-up:
+
+- completed:
+  - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/vllm_cf_client.py src/tools/clean_counterfactuals.py src/tools/retry_invalid_counterfactuals.py src/tools/validate_dual_cf_artifact.py src/tools/calibrate_dual_cf_scores.py src/tools/build_duet_candidate_bank.py src/trainer/__init__.py src/evals/__init__.py`
+  - `bash -n scripts/duet/_splits.sh scripts/utility/eval_checkpoints_utility.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
+  - `python -m unittest discover -s tests -p 'test_*.py'`
+- results:
+  - full non-GPU unittest suite passed with `OK (skipped=3)`
+  - the three skips are the optional `lm_eval`-dependent tests
+- not completed here:
+  - GPU-backed vLLM generation checks
+  - GPU-backed attribution scoring
+  - GPU-backed prep smokes
   - 1-step or short functional train/eval runs
 
 ## What was added
@@ -24805,10 +24989,12 @@ no_repeat_ngram_size: null
 <content full_path="configs/hydra/default.yaml">
 # https://hydra.cc/docs/configure_hydra/intro/
 
-# enable color logging
+# use Hydra's built-in logging defaults so local shells do not require the
+# optional `hydra-colorlog` plugin. Users who want colorlog can still override
+# these groups explicitly at launch time.
 defaults:
-  - override hydra_logging: colorlog
-  - override job_logging: colorlog
+  - override hydra_logging: default
+  - override job_logging: default
 
 # output directory, generated dynamically on each run
 run:
@@ -24823,6 +25009,7 @@ job_logging:
     file:
       # Incorporates fix from https://github.com/facebookresearch/hydra/pull/2242
       filename: ${hydra.runtime.output_dir}/${trainer.handler}.log
+
 </content>
 
 <content full_path="configs/hydra/eval.yaml">
@@ -25874,7 +26061,12 @@ GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
 GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
 GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
 NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+PROMPT_FAMILY=${PROMPT_FAMILY:-duet_relation_safe}
+MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
+if [[ "${GENERATOR_BACKEND}" == "vllm_openai" && "${NUM_ALTERNATES}" != "1" ]]; then
+  export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
+fi
 
 DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
 ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
@@ -25917,6 +26109,9 @@ UTILITY_ANCHOR_JSONL=${UTILITY_ANCHOR_JSONL:-}
 CF_SIDECAR_JSONL=${CF_SIDECAR_JSONL:-}
 CF_SIDECAR_ALTERNATE_KEY=${CF_SIDECAR_ALTERNATE_KEY:-alternates}
 CF_SIDECAR_SCORE_KEY=${CF_SIDECAR_SCORE_KEY:-scores}
+CF_SIDECAR_RELATION_SCORE_KEY=${CF_SIDECAR_RELATION_SCORE_KEY:-relation_scores}
+CF_SIDECAR_SHARED_FACT_SCORE_KEY=${CF_SIDECAR_SHARED_FACT_SCORE_KEY:-shared_fact_scores}
+CF_SIDECAR_SOURCE_KEY=${CF_SIDECAR_SOURCE_KEY:-candidate_sources}
 
 CANDIDATE_BANK_JSONL=${OUT_DIR}/step0_candidate_bank.jsonl
 RAW_CF=${OUT_DIR}/step1_counterfactuals_raw_v3.jsonl
@@ -25926,6 +26121,7 @@ PROXY_MAP_JSONL=${OUT_DIR}/step2b_proxy_map_v3.jsonl
 ATTR_JSONL=${OUT_DIR}/step3_attribution_raw_v3.jsonl
 BELIEF_JSONL=${OUT_DIR}/step3b_belief_raw_v3.jsonl
 FINAL_JSONL=${OUT_DIR}/dualcf_${FORGET_LABEL}_v3.jsonl
+ARTIFACT_REPORT_JSON=${OUT_DIR}/step4_artifact_report_v3.json
 
 stop_after_clean_cf="${STOP_AFTER_CLEAN_CF:-0}"
 skip_cf_generation="${SKIP_CF_GENERATION:-0}"
@@ -25935,6 +26131,9 @@ rebuild_clean_cf="${REBUILD_CLEAN_CF:-0}"
 clean_extra_args=()
 if [[ "${drop_invalid_after_clean}" == "1" ]]; then
   clean_extra_args+=(--drop-invalid)
+fi
+if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
+  clean_extra_args+=(--allow-low-confidence-fallback)
 fi
 
 make_cf_args=(
@@ -25956,17 +26155,24 @@ make_cf_args=(
   --num-alternates "${NUM_ALTERNATES}"
   --prompt-family "${PROMPT_FAMILY}"
   --repair-invalid
+  --max-examples "${MAX_EXAMPLES}"
   --reject-gold-substring
   --require-short-answer
   --max-overlap-ratio 0.85
   --max-alt-length-chars 128
 )
+if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
+  make_cf_args+=(--allow-low-confidence-fallback)
+fi
 if [[ -n "${CF_SIDECAR_JSONL}" ]]; then
   make_cf_args+=(
     --alternate-jsonl "${CF_SIDECAR_JSONL}"
     --mapping-key index
     --mapping-alternate-key "${CF_SIDECAR_ALTERNATE_KEY}"
     --external-score-key "${CF_SIDECAR_SCORE_KEY}"
+    --external-relation-score-key "${CF_SIDECAR_RELATION_SCORE_KEY}"
+    --external-shared-fact-score-key "${CF_SIDECAR_SHARED_FACT_SCORE_KEY}"
+    --external-source-key "${CF_SIDECAR_SOURCE_KEY}"
     --allow-list-alternates
   )
 fi
@@ -25998,6 +26204,7 @@ else
     --question-key "${QUESTION_KEY}" \
     --answer-key "${ANSWER_KEY}" \
     --candidates-per-row 12 \
+    --max-examples "${MAX_EXAMPLES}" \
     --sidecar-path "${OUT_DIR}/step0_candidate_bank_stats_v3.json"
 
   python "${repo_root}/src/tools/make_counterfactuals.py" "${make_cf_args[@]}"
@@ -26033,6 +26240,7 @@ python "${repo_root}/src/tools/score_difficulty.py" \
   --question-key "${QUESTION_KEY}" \
   --answer-key "${ANSWER_KEY}" \
   --batch-size "${DIFFICULTY_BATCH_SIZE}" \
+  --max-examples "${MAX_EXAMPLES}" \
   --model-cfg "${MODEL_CFG}" \
   --model-path "${SFT_MODEL_PATH}" \
   --tokenizer-path "${SFT_MODEL_PATH}" \
@@ -26078,6 +26286,7 @@ python "${repo_root}/src/tools/build_proxy_retain_map.py" \
   --output-path "${PROXY_MAP_JSONL}" \
   --forget-question-key "${QUESTION_KEY}" \
   --retain-question-key "${QUESTION_KEY}" \
+  --max-examples "${MAX_EXAMPLES}" \
   --top-k 16 \
   --fallback-top-k 8 \
   --semantic-top-k "${SEMANTIC_TOP_K}" \
@@ -26101,6 +26310,7 @@ python "${repo_root}/src/tools/score_attribution.py" \
   --output-path "${ATTR_JSONL}" \
   --question-key "${QUESTION_KEY}" \
   --retain-batch-size "${ATTR_RETAIN_BATCH_SIZE}" \
+  --forget-max-examples "${MAX_EXAMPLES}" \
   --retain-max-steps "${ATTR_RETAIN_MAX_STEPS}" \
   --forget-max-steps "${ATTR_FORGET_MAX_STEPS}" \
   --retain-proxy-mode multi_bank \
@@ -26150,7 +26360,8 @@ python "${repo_root}/src/tools/validate_dual_cf_artifact.py" \
   --require-short-answer \
   --max-alt-length-chars 128 \
   --check-overlap-ratio 0.85 \
-  --strict
+  --strict \
+  --report-path "${ARTIFACT_REPORT_JSON}"
 
 echo "[prepare_dual_cf_duet_v3] Final artifact: ${FINAL_JSONL}"
 
@@ -28660,7 +28871,7 @@ if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
     extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
 fi
 
-experiment="${EXPERIMENT:-unlearn/duet/dual_cf_v2_lora.yaml}"
+experiment="${EXPERIMENT:-unlearn/duet/dual_cf_v3_lora.yaml}"
 trainer="${TRAINER:-DualCF}"
 method_name="${METHOD_NAME:-dual_cf}"
 run_label="${RUN_LABEL:-DualCF}"
@@ -29685,27 +29896,37 @@ set_forget_retain_splits() {
     if [[ "${merge_flag}" != "1" ]]; then
         forget_retain_splits=("${DUET_SPLITS[@]}")
     else
-        declare -A merge_forget
-        declare -A merge_label
-        local pair forget retain base key
+        local pair forget retain base key retain_value found idx
+        local -a merge_keys=()
+        local -a merge_forgets=()
+        local -a merge_labels=()
         for pair in "${DUET_SPLITS[@]}"; do
             forget=$(echo "$pair" | cut -d' ' -f1)
             retain=$(echo "$pair" | cut -d' ' -f2)
             base=${forget/_rare_/_}
             base=${base/_popular_/_}
             key="${base}|${retain}"
-            if [[ -z "${merge_forget[$key]+x}" ]]; then
-                merge_forget[$key]="${forget}"
-            else
-                merge_forget[$key]="${merge_forget[$key]}+${forget}"
+            found=0
+            for idx in "${!merge_keys[@]}"; do
+                if [[ "${merge_keys[$idx]}" == "${key}" ]]; then
+                    merge_forgets[$idx]="${merge_forgets[$idx]}+${forget}"
+                    found=1
+                    break
+                fi
+            done
+            if [[ "${found}" != "1" ]]; then
+                merge_keys+=("${key}")
+                merge_forgets+=("${forget}")
+                merge_labels+=("${base}")
             fi
-            merge_label[$key]="${base}"
         done
 
         forget_retain_splits=()
-        for key in "${!merge_forget[@]}"; do
-            retain=${key#*|}
-            forget_retain_splits+=("${merge_forget[$key]} ${retain} ${merge_label[$key]}")
+        for idx in "${!merge_keys[@]}"; do
+            retain_value=${merge_keys[$idx]#*|}
+            forget_retain_splits+=(
+                "${merge_forgets[$idx]} ${retain_value} ${merge_labels[$idx]}"
+            )
         done
     fi
 
@@ -35296,7 +35517,12 @@ GENERATOR_TEMPERATURE=${GENERATOR_TEMPERATURE:-0.2}
 GENERATOR_TOP_P=${GENERATOR_TOP_P:-0.8}
 GENERATOR_MAX_NEW_TOKENS=${GENERATOR_MAX_NEW_TOKENS:-32}
 NUM_ALTERNATES=${NUM_ALTERNATES:-4}
-PROMPT_FAMILY=${PROMPT_FAMILY:-strict_short}
+PROMPT_FAMILY=${PROMPT_FAMILY:-rwku_shared_fact_safe}
+MAX_EXAMPLES=${MAX_EXAMPLES:-0}
+ALLOW_LOW_CONFIDENCE_FALLBACK=${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}
+if [[ "${GENERATOR_BACKEND}" == "vllm_openai" && "${NUM_ALTERNATES}" != "1" ]]; then
+  export VLLM_USE_STRUCTURED_OUTPUTS=${VLLM_USE_STRUCTURED_OUTPUTS:-1}
+fi
 
 DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-8}
 ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-4}
@@ -35334,6 +35560,9 @@ UTILITY_ANCHOR_JSONL=${UTILITY_ANCHOR_JSONL:-}
 CF_SIDECAR_JSONL=${CF_SIDECAR_JSONL:-}
 CF_SIDECAR_ALTERNATE_KEY=${CF_SIDECAR_ALTERNATE_KEY:-alternates}
 CF_SIDECAR_SCORE_KEY=${CF_SIDECAR_SCORE_KEY:-scores}
+CF_SIDECAR_RELATION_SCORE_KEY=${CF_SIDECAR_RELATION_SCORE_KEY:-relation_scores}
+CF_SIDECAR_SHARED_FACT_SCORE_KEY=${CF_SIDECAR_SHARED_FACT_SCORE_KEY:-shared_fact_scores}
+CF_SIDECAR_SOURCE_KEY=${CF_SIDECAR_SOURCE_KEY:-candidate_sources}
 
 RAW_CF=${OUT_DIR}/step1_counterfactuals_raw_v3.jsonl
 CLEAN_CF=${OUT_DIR}/step1b_counterfactuals_clean_v3.jsonl
@@ -35342,6 +35571,7 @@ PROXY_MAP_JSONL=${OUT_DIR}/step2b_proxy_map_v3.jsonl
 ATTR_JSONL=${OUT_DIR}/step3_attribution_raw_v3.jsonl
 BELIEF_JSONL=${OUT_DIR}/step3b_belief_raw_v3.jsonl
 FINAL_JSONL=${OUT_DIR}/dualcf_${FORGET_SPLIT}_v3.jsonl
+ARTIFACT_REPORT_JSON=${OUT_DIR}/step4_artifact_report_v3.json
 
 stop_after_clean_cf="${STOP_AFTER_CLEAN_CF:-0}"
 skip_cf_generation="${SKIP_CF_GENERATION:-0}"
@@ -35354,6 +35584,9 @@ retry_invalid_cf_batch_size="${RETRY_INVALID_CF_BATCH_SIZE:-${GENERATOR_BATCH_SI
 clean_extra_args=()
 if [[ "${drop_invalid_after_clean}" == "1" ]]; then
   clean_extra_args+=(--drop-invalid)
+fi
+if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
+  clean_extra_args+=(--allow-low-confidence-fallback)
 fi
 
 make_cf_args=(
@@ -35375,17 +35608,24 @@ make_cf_args=(
   --num-alternates "${NUM_ALTERNATES}"
   --prompt-family "${PROMPT_FAMILY}"
   --repair-invalid
+  --max-examples "${MAX_EXAMPLES}"
   --reject-gold-substring
   --require-short-answer
   --max-overlap-ratio 0.85
   --max-alt-length-chars 128
 )
+if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
+  make_cf_args+=(--allow-low-confidence-fallback)
+fi
 if [[ -n "${CF_SIDECAR_JSONL}" ]]; then
   make_cf_args+=(
     --alternate-jsonl "${CF_SIDECAR_JSONL}"
     --mapping-key index
     --mapping-alternate-key "${CF_SIDECAR_ALTERNATE_KEY}"
     --external-score-key "${CF_SIDECAR_SCORE_KEY}"
+    --external-relation-score-key "${CF_SIDECAR_RELATION_SCORE_KEY}"
+    --external-shared-fact-score-key "${CF_SIDECAR_SHARED_FACT_SCORE_KEY}"
+    --external-source-key "${CF_SIDECAR_SOURCE_KEY}"
     --allow-list-alternates
   )
 fi
@@ -35456,6 +35696,7 @@ python "${repo_root}/src/tools/score_difficulty.py" \
   --question-key "${QUESTION_KEY}" \
   --answer-key "${ANSWER_KEY}" \
   --batch-size "${DIFFICULTY_BATCH_SIZE}" \
+  --max-examples "${MAX_EXAMPLES}" \
   --model-cfg "${MODEL_CFG}" \
   --model-path "${BASE_MODEL_PATH}" \
   --tokenizer-path "${BASE_MODEL_PATH}" \
@@ -35496,6 +35737,7 @@ python "${repo_root}/src/tools/build_proxy_retain_map.py" \
   --output-path "${PROXY_MAP_JSONL}" \
   --forget-question-key "${QUESTION_KEY}" \
   --retain-question-key "${QUESTION_KEY}" \
+  --max-examples "${MAX_EXAMPLES}" \
   --top-k 16 \
   --fallback-top-k 8 \
   --semantic-top-k "${SEMANTIC_TOP_K}" \
@@ -35518,6 +35760,7 @@ python "${repo_root}/src/tools/score_attribution.py" \
   --output-path "${ATTR_JSONL}" \
   --question-key "${QUESTION_KEY}" \
   --retain-batch-size "${ATTR_RETAIN_BATCH_SIZE}" \
+  --forget-max-examples "${MAX_EXAMPLES}" \
   --retain-max-steps "${ATTR_RETAIN_MAX_STEPS}" \
   --forget-max-steps "${ATTR_FORGET_MAX_STEPS}" \
   --retain-proxy-mode multi_bank \
@@ -35576,7 +35819,8 @@ python "${repo_root}/src/tools/validate_dual_cf_artifact.py" \
   --require-short-answer \
   --max-alt-length-chars 128 \
   --check-overlap-ratio 0.85 \
-  --strict
+  --strict \
+  --report-path "${ARTIFACT_REPORT_JSON}"
 
 echo "[prepare_dual_cf_rwku_v3] Final artifact: ${FINAL_JSONL}"
 
@@ -36680,7 +36924,7 @@ fi
 
 echo "[rwku][DualCF] Using Hugging Face base checkpoint ${base_model_path}"
 
-experiment="${EXPERIMENT:-unlearn/rwku/dual_cf_v2_lora.yaml}"
+experiment="${EXPERIMENT:-unlearn/rwku/dual_cf_v3_lora.yaml}"
 trainer="${TRAINER:-DualCF}"
 method_name="${METHOD_NAME:-dual_cf}"
 run_label="${RUN_LABEL:-DualCF}"
@@ -37352,6 +37596,15 @@ UTILITY_SYSTEM_INSTRUCTION=${UTILITY_SYSTEM_INSTRUCTION:-null}
 EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
 BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-}
 
+resolve_path_portable() {
+  python - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+}
+
 normalize_model_config_name() {
   local raw="${1:-}"
   raw="${raw##*/}"
@@ -37470,7 +37723,7 @@ evaluate_label() {
 
 BASE_MODEL_CFG=$(normalize_model_config_name "${BASE_MODEL_CFG_RAW}")
 LORA_MODEL_CFG=$(normalize_model_config_name "${LORA_MODEL_CFG_RAW}")
-UTILITY_ROOT=$(realpath -m "${UTILITY_ROOT}")
+UTILITY_ROOT=$(resolve_path_portable "${UTILITY_ROOT}")
 LORA_MODEL_SUBFOLDER_VALUE=${LORA_BASE_MODEL_SUBFOLDER}
 
 if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then
@@ -41336,28 +41589,43 @@ class DUETEvaluator(Evaluator):
 </content>
 
 <content full_path="src/evals/__init__.py">
-from typing import Dict, Any
+from importlib import import_module
+from typing import Any, Dict
+
 from omegaconf import DictConfig
-from evals.tofu import TOFUEvaluator
-from evals.muse import MUSEEvaluator
-from evals.lm_eval import LMEvalEvaluator
-from evals.duet import DUETEvaluator
+
 
 EVALUATOR_REGISTRY: Dict[str, Any] = {}
+_EVALUATOR_IMPORTS = {
+    "TOFUEvaluator": ("evals.tofu", "TOFUEvaluator"),
+    "MUSEEvaluator": ("evals.muse", "MUSEEvaluator"),
+    "LMEvalEvaluator": ("evals.lm_eval", "LMEvalEvaluator"),
+    "DUETEvaluator": ("evals.duet", "DUETEvaluator"),
+}
 
 
-def _register_evaluator(evaluator_class):
+def _register_trainer(evaluator_class):
     EVALUATOR_REGISTRY[evaluator_class.__name__] = evaluator_class
+
+
+def _load_evaluator_class(name: str):
+    evaluator_class = EVALUATOR_REGISTRY.get(name)
+    if evaluator_class is not None:
+        return evaluator_class
+    module_name, attr_name = _EVALUATOR_IMPORTS[name]
+    evaluator_class = getattr(import_module(module_name), attr_name)
+    EVALUATOR_REGISTRY[name] = evaluator_class
+    return evaluator_class
 
 
 def get_evaluator(name: str, eval_cfg: DictConfig, **kwargs):
     evaluator_handler_name = eval_cfg.get("handler")
     assert evaluator_handler_name is not None, ValueError(f"{name} handler not set")
-    eval_handler = EVALUATOR_REGISTRY.get(evaluator_handler_name)
-    if eval_handler is None:
+    if evaluator_handler_name not in _EVALUATOR_IMPORTS:
         raise NotImplementedError(
             f"{evaluator_handler_name} not implemented or not registered"
         )
+    eval_handler = _load_evaluator_class(evaluator_handler_name)
     return eval_handler(eval_cfg, **kwargs)
 
 
@@ -41366,13 +41634,6 @@ def get_evaluators(eval_cfgs: DictConfig, **kwargs):
     for eval_name, eval_cfg in eval_cfgs.items():
         evaluators[eval_name] = get_evaluator(eval_name, eval_cfg, **kwargs)
     return evaluators
-
-
-# Register Your benchmark evaluators
-_register_evaluator(TOFUEvaluator)
-_register_evaluator(MUSEEvaluator)
-_register_evaluator(LMEvalEvaluator)
-_register_evaluator(DUETEvaluator)
 
 </content>
 
@@ -41727,6 +41988,19 @@ def _normalize_scores(value: Any, expected_length: int) -> list[Any]:
     return normalized
 
 
+def _normalize_optional_text_list(value: Any, expected_length: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[Any] = []
+    for raw_value in value[:expected_length]:
+        text = str(raw_value or "").strip()
+        normalized.append(text or None)
+    if len(normalized) < expected_length:
+        normalized.extend([None] * (expected_length - len(normalized)))
+    return normalized
+
+
 @dataclass
 class VLLMCFGenerator:
     base_url: str
@@ -41746,6 +42020,10 @@ class VLLMCFGenerator:
             in {"1", "true", "yes"}
         )
         candidate_limit = max(1, int(self.num_alternates))
+        if candidate_limit > 1 and not self.use_structured_outputs:
+            raise ValueError(
+                "Multi-alternate vLLM generation requires VLLM_USE_STRUCTURED_OUTPUTS=1."
+            )
         self.schema = {
             "type": "object",
             "additionalProperties": False,
@@ -41763,6 +42041,18 @@ class VLLMCFGenerator:
                 "scores": {
                     "type": "array",
                     "items": {"type": "number"},
+                },
+                "relation_scores": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                },
+                "shared_fact_scores": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                },
+                "candidate_sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
                 },
                 "same_relation": {"type": "boolean"},
                 "answer_type": {"type": "string"},
@@ -41828,6 +42118,7 @@ class VLLMCFGenerator:
         if self.use_structured_outputs:
             system += (
                 "\n6. Return valid JSON only with keys `alternates`, optional `scores`, "
+                "`relation_scores`, `shared_fact_scores`, optional `candidate_sources`, "
                 "`same_relation`, and `answer_type`."
             )
         else:
@@ -41845,7 +42136,8 @@ class VLLMCFGenerator:
             if self.use_structured_outputs:
                 user += (
                     f"Select up to {max(1, int(self.num_alternates))} best short alternatives from the candidate list "
-                    "or minimal rewrites of that list. If you provide `scores`, align them with `alternates`."
+                    "or minimal rewrites of that list. If you provide `scores`, `relation_scores`, "
+                    "`shared_fact_scores`, or `candidate_sources`, align them with `alternates`."
                 )
             else:
                 user += (
@@ -41881,16 +42173,34 @@ class VLLMCFGenerator:
         *,
         alternates: Sequence[Any],
         scores: Sequence[Any] | None = None,
+        relation_scores: Sequence[Any] | None = None,
+        shared_fact_scores: Sequence[Any] | None = None,
+        candidate_sources: Sequence[Any] | None = None,
         same_relation: bool = True,
         answer_type: str = "unknown",
     ) -> Dict[str, Any]:
         normalized_alternates = _normalize_alternates(list(alternates))
         normalized_scores = _normalize_scores(scores, len(normalized_alternates))
+        normalized_relation_scores = _normalize_scores(
+            relation_scores,
+            len(normalized_alternates),
+        )
+        normalized_shared_fact_scores = _normalize_scores(
+            shared_fact_scores,
+            len(normalized_alternates),
+        )
+        normalized_candidate_sources = _normalize_optional_text_list(
+            candidate_sources,
+            len(normalized_alternates),
+        )
         alternate = normalized_alternates[0] if normalized_alternates else ""
         return {
             "alternate": alternate,
             "alternates": normalized_alternates,
             "scores": normalized_scores,
+            "relation_scores": normalized_relation_scores,
+            "shared_fact_scores": normalized_shared_fact_scores,
+            "candidate_sources": normalized_candidate_sources,
             "same_relation": bool(same_relation),
             "answer_type": str(answer_type),
         }
@@ -41966,6 +42276,9 @@ class VLLMCFGenerator:
             scores=payload.get("scores"),
             same_relation=bool(payload.get("same_relation", bool(normalized_alternates))),
             answer_type=str(payload.get("answer_type", "invalid_schema")),
+            relation_scores=payload.get("relation_scores"),
+            shared_fact_scores=payload.get("shared_fact_scores"),
+            candidate_sources=payload.get("candidate_sources"),
         )
 
     async def many(self, rows: Sequence[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -42788,7 +43101,8 @@ if str(SRC_ROOT) not in sys.path:
 from tools.dual_cf_artifact_utils import (  # noqa: E402
     clean_counterfactual_text,
     counterfactual_invalid_reason,
-    dedupe_scored_candidates,
+    dedupe_candidate_metadata,
+    duplicate_candidate_count,
     pick_best_counterfactual_v3,
     read_jsonl,
     save_jsonl,
@@ -42854,9 +43168,18 @@ def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
     response_candidates = list(response.get("alternates") or [])
     if not response_candidates and str(response.get("alternate", "")).strip():
         response_candidates = [str(response.get("alternate", "")).strip()]
-    candidates, scores = dedupe_scored_candidates(
+    (
+        candidates,
+        scores,
+        relation_scores,
+        shared_fact_scores,
+        sources,
+    ) = dedupe_candidate_metadata(
         response_candidates,
-        response.get("scores", []),
+        scores=response.get("scores", []),
+        relation_scores=response.get("relation_scores", []),
+        shared_fact_scores=response.get("shared_fact_scores", []),
+        candidate_sources=response.get("candidate_sources", []),
     )
     best_alt, pick_meta = pick_best_counterfactual_v3(
         question=str(row.get(args.question_key, "")),
@@ -42864,12 +43187,26 @@ def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
         candidates=candidates,
         candidate_answers=row.get("candidate_answers"),
         external_scores=scores,
+        relation_scores=relation_scores,
+        shared_fact_scores=shared_fact_scores,
+        candidate_sources=sources,
+        default_relation_score=(
+            1.0 if bool(response.get("same_relation", True)) else 0.0
+        ),
         reject_gold_substring=args.reject_gold_substring,
         max_overlap_ratio=args.max_overlap_ratio,
         require_short_answer=args.require_short_answer,
         max_alt_length_chars=args.max_alt_length_chars,
     )
-    return best_alt, candidates, scores, pick_meta
+    return (
+        best_alt,
+        candidates,
+        scores,
+        relation_scores,
+        shared_fact_scores,
+        sources,
+        pick_meta,
+    )
 
 
 def main():
@@ -42915,7 +43252,15 @@ def main():
             outputs = generator.many_sync(list(row_chunk))
             for response, row_idx in zip(outputs, meta_chunk):
                 row = dict(rows[row_idx])
-                alternate, response_candidates, response_scores, pick_meta = choose_retry_alternate(
+                (
+                    alternate,
+                    response_candidates,
+                    response_scores,
+                    response_relation_scores,
+                    response_shared_fact_scores,
+                    response_sources,
+                    pick_meta,
+                ) = choose_retry_alternate(
                     args,
                     row,
                     response,
@@ -42925,12 +43270,33 @@ def main():
                 row["cf_retry_last_alternate"] = alternate
                 row["cf_retry_last_alternates"] = list(response_candidates)
                 row["cf_retry_last_scores"] = list(response_scores)
+                row["cf_retry_last_relation_scores"] = list(response_relation_scores)
+                row["cf_retry_last_shared_fact_scores"] = list(response_shared_fact_scores)
+                row["cf_retry_last_sources"] = list(response_sources)
                 row["cf_retry_last_answer_type"] = str(
                     response.get("answer_type", "unknown")
                 )
                 row["cf_retry_pick_meta"] = pick_meta
                 if reason is None:
                     row["alternate"] = alternate
+                    row["external_alternates"] = list(response_candidates)
+                    row["external_alternate_scores"] = list(response_scores)
+                    row["external_alternate_relation_scores"] = list(
+                        response_relation_scores
+                    )
+                    row["external_alternate_shared_fact_scores"] = list(
+                        response_shared_fact_scores
+                    )
+                    row["external_alternate_sources"] = list(response_sources)
+                    pick_meta["selected_candidate"] = pick_meta.get(
+                        "selected_candidate_text",
+                        alternate,
+                    )
+                    pick_meta["candidate_pool_size"] = len(response_candidates)
+                    pick_meta["duplicate_candidates_removed"] = duplicate_candidate_count(
+                        response.get("alternates", [])
+                    )
+                    row["cf_pick_meta"] = pick_meta
                     row["cf_invalid_reason"] = None
                     row["cf_is_valid"] = True
                     row["cf_source"] = "vllm_retry"
@@ -42938,6 +43304,18 @@ def main():
                     row["cf_generator_model"] = args.vllm_model
                     row["cf_same_relation"] = bool(response.get("same_relation", True))
                     row["cf_answer_type"] = str(response.get("answer_type", "unknown"))
+                    provenance = dict(row.get("cf_provenance") or {})
+                    provenance.setdefault("generator_backend", "vllm_openai")
+                    provenance.setdefault("prompt_family", args.prompt_family)
+                    provenance.setdefault("candidate_count", max(1, int(args.num_alternates)))
+                    provenance.setdefault(
+                        "prompt_version",
+                        f"vllm_openai:{args.prompt_family}:v1",
+                    )
+                    provenance["retry_generator_backend"] = "vllm_openai"
+                    provenance["retry_generator_model"] = args.vllm_model
+                    provenance["retry_prompt_family"] = args.prompt_family
+                    row["cf_provenance"] = provenance
                     row["cf_retry_success"] = True
                     recovered += 1
                 else:
@@ -43265,6 +43643,8 @@ if str(SRC_ROOT) not in sys.path:
 
 from tools.dual_cf_artifact_utils import (
     BAD_CF_PREFIXES,
+    build_artifact_quality_report,
+    clean_counterfactual_text,
     counterfactual_invalid_reason,
 )
 
@@ -43280,7 +43660,28 @@ def parse_args():
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--check-overlap-ratio", type=float, default=None)
     parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--report-path", default=None)
     return parser.parse_args()
+
+
+def _count_duplicate_candidates(values):
+    seen = set()
+    duplicates = 0
+    for value in values if isinstance(values, list) else []:
+        cleaned = clean_counterfactual_text(value)
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            duplicates += 1
+            continue
+        seen.add(cleaned)
+    return duplicates
+
+
+def _list_length_valid(values, expected_length: int) -> bool:
+    if not isinstance(values, list):
+        return False
+    return len(values) in (0, expected_length)
 
 
 def main():
@@ -43383,10 +43784,21 @@ def main():
                 for key in ("difficulty_components", "attribution_components"):
                     if key in row and not isinstance(row[key], dict):
                         bad_rows.append((line_no, f"{key} is not a dict"))
-                for key in ("candidate_answers", "external_alternates", "belief_candidates"):
+                for key in (
+                    "candidate_answers",
+                    "candidate_relation_scores",
+                    "candidate_shared_fact_scores",
+                    "candidate_sources",
+                    "external_alternates",
+                    "external_alternate_scores",
+                    "external_alternate_relation_scores",
+                    "external_alternate_shared_fact_scores",
+                    "external_alternate_sources",
+                    "belief_candidates",
+                ):
                     if key in row and not isinstance(row[key], list):
                         bad_rows.append((line_no, f"{key} is not a list"))
-                for key in ("cf_pick_meta", "belief_pick_meta"):
+                for key in ("cf_pick_meta", "belief_pick_meta", "cf_provenance"):
                     if key in row and not isinstance(row[key], dict):
                         bad_rows.append((line_no, f"{key} is not a dict"))
                 for key in ("cf_is_valid",):
@@ -43409,6 +43821,39 @@ def main():
                                 "external_alternate_scores length does not match external_alternates",
                             )
                         )
+                for meta_key in (
+                    "external_alternate_relation_scores",
+                    "external_alternate_shared_fact_scores",
+                    "external_alternate_sources",
+                ):
+                    meta_values = row.get(meta_key)
+                    if meta_values is not None and isinstance(alternates, list):
+                        if not _list_length_valid(meta_values, len(alternates)):
+                            bad_rows.append(
+                                (
+                                    line_no,
+                                    f"{meta_key} length does not match external_alternates",
+                                )
+                            )
+            if "candidate_answers" in row:
+                candidate_answers = row.get("candidate_answers")
+                if isinstance(candidate_answers, list):
+                    for meta_key in (
+                        "candidate_relation_scores",
+                        "candidate_shared_fact_scores",
+                        "candidate_sources",
+                    ):
+                        meta_values = row.get(meta_key)
+                        if meta_values is not None and not _list_length_valid(
+                            meta_values,
+                            len(candidate_answers),
+                        ):
+                            bad_rows.append(
+                                (
+                                    line_no,
+                                    f"{meta_key} length does not match candidate_answers",
+                                )
+                            )
             if "belief_candidates" in row and "belief_alternate" in row:
                 beliefs = row.get("belief_candidates")
                 belief_alt = row.get("belief_alternate")
@@ -43417,7 +43862,61 @@ def main():
                         bad_rows.append(
                             (line_no, "belief_alternate is not present in belief_candidates")
                         )
+            pick_meta = row.get("cf_pick_meta")
+            if isinstance(pick_meta, dict):
+                selected_text = str(
+                    pick_meta.get("selected_candidate")
+                    or pick_meta.get("selected_candidate_text")
+                    or ""
+                ).strip()
+                if selected_text and clean_counterfactual_text(selected_text) != clean_counterfactual_text(
+                    row.get("alternate", "")
+                ):
+                    bad_rows.append(
+                        (line_no, "cf_pick_meta selected_candidate_text does not match alternate")
+                    )
+                selected_index = pick_meta.get("selected_candidate_index")
+                if selected_index not in (None, "") and not isinstance(selected_index, int):
+                    bad_rows.append((line_no, "cf_pick_meta selected_candidate_index is not an int"))
+                candidate_pool_size = pick_meta.get("candidate_pool_size")
+                if candidate_pool_size not in (None, ""):
+                    if not isinstance(candidate_pool_size, int) or candidate_pool_size < 0:
+                        bad_rows.append(
+                            (line_no, "cf_pick_meta candidate_pool_size is invalid")
+                        )
+                    elif isinstance(selected_index, int) and not (
+                        0 <= selected_index < candidate_pool_size
+                    ):
+                        bad_rows.append(
+                            (
+                                line_no,
+                                "cf_pick_meta selected_candidate_index is out of range",
+                            )
+                        )
+                duplicate_removed = pick_meta.get("duplicate_candidates_removed")
+                if duplicate_removed not in (None, "") and (
+                    not isinstance(duplicate_removed, int) or duplicate_removed < 0
+                ):
+                    bad_rows.append(
+                        (
+                            line_no,
+                            "cf_pick_meta duplicate_candidates_removed is invalid",
+                        )
+                    )
+                if args.strict and "selected_source" not in pick_meta:
+                    bad_rows.append((line_no, "cf_pick_meta missing selected_source"))
+            provenance = row.get("cf_provenance")
+            if isinstance(provenance, dict) and args.strict:
+                for key in ("generator_backend", "prompt_family", "candidate_count", "prompt_version"):
+                    if key not in provenance:
+                        bad_rows.append((line_no, f"cf_provenance missing `{key}`"))
 
+    report = build_artifact_quality_report(
+        [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()],
+        question_key=args.question_key,
+        answer_key="answer",
+        alternate_key="alternate",
+    )
     print(f"artifact={path}")
     print(f"rows={len(seen_indices)}")
     print(f"duplicate_indices={sorted(duplicate_indices)}")
@@ -43428,6 +43927,25 @@ def main():
         "ranges="
         + str({key: tuple(value) for key, value in ranges.items() if value[0] != float("inf")})
     )
+    print(f"artifact_quality={report}")
+
+    if args.report_path not in (None, "", "null", "None"):
+        payload = {
+            "artifact": str(path),
+            "rows": len(seen_indices),
+            "duplicate_indices": sorted(duplicate_indices),
+            "bad_rows_count": len(bad_rows),
+            "bad_rows_sample": bad_rows[: max(0, int(args.max_bad_rows))],
+            "invalid_reason_counts": invalid_reason_counts,
+            "ranges": {
+                key: tuple(value)
+                for key, value in ranges.items()
+                if value[0] != float("inf")
+            },
+            "artifact_quality": report,
+        }
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=True)
 
     if duplicate_indices or bad_rows:
         return 1
@@ -44352,11 +44870,13 @@ if str(SRC_ROOT) not in sys.path:
 
 from data.utils import preprocess_chat_instance
 from tools.dual_cf_artifact_utils import (
+    build_artifact_quality_report,
     build_answer_type_fallback_candidates,
     build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
-    dedupe_scored_candidates,
+    dedupe_candidate_metadata,
+    duplicate_candidate_count,
     load_dataset_split,
     load_keyed_jsonish,
     load_model_bundle,
@@ -44387,6 +44907,9 @@ def parse_args():
     parser.add_argument("--mapping-key", default="index")
     parser.add_argument("--mapping-alternate-key", default="alternate")
     parser.add_argument("--external-score-key", default="scores")
+    parser.add_argument("--external-relation-score-key", default="relation_scores")
+    parser.add_argument("--external-shared-fact-score-key", default="shared_fact_scores")
+    parser.add_argument("--external-source-key", default="candidate_sources")
     parser.add_argument("--allow-list-alternates", action="store_true")
     parser.add_argument("--candidate-bank", default=None)
     parser.add_argument("--generator-backend", choices=("hf", "vllm_openai"), default="hf")
@@ -44409,10 +44932,12 @@ def parse_args():
     parser.add_argument("--num-alternates", type=int, default=1)
     parser.add_argument("--prompt-family", default="default")
     parser.add_argument("--repair-invalid", action="store_true")
+    parser.add_argument("--allow-low-confidence-fallback", action="store_true")
     parser.add_argument("--reject-gold-substring", action="store_true")
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
     parser.add_argument("--max-alt-length-chars", type=int, default=128)
+    parser.add_argument("--report-path", default=None)
     return parser.parse_args()
 
 
@@ -44431,6 +44956,41 @@ def _score_list(value: Any, expected_length: int) -> list[Any]:
     if len(scores) < expected_length:
         scores.extend([None] * (expected_length - len(scores)))
     return scores
+
+
+def _source_list(value: Any, expected_length: int, default_value: str | None = None) -> list[Any]:
+    if not isinstance(value, list):
+        return [default_value] * expected_length
+    sources = [str(item).strip() if str(item).strip() else default_value for item in value[:expected_length]]
+    if len(sources) < expected_length:
+        sources.extend([default_value] * (expected_length - len(sources)))
+    return sources
+
+
+def _candidate_bank_metadata(
+    bank_row: Dict[str, Any],
+    row_candidates: list[str],
+) -> tuple[list[Any], list[Any], list[Any]]:
+    expected_length = len(row_candidates)
+    return (
+        _score_list(bank_row.get("candidate_relation_scores"), expected_length),
+        _score_list(bank_row.get("candidate_shared_fact_scores"), expected_length),
+        _source_list(
+            bank_row.get("candidate_sources"),
+            expected_length,
+            default_value="candidate_bank",
+        ),
+    )
+
+
+def _default_prompt_version(
+    *,
+    backend: str,
+    prompt_family: str,
+) -> str:
+    backend_name = str(backend or "unknown")
+    prompt_name = str(prompt_family or "default")
+    return f"{backend_name}:{prompt_name}:v1"
 
 
 def load_mapping(path: str, key_field: str, alternate_field: str) -> Dict[str, Dict[str, Any]]:
@@ -44608,11 +45168,21 @@ def build_cf_provenance(
         "generator_backend": backend or args.generator_backend,
         "prompt_family": args.prompt_family,
         "candidate_count": max(1, int(args.num_alternates)),
+        "prompt_version": _default_prompt_version(
+            backend=backend or args.generator_backend,
+            prompt_family=args.prompt_family,
+        ),
     }
     if model_name not in (None, "", "null", "None"):
         provenance["generator_model"] = model_name
     if source_row:
-        for key in ("generator", "prompt_version", "temperature", "top_p"):
+        for key in (
+            "generator",
+            "prompt_version",
+            "temperature",
+            "top_p",
+            "structured_outputs",
+        ):
             value = source_row.get(key)
             if value not in (None, "", "null", "None"):
                 provenance[key] = value
@@ -44630,43 +45200,103 @@ def select_best_alternate(
     seed: int,
     primary_candidates: list[str],
     row_candidates: list[str],
+    row_relation_scores: list[Any] | None = None,
+    row_shared_fact_scores: list[Any] | None = None,
+    row_sources: list[Any] | None = None,
     external_candidates: list[str] | None = None,
     external_scores: list[Any] | None = None,
+    external_relation_scores: list[Any] | None = None,
+    external_shared_fact_scores: list[Any] | None = None,
+    external_sources: list[Any] | None = None,
+    default_relation_score: float | None = None,
 ):
     external_candidates = list(external_candidates or [])
     candidate_pool = []
     score_pool = []
+    relation_score_pool = []
+    shared_fact_score_pool = []
+    source_pool = []
     low_confidence_candidates: list[str] = []
+    duplicate_candidates_removed = 0
 
     for candidate in primary_candidates:
         candidate_pool.append(candidate)
         score_pool.append(None)
+        relation_score_pool.append(None)
+        shared_fact_score_pool.append(None)
+        source_pool.append("primary")
     for idx, candidate in enumerate(external_candidates):
         candidate_pool.append(candidate)
         score_pool.append(
             external_scores[idx] if external_scores is not None and idx < len(external_scores) else None
         )
+        relation_score_pool.append(
+            external_relation_scores[idx]
+            if external_relation_scores is not None and idx < len(external_relation_scores)
+            else None
+        )
+        shared_fact_score_pool.append(
+            external_shared_fact_scores[idx]
+            if external_shared_fact_scores is not None and idx < len(external_shared_fact_scores)
+            else None
+        )
+        source_pool.append(
+            external_sources[idx]
+            if external_sources is not None and idx < len(external_sources)
+            else "external"
+        )
     for candidate in row_candidates:
         candidate_pool.append(candidate)
         score_pool.append(None)
+    row_relation_scores = _score_list(row_relation_scores, len(row_candidates))
+    row_shared_fact_scores = _score_list(row_shared_fact_scores, len(row_candidates))
+    row_sources = _source_list(row_sources, len(row_candidates), default_value="candidate_bank")
+    relation_score_pool.extend(row_relation_scores)
+    shared_fact_score_pool.extend(row_shared_fact_scores)
+    source_pool.extend(row_sources)
     if args.repair_invalid:
         for candidate in build_answer_type_fallback_candidates(answer, seed=seed):
             candidate_pool.append(candidate)
             score_pool.append(None)
-        low_confidence_candidates = build_low_confidence_fallback_candidates(answer)
+            relation_score_pool.append(None)
+            shared_fact_score_pool.append(None)
+            source_pool.append("typed_fallback")
+        if args.allow_low_confidence_fallback:
+            low_confidence_candidates = build_low_confidence_fallback_candidates(answer)
 
-    candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+    duplicate_candidates_removed = duplicate_candidate_count(candidate_pool)
+
+    (
+        candidate_pool,
+        score_pool,
+        relation_score_pool,
+        shared_fact_score_pool,
+        source_pool,
+    ) = dedupe_candidate_metadata(
+        candidate_pool,
+        scores=score_pool,
+        relation_scores=relation_score_pool,
+        shared_fact_scores=shared_fact_score_pool,
+        candidate_sources=source_pool,
+    )
     best_alt, best_meta = pick_best_counterfactual_v3(
         question=question,
         answer=answer,
         candidates=candidate_pool,
         candidate_answers=row_candidates,
         external_scores=score_pool,
+        relation_scores=relation_score_pool,
+        shared_fact_scores=shared_fact_score_pool,
+        candidate_sources=source_pool,
+        default_relation_score=default_relation_score,
         reject_gold_substring=args.reject_gold_substring,
         max_overlap_ratio=args.max_overlap_ratio,
         require_short_answer=args.require_short_answer,
         max_alt_length_chars=args.max_alt_length_chars,
     )
+    best_meta["selected_candidate"] = best_meta.get("selected_candidate_text", best_alt)
+    best_meta["candidate_pool_size"] = len(candidate_pool)
+    best_meta["duplicate_candidates_removed"] = int(duplicate_candidates_removed)
     invalid_reason = counterfactual_invalid_reason(
         best_alt,
         answer,
@@ -44678,18 +45308,41 @@ def select_best_alternate(
     if invalid_reason is not None and args.repair_invalid and low_confidence_candidates:
         candidate_pool.extend(low_confidence_candidates)
         score_pool.extend([None] * len(low_confidence_candidates))
-        candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
+        relation_score_pool.extend([None] * len(low_confidence_candidates))
+        shared_fact_score_pool.extend([None] * len(low_confidence_candidates))
+        source_pool.extend(["low_confidence_fallback"] * len(low_confidence_candidates))
+        duplicate_candidates_removed = duplicate_candidate_count(candidate_pool)
+        (
+            candidate_pool,
+            score_pool,
+            relation_score_pool,
+            shared_fact_score_pool,
+            source_pool,
+        ) = dedupe_candidate_metadata(
+            candidate_pool,
+            scores=score_pool,
+            relation_scores=relation_score_pool,
+            shared_fact_scores=shared_fact_score_pool,
+            candidate_sources=source_pool,
+        )
         best_alt, best_meta = pick_best_counterfactual_v3(
             question=question,
             answer=answer,
             candidates=candidate_pool,
             candidate_answers=row_candidates,
             external_scores=score_pool,
+            relation_scores=relation_score_pool,
+            shared_fact_scores=shared_fact_score_pool,
+            candidate_sources=source_pool,
+            default_relation_score=default_relation_score,
             reject_gold_substring=args.reject_gold_substring,
             max_overlap_ratio=args.max_overlap_ratio,
             require_short_answer=args.require_short_answer,
             max_alt_length_chars=args.max_alt_length_chars,
         )
+        best_meta["selected_candidate"] = best_meta.get("selected_candidate_text", best_alt)
+        best_meta["candidate_pool_size"] = len(candidate_pool)
+        best_meta["duplicate_candidates_removed"] = int(duplicate_candidates_removed)
         invalid_reason = counterfactual_invalid_reason(
             best_alt,
             answer,
@@ -44704,6 +45357,9 @@ def select_best_alternate(
         if baseline_candidate:
             break
     repaired = bool(best_alt) and clean_counterfactual_text(best_alt) != baseline_candidate
+    best_meta["selected_candidate"] = best_meta.get("selected_candidate_text", best_alt)
+    best_meta["candidate_pool_size"] = len(candidate_pool)
+    best_meta["duplicate_candidates_removed"] = int(duplicate_candidates_removed)
     return best_alt, invalid_reason, repaired, best_meta
 
 
@@ -44777,14 +45433,23 @@ def main():
         question = str(row[args.question_key])
         bank_row = candidate_bank.get(str(row.get(args.mapping_key, "")), {})
         row_candidates = list(bank_row.get("candidate_answers", []))
+        (
+            row_relation_scores,
+            row_shared_fact_scores,
+            row_sources,
+        ) = _candidate_bank_metadata(bank_row, row_candidates)
 
         if args.alternate_column or mapping is not None or generate_alternates is not None:
             try:
                 mapping_row: dict[str, Any] | None = None
                 external_candidates: list[str] = []
                 external_scores: list[Any] | None = None
+                external_relation_scores: list[Any] | None = None
+                external_shared_fact_scores: list[Any] | None = None
+                external_sources: list[Any] | None = None
                 primary_candidates: list[str] = []
                 cf_source = "hf_generator"
+                default_relation_score = None
 
                 if args.alternate_column:
                     primary_candidates = _string_list(row[args.alternate_column])
@@ -44807,6 +45472,21 @@ def main():
                         mapping_row.get(args.external_score_key),
                         expected_length=len(external_candidates),
                     )
+                    external_relation_scores = _score_list(
+                        mapping_row.get(args.external_relation_score_key),
+                        expected_length=len(external_candidates),
+                    )
+                    external_shared_fact_scores = _score_list(
+                        mapping_row.get(args.external_shared_fact_score_key),
+                        expected_length=len(external_candidates),
+                    )
+                    external_sources = _source_list(
+                        mapping_row.get(args.external_source_key),
+                        expected_length=len(external_candidates),
+                        default_value="sidecar",
+                    )
+                    if mapping_row.get("same_relation") not in (None, "", "null", "None"):
+                        default_relation_score = 1.0 if bool(mapping_row.get("same_relation")) else 0.0
                     primary_candidates = []
                     cf_source = "alternate_jsonl_multi" if len(external_candidates) > 1 else "alternate_jsonl"
                 else:
@@ -44819,16 +45499,29 @@ def main():
                     seed=int(row.get(args.mapping_key, row_no) or row_no),
                     primary_candidates=primary_candidates,
                     row_candidates=row_candidates,
+                    row_relation_scores=row_relation_scores,
+                    row_shared_fact_scores=row_shared_fact_scores,
+                    row_sources=row_sources,
                     external_candidates=external_candidates,
                     external_scores=external_scores,
+                    external_relation_scores=external_relation_scores,
+                    external_shared_fact_scores=external_shared_fact_scores,
+                    external_sources=external_sources,
+                    default_relation_score=default_relation_score,
                 )
 
                 updated = dict(row)
                 updated["answer"] = answer
                 updated["alternate"] = best_alt
                 updated["candidate_answers"] = row_candidates
+                updated["candidate_relation_scores"] = row_relation_scores
+                updated["candidate_shared_fact_scores"] = row_shared_fact_scores
+                updated["candidate_sources"] = row_sources
                 updated["external_alternates"] = external_candidates
                 updated["external_alternate_scores"] = external_scores
+                updated["external_alternate_relation_scores"] = external_relation_scores
+                updated["external_alternate_shared_fact_scores"] = external_shared_fact_scores
+                updated["external_alternate_sources"] = external_sources
                 updated["cf_pick_meta"] = best_meta
                 updated["cf_source"] = cf_source
                 updated["cf_generator_backend"] = args.generator_backend
@@ -44866,7 +45559,18 @@ def main():
                     "candidate_answers": row_candidates,
                 }
             )
-            pending_vllm_meta.append((row_no, dict(row), answer, question, row_candidates))
+            pending_vllm_meta.append(
+                (
+                    row_no,
+                    dict(row),
+                    answer,
+                    question,
+                    row_candidates,
+                    row_relation_scores,
+                    row_shared_fact_scores,
+                    row_sources,
+                )
+            )
 
     if vllm_generator is not None and pending_vllm_rows:
         log(f"Sending {len(pending_vllm_rows)} rows to vLLM generator")
@@ -44875,7 +45579,16 @@ def main():
             chunked(pending_vllm_meta, args.generator_batch_size),
         ):
             outputs = vllm_generator.many_sync(list(row_chunk))
-            for response, (row_no, row, answer, question, row_candidates) in zip(outputs, meta_chunk):
+            for response, (
+                row_no,
+                row,
+                answer,
+                question,
+                row_candidates,
+                row_relation_scores,
+                row_shared_fact_scores,
+                row_sources,
+            ) in zip(outputs, meta_chunk):
                 row_index = row.get("index", "<missing>")
                 try:
                     response_candidates = _string_list(
@@ -44887,6 +45600,24 @@ def main():
                         response.get(args.external_score_key),
                         expected_length=len(response_candidates),
                     )
+                    response_relation_scores = _score_list(
+                        response.get(args.external_relation_score_key),
+                        expected_length=len(response_candidates),
+                    )
+                    response_shared_fact_scores = _score_list(
+                        response.get(args.external_shared_fact_score_key),
+                        expected_length=len(response_candidates),
+                    )
+                    response_sources = _source_list(
+                        response.get(args.external_source_key),
+                        expected_length=len(response_candidates),
+                        default_value="vllm_generated",
+                    )
+                    default_relation_score = (
+                        1.0
+                        if bool(response.get("same_relation", True))
+                        else 0.0
+                    )
                     best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
                         args=args,
                         question=question,
@@ -44894,15 +45625,28 @@ def main():
                         seed=int(row.get(args.mapping_key, row_no) or row_no),
                         primary_candidates=[],
                         row_candidates=row_candidates,
+                        row_relation_scores=row_relation_scores,
+                        row_shared_fact_scores=row_shared_fact_scores,
+                        row_sources=row_sources,
                         external_candidates=response_candidates,
                         external_scores=response_scores,
+                        external_relation_scores=response_relation_scores,
+                        external_shared_fact_scores=response_shared_fact_scores,
+                        external_sources=response_sources,
+                        default_relation_score=default_relation_score,
                     )
                     updated = dict(row)
                     updated["answer"] = answer
                     updated["alternate"] = best_alt
                     updated["candidate_answers"] = row_candidates
+                    updated["candidate_relation_scores"] = row_relation_scores
+                    updated["candidate_shared_fact_scores"] = row_shared_fact_scores
+                    updated["candidate_sources"] = row_sources
                     updated["external_alternates"] = response_candidates
                     updated["external_alternate_scores"] = response_scores
+                    updated["external_alternate_relation_scores"] = response_relation_scores
+                    updated["external_alternate_shared_fact_scores"] = response_shared_fact_scores
+                    updated["external_alternate_sources"] = response_sources
                     updated["cf_pick_meta"] = best_meta
                     updated["cf_source"] = "vllm_primary"
                     updated["cf_generator_backend"] = "vllm_openai"
@@ -44936,6 +45680,16 @@ def main():
 
     log(f"Saving {len(rows)} rows to {args.output_path}")
     save_jsonl(rows, args.output_path)
+    if args.report_path not in (None, "", "null", "None"):
+        report = build_artifact_quality_report(
+            rows,
+            question_key=args.question_key,
+            answer_key="answer",
+            alternate_key="alternate",
+        )
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=True)
+        log(f"Saved artifact-quality report to {args.report_path}")
     log(
         "Done. "
         f"rows={len(rows)} empty_alternates={empty_alternate_count} "
@@ -45308,45 +46062,113 @@ def bank_membership_score(candidate: Any, candidate_answers: Sequence[str] | Non
     return 1.0 if candidate_norm in bank_norm else 0.0
 
 
-def dedupe_scored_candidates(
+def _coerce_optional_float(value: Any) -> float | None:
+    try:
+        if value in (None, "", "null", "None"):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _coerce_optional_text(value: Any) -> str | None:
+    if value in (None, "", "null", "None"):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _metadata_value(
+    values: Sequence[Any] | None,
+    index: int,
+    *,
+    kind: str,
+) -> Any:
+    if values is None or index >= len(values):
+        return None
+    value = values[index]
+    if kind == "float":
+        return _coerce_optional_float(value)
+    if kind == "text":
+        return _coerce_optional_text(value)
+    raise ValueError(f"Unsupported metadata kind: {kind}")
+
+
+def dedupe_candidate_metadata(
     candidates: Sequence[Any],
+    *,
     scores: Sequence[Any] | None = None,
-) -> tuple[list[str], list[Any]]:
+    relation_scores: Sequence[Any] | None = None,
+    shared_fact_scores: Sequence[Any] | None = None,
+    candidate_sources: Sequence[Any] | None = None,
+) -> tuple[list[str], list[Any], list[Any], list[Any], list[Any]]:
     deduped_candidates: list[str] = []
     deduped_scores: list[Any] = []
+    deduped_relation_scores: list[Any] = []
+    deduped_shared_fact_scores: list[Any] = []
+    deduped_sources: list[Any] = []
     positions: dict[str, int] = {}
-    score_values = list(scores) if scores is not None else []
 
     for index, candidate in enumerate(candidates):
         cleaned = clean_counterfactual_text(candidate)
         if not cleaned:
             continue
 
-        score = score_values[index] if index < len(score_values) else None
+        score = _metadata_value(scores, index, kind="float")
+        relation_score = _metadata_value(relation_scores, index, kind="float")
+        shared_fact_score = _metadata_value(shared_fact_scores, index, kind="float")
+        candidate_source = _metadata_value(candidate_sources, index, kind="text")
+
         existing_index = positions.get(cleaned)
         if existing_index is None:
             positions[cleaned] = len(deduped_candidates)
             deduped_candidates.append(cleaned)
             deduped_scores.append(score)
+            deduped_relation_scores.append(relation_score)
+            deduped_shared_fact_scores.append(shared_fact_score)
+            deduped_sources.append(candidate_source)
             continue
 
-        try:
-            score_value = float(score) if score is not None else None
-        except Exception:
-            score_value = None
-        try:
-            existing_value = (
-                float(deduped_scores[existing_index])
-                if deduped_scores[existing_index] is not None
-                else None
-            )
-        except Exception:
-            existing_value = None
-        if score_value is not None and (
-            existing_value is None or score_value > existing_value
-        ):
+        existing_score = _coerce_optional_float(deduped_scores[existing_index])
+        replace = score is not None and (
+            existing_score is None or score > existing_score
+        )
+        if replace:
             deduped_scores[existing_index] = score
+            deduped_relation_scores[existing_index] = relation_score
+            deduped_shared_fact_scores[existing_index] = shared_fact_score
+            deduped_sources[existing_index] = candidate_source
+            continue
 
+        if deduped_scores[existing_index] is None and score is not None:
+            deduped_scores[existing_index] = score
+        if deduped_relation_scores[existing_index] is None and relation_score is not None:
+            deduped_relation_scores[existing_index] = relation_score
+        if (
+            deduped_shared_fact_scores[existing_index] is None
+            and shared_fact_score is not None
+        ):
+            deduped_shared_fact_scores[existing_index] = shared_fact_score
+        if deduped_sources[existing_index] is None and candidate_source is not None:
+            deduped_sources[existing_index] = candidate_source
+
+    return (
+        deduped_candidates,
+        deduped_scores,
+        deduped_relation_scores,
+        deduped_shared_fact_scores,
+        deduped_sources,
+    )
+
+
+def dedupe_scored_candidates(
+    candidates: Sequence[Any],
+    scores: Sequence[Any] | None = None,
+) -> tuple[list[str], list[Any]]:
+    deduped_candidates, deduped_scores, _, _, _ = dedupe_candidate_metadata(
+        candidates,
+        scores=scores,
+    )
     return deduped_candidates, deduped_scores
 
 
@@ -45357,12 +46179,15 @@ def score_counterfactual_candidate(
     candidate: str,
     candidate_answers: Sequence[str] | None = None,
     external_score: float | None = None,
+    relation_score: float | None = None,
+    shared_fact_score: float | None = None,
+    candidate_source: str | None = None,
     reject_gold_substring: bool = True,
     max_overlap_ratio: Optional[float] = 0.85,
     require_short_answer: bool = True,
     max_alt_length_chars: Optional[int] = 128,
 ) -> tuple[float, Dict[str, Any]]:
-    del question  # Relation-level checks remain an offline heuristic for now.
+    _ = question
     reason = counterfactual_invalid_reason(
         candidate,
         answer,
@@ -45372,7 +46197,12 @@ def score_counterfactual_candidate(
         max_alt_length_chars=max_alt_length_chars,
     )
     if reason is not None:
-        return float("-inf"), {"invalid_reason": reason}
+        return float("-inf"), {
+            "invalid_reason": reason,
+            "relation_score": relation_score,
+            "shared_fact_score": shared_fact_score,
+            "candidate_source": candidate_source,
+        }
 
     cleaned = clean_counterfactual_text(candidate)
     overlap = lexical_overlap_ratio(cleaned, answer)
@@ -45380,6 +46210,8 @@ def score_counterfactual_candidate(
     shortness = short_answer_score(cleaned)
     bank_score = bank_membership_score(cleaned, candidate_answers)
     judge = float(external_score) if external_score is not None else 0.0
+    relation = _coerce_optional_float(relation_score)
+    shared_fact = _coerce_optional_float(shared_fact_score)
     score = (
         0.35 * type_match
         + 0.25 * shortness
@@ -45387,12 +46219,19 @@ def score_counterfactual_candidate(
         + 0.15 * judge
         - 0.30 * overlap
     )
+    if relation is not None:
+        score += 0.20 * relation
+    if shared_fact is not None:
+        score += 0.20 * shared_fact
     return score, {
         "invalid_reason": None,
         "type_match": type_match,
         "shortness": shortness,
         "bank_score": bank_score,
         "external_score": judge,
+        "relation_score": relation,
+        "shared_fact_score": shared_fact,
+        "candidate_source": candidate_source,
         "answer_overlap": overlap,
         "answer_type": detect_answer_type(cleaned),
     }
@@ -45441,24 +46280,38 @@ def pick_best_counterfactual_v3(
     candidates: Sequence[Any],
     candidate_answers: Sequence[str] | None = None,
     external_scores: Sequence[float] | None = None,
+    relation_scores: Sequence[float] | None = None,
+    shared_fact_scores: Sequence[float] | None = None,
+    candidate_sources: Sequence[Any] | None = None,
+    default_relation_score: float | None = None,
+    default_shared_fact_score: float | None = None,
     reject_gold_substring: bool = True,
     max_overlap_ratio: Optional[float] = 0.85,
     require_short_answer: bool = True,
     max_alt_length_chars: Optional[int] = 128,
 ) -> tuple[str, Dict[str, Any]]:
     best_text = ""
-    best_meta: Dict[str, Any] = {"invalid_reason": "no_candidates"}
+    best_meta: Dict[str, Any] = {
+        "invalid_reason": "no_candidates",
+        "selected_candidate_index": None,
+        "selected_candidate_text": "",
+        "selected_source": None,
+        "selected_from_pool": None,
+        "used_low_confidence_fallback": False,
+    }
     best_score = float("-inf")
 
     for idx, candidate in enumerate(candidates):
         if not str(candidate).strip():
             continue
-        external_score = None
-        if external_scores is not None and idx < len(external_scores):
-            try:
-                external_score = float(external_scores[idx])
-            except Exception:
-                external_score = None
+        external_score = _metadata_value(external_scores, idx, kind="float")
+        relation_score = _metadata_value(relation_scores, idx, kind="float")
+        if relation_score is None:
+            relation_score = _coerce_optional_float(default_relation_score)
+        shared_fact_score = _metadata_value(shared_fact_scores, idx, kind="float")
+        if shared_fact_score is None:
+            shared_fact_score = _coerce_optional_float(default_shared_fact_score)
+        candidate_source = _metadata_value(candidate_sources, idx, kind="text")
 
         score, meta = score_counterfactual_candidate(
             question=question,
@@ -45466,6 +46319,9 @@ def pick_best_counterfactual_v3(
             candidate=str(candidate),
             candidate_answers=candidate_answers,
             external_score=external_score,
+            relation_score=relation_score,
+            shared_fact_score=shared_fact_score,
+            candidate_source=candidate_source,
             reject_gold_substring=reject_gold_substring,
             max_overlap_ratio=max_overlap_ratio,
             require_short_answer=require_short_answer,
@@ -45474,7 +46330,17 @@ def pick_best_counterfactual_v3(
         if score > best_score:
             best_score = score
             best_text = clean_counterfactual_text(candidate)
-            best_meta = {"rank_score": float(score), **meta}
+            selected_source = candidate_source
+            selected_pool = selected_source or "candidate_pool"
+            best_meta = {
+                "rank_score": float(score),
+                "selected_candidate_index": int(idx),
+                "selected_candidate_text": best_text,
+                "selected_source": selected_source,
+                "selected_from_pool": selected_pool,
+                "used_low_confidence_fallback": selected_pool == "low_confidence_fallback",
+                **meta,
+            }
 
     return best_text, best_meta
 
@@ -45621,6 +46487,170 @@ def pick_valid_candidate(
 def answer_type_aware_fallback(answer: Any, seed: int = 0) -> Optional[str]:
     candidates = build_answer_type_fallback_candidates(answer, seed=seed)
     return candidates[0] if candidates else None
+
+
+def _list_or_empty(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
+def duplicate_candidate_count(values: Sequence[Any]) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for value in values:
+        cleaned = clean_counterfactual_text(value)
+        if not cleaned:
+            continue
+        if cleaned in seen:
+            duplicates += 1
+            continue
+        seen.add(cleaned)
+    return duplicates
+
+
+def _aligned_metadata_coverage(values: Any, expected_length: int) -> bool:
+    if expected_length <= 0 or not isinstance(values, list):
+        return False
+    return len(values) == expected_length
+
+
+def build_artifact_quality_report(
+    rows: Sequence[Dict[str, Any]],
+    *,
+    question_key: str = "question",
+    answer_key: str = "answer",
+    alternate_key: str = "alternate",
+) -> Dict[str, Any]:
+    total_rows = len(rows)
+    invalid_reason_counts: Dict[str, int] = {}
+    repair_source_counts: Dict[str, int] = {}
+    selected_pool_counts: Dict[str, int] = {}
+    exact_match_count = 0
+    gold_substring_count = 0
+    valid_row_count = 0
+    sidecar_rows = 0
+    relation_metadata_rows = 0
+    shared_fact_metadata_rows = 0
+    total_external_candidates = 0
+    total_candidates = 0
+    duplicate_external_candidate_rows = 0
+    duplicate_candidate_bank_rows = 0
+    duplicate_external_candidate_total = 0
+    duplicate_candidate_bank_total = 0
+    low_confidence_fallback_rows = 0
+    rank_scores: list[float] = []
+
+    for row in rows:
+        answer = str(row.get(answer_key, ""))
+        alternate = str(row.get(alternate_key, ""))
+        answer_norm = normalize_text(answer)
+        alternate_norm = normalize_text(alternate)
+        if answer_norm and alternate_norm == answer_norm:
+            exact_match_count += 1
+        if answer_norm and alternate_norm and answer_norm != alternate_norm:
+            if answer_norm in alternate_norm or alternate_norm in answer_norm:
+                gold_substring_count += 1
+
+        invalid_reason = row.get("cf_invalid_reason")
+        if invalid_reason not in (None, "", "null", "None"):
+            invalid_reason_counts[str(invalid_reason)] = (
+                invalid_reason_counts.get(str(invalid_reason), 0) + 1
+            )
+        else:
+            valid_row_count += 1
+
+        external_alternates = _list_or_empty(row.get("external_alternates"))
+        candidate_answers = _list_or_empty(row.get("candidate_answers"))
+        total_external_candidates += len(external_alternates)
+        total_candidates += len(external_alternates) + len(candidate_answers)
+        if external_alternates:
+            sidecar_rows += 1
+        external_duplicate_count = duplicate_candidate_count(external_alternates)
+        if external_duplicate_count > 0:
+            duplicate_external_candidate_rows += 1
+            duplicate_external_candidate_total += external_duplicate_count
+        bank_duplicate_count = duplicate_candidate_count(candidate_answers)
+        if bank_duplicate_count > 0:
+            duplicate_candidate_bank_rows += 1
+            duplicate_candidate_bank_total += bank_duplicate_count
+
+        if (
+            _aligned_metadata_coverage(
+                row.get("external_alternate_relation_scores"),
+                len(external_alternates),
+            )
+            or _aligned_metadata_coverage(
+                row.get("candidate_relation_scores"),
+                len(candidate_answers),
+            )
+            or row.get("cf_same_relation") not in (None, "", "null", "None")
+        ):
+            relation_metadata_rows += 1
+        if (
+            _aligned_metadata_coverage(
+                row.get("external_alternate_shared_fact_scores"),
+                len(external_alternates),
+            )
+            or _aligned_metadata_coverage(
+                row.get("candidate_shared_fact_scores"),
+                len(candidate_answers),
+            )
+        ):
+            shared_fact_metadata_rows += 1
+
+        pick_meta = row.get("cf_pick_meta")
+        if isinstance(pick_meta, dict):
+            selected_source = str(pick_meta.get("selected_source") or "unknown")
+            selected_pool = str(pick_meta.get("selected_from_pool") or "unknown")
+            repair_source_counts[selected_source] = (
+                repair_source_counts.get(selected_source, 0) + 1
+            )
+            selected_pool_counts[selected_pool] = (
+                selected_pool_counts.get(selected_pool, 0) + 1
+            )
+            if bool(pick_meta.get("used_low_confidence_fallback", False)):
+                low_confidence_fallback_rows += 1
+            rank_score = _coerce_optional_float(pick_meta.get("rank_score"))
+            if rank_score is not None:
+                rank_scores.append(rank_score)
+
+    def _ratio(count: int) -> float:
+        if total_rows <= 0:
+            return 0.0
+        return float(count) / float(total_rows)
+
+    report = {
+        "rows": total_rows,
+        "question_key": question_key,
+        "valid_row_count": valid_row_count,
+        "valid_row_rate": _ratio(valid_row_count),
+        "invalid_reason_counts": invalid_reason_counts,
+        "exact_match_count": exact_match_count,
+        "gold_substring_count": gold_substring_count,
+        "average_external_candidate_count": (
+            float(total_external_candidates) / float(total_rows) if total_rows else 0.0
+        ),
+        "average_total_candidate_count": (
+            float(total_candidates) / float(total_rows) if total_rows else 0.0
+        ),
+        "duplicate_external_candidate_rows": duplicate_external_candidate_rows,
+        "duplicate_candidate_bank_rows": duplicate_candidate_bank_rows,
+        "duplicate_external_candidate_total": duplicate_external_candidate_total,
+        "duplicate_candidate_bank_total": duplicate_candidate_bank_total,
+        "sidecar_coverage_rows": sidecar_rows,
+        "sidecar_coverage_rate": _ratio(sidecar_rows),
+        "relation_metadata_rows": relation_metadata_rows,
+        "relation_metadata_coverage_rate": _ratio(relation_metadata_rows),
+        "shared_fact_metadata_rows": shared_fact_metadata_rows,
+        "shared_fact_metadata_coverage_rate": _ratio(shared_fact_metadata_rows),
+        "repair_source_counts": repair_source_counts,
+        "selected_pool_counts": selected_pool_counts,
+        "low_confidence_fallback_rows": low_confidence_fallback_rows,
+    }
+    if rank_scores:
+        report["selected_rank_score_mean"] = sum(rank_scores) / float(len(rank_scores))
+        report["selected_rank_score_min"] = min(rank_scores)
+        report["selected_rank_score_max"] = max(rank_scores)
+    return report
 
 
 def read_jsonl(path: str) -> list[Dict[str, Any]]:
@@ -47871,6 +48901,7 @@ if __name__ == "__main__":
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -47879,11 +48910,13 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from tools.dual_cf_artifact_utils import (
+    build_artifact_quality_report,
     build_answer_type_fallback_candidates,
     build_low_confidence_fallback_candidates,
     clean_counterfactual_text,
     counterfactual_invalid_reason,
-    dedupe_scored_candidates,
+    dedupe_candidate_metadata,
+    duplicate_candidate_count,
     load_keyed_jsonish,
     pick_best_counterfactual_v3,
     read_jsonl,
@@ -47904,11 +48937,13 @@ def parse_args():
     parser.add_argument("--mapping-key", default="index")
     parser.add_argument("--candidate-bank", default=None)
     parser.add_argument("--repair-invalid", action="store_true")
+    parser.add_argument("--allow-low-confidence-fallback", action="store_true")
     parser.add_argument("--drop-invalid", action="store_true")
     parser.add_argument("--reject-gold-substring", action="store_true")
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
     parser.add_argument("--max-alt-length-chars", type=int, default=128)
+    parser.add_argument("--report-path", default=None)
     return parser.parse_args()
 
 
@@ -47945,33 +48980,101 @@ def main():
             row_candidates = list(
                 updated.get("candidate_answers") or bank_row.get("candidate_answers", [])
             )
+            row_relation_scores = list(
+                updated.get("candidate_relation_scores")
+                or bank_row.get("candidate_relation_scores", [])
+            )
+            row_shared_fact_scores = list(
+                updated.get("candidate_shared_fact_scores")
+                or bank_row.get("candidate_shared_fact_scores", [])
+            )
+            row_sources = list(
+                updated.get("candidate_sources")
+                or bank_row.get("candidate_sources", [])
+            )
             external_candidates = list(updated.get("external_alternates", []))
             external_scores = updated.get("external_alternate_scores")
+            external_relation_scores = updated.get("external_alternate_relation_scores")
+            external_shared_fact_scores = updated.get("external_alternate_shared_fact_scores")
+            external_sources = updated.get("external_alternate_sources")
             candidate_pool = [updated[args.alternate_key]]
             score_pool = [None]
+            relation_score_pool = [None]
+            shared_fact_score_pool = [None]
+            source_pool = ["existing_alternate"]
             candidate_pool.extend(external_candidates)
             if isinstance(external_scores, list):
                 score_pool.extend(list(external_scores))
             else:
                 score_pool.extend([None] * len(external_candidates))
+            if isinstance(external_relation_scores, list):
+                relation_score_pool.extend(list(external_relation_scores))
+            else:
+                relation_score_pool.extend([None] * len(external_candidates))
+            if isinstance(external_shared_fact_scores, list):
+                shared_fact_score_pool.extend(list(external_shared_fact_scores))
+            else:
+                shared_fact_score_pool.extend([None] * len(external_candidates))
+            if isinstance(external_sources, list):
+                source_pool.extend(
+                    [str(source).strip() if str(source).strip() else "external" for source in external_sources]
+                )
+            else:
+                source_pool.extend(["external"] * len(external_candidates))
             candidate_pool.extend(row_candidates)
             score_pool.extend([None] * len(row_candidates))
+            relation_score_pool.extend(row_relation_scores[: len(row_candidates)])
+            if len(row_relation_scores) < len(row_candidates):
+                relation_score_pool.extend([None] * (len(row_candidates) - len(row_relation_scores)))
+            shared_fact_score_pool.extend(row_shared_fact_scores[: len(row_candidates)])
+            if len(row_shared_fact_scores) < len(row_candidates):
+                shared_fact_score_pool.extend([None] * (len(row_candidates) - len(row_shared_fact_scores)))
+            source_pool.extend(
+                [str(source).strip() if str(source).strip() else "candidate_bank" for source in row_sources[: len(row_candidates)]]
+            )
+            if len(row_sources) < len(row_candidates):
+                source_pool.extend(["candidate_bank"] * (len(row_candidates) - len(row_sources)))
             fallback_candidates = build_answer_type_fallback_candidates(
                 updated.get(args.answer_key, ""),
                 seed=seed,
             )
             candidate_pool.extend(fallback_candidates)
             score_pool.extend([None] * len(fallback_candidates))
-            candidate_pool, score_pool = dedupe_scored_candidates(candidate_pool, score_pool)
-            low_confidence_candidates = build_low_confidence_fallback_candidates(
-                updated.get(args.answer_key, "")
+            relation_score_pool.extend([None] * len(fallback_candidates))
+            shared_fact_score_pool.extend([None] * len(fallback_candidates))
+            source_pool.extend(["typed_fallback"] * len(fallback_candidates))
+            duplicate_candidates_removed = duplicate_candidate_count(candidate_pool)
+            (
+                candidate_pool,
+                score_pool,
+                relation_score_pool,
+                shared_fact_score_pool,
+                source_pool,
+            ) = dedupe_candidate_metadata(
+                candidate_pool,
+                scores=score_pool,
+                relation_scores=relation_score_pool,
+                shared_fact_scores=shared_fact_score_pool,
+                candidate_sources=source_pool,
             )
+            low_confidence_candidates = (
+                build_low_confidence_fallback_candidates(updated.get(args.answer_key, ""))
+                if args.allow_low_confidence_fallback
+                else []
+            )
+            default_relation_score = None
+            if updated.get("cf_same_relation") not in (None, "", "null", "None"):
+                default_relation_score = 1.0 if bool(updated.get("cf_same_relation")) else 0.0
             repaired_alternate, pick_meta = pick_best_counterfactual_v3(
                 question=str(updated.get("question") or updated.get("query") or ""),
                 answer=str(updated.get(args.answer_key, "")),
                 candidates=candidate_pool,
                 candidate_answers=row_candidates,
                 external_scores=score_pool,
+                relation_scores=relation_score_pool,
+                shared_fact_scores=shared_fact_score_pool,
+                candidate_sources=source_pool,
+                default_relation_score=default_relation_score,
                 reject_gold_substring=args.reject_gold_substring,
                 max_overlap_ratio=args.max_overlap_ratio,
                 require_short_answer=args.require_short_answer,
@@ -47983,9 +49086,22 @@ def main():
             ):
                 candidate_pool.extend(low_confidence_candidates)
                 score_pool.extend([None] * len(low_confidence_candidates))
-                candidate_pool, score_pool = dedupe_scored_candidates(
+                relation_score_pool.extend([None] * len(low_confidence_candidates))
+                shared_fact_score_pool.extend([None] * len(low_confidence_candidates))
+                source_pool.extend(["low_confidence_fallback"] * len(low_confidence_candidates))
+                duplicate_candidates_removed = duplicate_candidate_count(candidate_pool)
+                (
                     candidate_pool,
                     score_pool,
+                    relation_score_pool,
+                    shared_fact_score_pool,
+                    source_pool,
+                ) = dedupe_candidate_metadata(
+                    candidate_pool,
+                    scores=score_pool,
+                    relation_scores=relation_score_pool,
+                    shared_fact_scores=shared_fact_score_pool,
+                    candidate_sources=source_pool,
                 )
                 repaired_alternate, pick_meta = pick_best_counterfactual_v3(
                     question=str(updated.get("question") or updated.get("query") or ""),
@@ -47993,6 +49109,10 @@ def main():
                     candidates=candidate_pool,
                     candidate_answers=row_candidates,
                     external_scores=score_pool,
+                    relation_scores=relation_score_pool,
+                    shared_fact_scores=shared_fact_score_pool,
+                    candidate_sources=source_pool,
+                    default_relation_score=default_relation_score,
                     reject_gold_substring=args.reject_gold_substring,
                     max_overlap_ratio=args.max_overlap_ratio,
                     require_short_answer=args.require_short_answer,
@@ -48000,6 +49120,14 @@ def main():
                 )
             if repaired_alternate:
                 updated[args.alternate_key] = repaired_alternate
+                pick_meta["selected_candidate"] = pick_meta.get(
+                    "selected_candidate_text",
+                    repaired_alternate,
+                )
+                pick_meta["candidate_pool_size"] = len(candidate_pool)
+                pick_meta["duplicate_candidates_removed"] = int(
+                    duplicate_candidates_removed
+                )
                 updated["cf_pick_meta"] = pick_meta
                 invalid_reason = pick_meta.get("invalid_reason")
                 if invalid_reason is None:
@@ -48017,6 +49145,15 @@ def main():
         cleaned_rows.append(updated)
 
     save_jsonl(cleaned_rows, args.output_path)
+    if args.report_path not in (None, "", "null", "None"):
+        report = build_artifact_quality_report(
+            cleaned_rows,
+            answer_key=args.answer_key,
+            alternate_key=args.alternate_key,
+        )
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=True)
+        log(f"Saved artifact-quality report to {args.report_path}")
     log(
         "Done. "
         f"rows_in={len(rows)} rows_out={len(cleaned_rows)} "
@@ -48044,7 +49181,12 @@ SRC_ROOT = Path(__file__).resolve().parent.parent
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from tools.dual_cf_artifact_utils import percentile_rank, read_jsonl, save_jsonl
+from tools.dual_cf_artifact_utils import (
+    build_artifact_quality_report,
+    percentile_rank,
+    read_jsonl,
+    save_jsonl,
+)
 
 
 def log(message: str) -> None:
@@ -48061,6 +49203,7 @@ def parse_args():
     parser.add_argument("--attribution-out", default="attribution_score")
     parser.add_argument("--method", choices=("percentile",), default="percentile")
     parser.add_argument("--sidecar-path", default=None)
+    parser.add_argument("--report-path", default=None)
     return parser.parse_args()
 
 
@@ -48088,6 +49231,13 @@ def main():
     save_jsonl(rows, args.output_path)
     log(f"Saved calibrated rows={len(rows)} path={args.output_path}")
 
+    report = build_artifact_quality_report(
+        rows,
+        question_key="question" if rows and "question" in rows[0] else "query",
+        answer_key="answer",
+        alternate_key="alternate",
+    )
+
     if args.sidecar_path:
         sidecar = {
             "rows": len(rows),
@@ -48100,10 +49250,15 @@ def main():
             "difficulty_raw_max": max(difficulty_values),
             "attribution_raw_min": min(attribution_values),
             "attribution_raw_max": max(attribution_values),
+            "artifact_quality": report,
         }
         with open(args.sidecar_path, "w", encoding="utf-8") as handle:
             json.dump(sidecar, handle, indent=2, ensure_ascii=True)
         log(f"Saved sidecar to {args.sidecar_path}")
+    if args.report_path not in (None, "", "null", "None"):
+        with open(args.report_path, "w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=2, ensure_ascii=True)
+        log(f"Saved artifact-quality report to {args.report_path}")
 
 
 if __name__ == "__main__":
@@ -48287,6 +49442,9 @@ def main():
                 "question": str(row[args.question_key]),
                 "answer": answer,
                 "candidate_answers": deduped_pool,
+                "candidate_relation_scores": [1.0] * len(deduped_pool),
+                "candidate_shared_fact_scores": [1.0] * len(deduped_pool),
+                "candidate_sources": ["candidate_bank"] * len(deduped_pool),
                 "bucket_key": args.bucket_key,
                 "bucket_value": bucket_value,
             }
@@ -49392,7 +50550,6 @@ from trainer.unlearn.npo import NPO
 from trainer.unlearn.npo_sam import NPOSAM
 from trainer.unlearn.dpo import DPO
 from trainer.unlearn.simnpo import SimNPO
-from trainer.unlearn.rmu import RMU
 from trainer.unlearn.undial import UNDIAL
 from trainer.unlearn.ceu import CEU
 from trainer.unlearn.satimp import SatImp
@@ -49412,6 +50569,18 @@ from trainer.callbacks import JsonlTraceCallback
 import logging
 
 logger = logging.getLogger(__name__)
+OPTIONAL_TRAINER_IMPORT_ERRORS: Dict[str, Exception] = {}
+
+try:
+    from trainer.unlearn.rmu import RMU
+except ModuleNotFoundError as exc:
+    if exc.name != "deepspeed":
+        raise
+    RMU = None
+    OPTIONAL_TRAINER_IMPORT_ERRORS["RMU"] = exc
+    logger.warning(
+        "Skipping RMU trainer registration because optional dependency `deepspeed` is not installed."
+    )
 
 TRAINER_REGISTRY: Dict[str, Any] = {}
 
@@ -49455,6 +50624,11 @@ def load_trainer(
         f"{trainer_handler_name} handler not set"
     )
     trainer_cls = TRAINER_REGISTRY.get(trainer_handler_name, None)
+    if trainer_cls is None and trainer_handler_name in OPTIONAL_TRAINER_IMPORT_ERRORS:
+        raise ModuleNotFoundError(
+            f"{trainer_handler_name} requires an optional dependency that is not installed. "
+            "Install `deepspeed` to use this trainer."
+        ) from OPTIONAL_TRAINER_IMPORT_ERRORS[trainer_handler_name]
     assert trainer_cls is not None, NotImplementedError(
         f"{trainer_handler_name} not implemented or not registered"
     )
@@ -49488,7 +50662,8 @@ _register_trainer(NPO)
 _register_trainer(NPOSAM)
 _register_trainer(DPO)
 _register_trainer(SimNPO)
-_register_trainer(RMU)
+if RMU is not None:
+    _register_trainer(RMU)
 _register_trainer(UNDIAL)
 _register_trainer(CEU)
 _register_trainer(SatImp)

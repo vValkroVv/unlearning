@@ -75,6 +75,8 @@ esac
 DATASET_PATH=${DATASET_PATH:-${DUET_DATASET_PATH_LOCAL:-SwetieePawsss/DUET}}
 DATASET_PATH=$(resolve_dataset_path "${DATASET_PATH}")
 warn_if_dataset_unresolved "${DATASET_PATH}"
+DATASET_NAME=${DATASET_NAME:-}
+DATA_FILES=${DATA_FILES:-}
 RETAIN_SPLIT=${RETAIN_SPLIT:-city_fast_retain_500}
 QUESTION_KEY=${QUESTION_KEY:-question}
 ANSWER_KEY=${ANSWER_KEY:-answer}
@@ -170,6 +172,14 @@ if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
   clean_extra_args+=(--allow-low-confidence-fallback)
 fi
 
+dataset_extra_args=()
+if [[ -n "${DATASET_NAME}" ]]; then
+  dataset_extra_args+=(--dataset-name "${DATASET_NAME}")
+fi
+if [[ -n "${DATA_FILES}" ]]; then
+  dataset_extra_args+=(--data-files "${DATA_FILES}")
+fi
+
 make_cf_args=(
   --dataset-path "${DATASET_PATH}"
   --split "${FORGET_SPLIT}"
@@ -195,6 +205,9 @@ make_cf_args=(
   --max-overlap-ratio 0.85
   --max-alt-length-chars 128
 )
+if (( ${#dataset_extra_args[@]} > 0 )); then
+  make_cf_args+=("${dataset_extra_args[@]}")
+fi
 if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
   make_cf_args+=(--allow-low-confidence-fallback)
 fi
@@ -231,15 +244,20 @@ if [[ "${skip_cf_generation}" == "1" ]]; then
     echo "[prepare_dual_cf_duet_v3] Reusing existing candidate / raw / clean counterfactual files from ${OUT_DIR}"
   fi
 else
-  python "${repo_root}/src/tools/build_duet_candidate_bank.py" \
-    --dataset-path "${DATASET_PATH}" \
-    --split "${FORGET_SPLIT}" \
-    --output-path "${CANDIDATE_BANK_JSONL}" \
-    --question-key "${QUESTION_KEY}" \
-    --answer-key "${ANSWER_KEY}" \
-    --candidates-per-row 12 \
-    --max-examples "${MAX_EXAMPLES}" \
+  candidate_bank_args=(
+    --dataset-path "${DATASET_PATH}"
+    --split "${FORGET_SPLIT}"
+    --output-path "${CANDIDATE_BANK_JSONL}"
+    --question-key "${QUESTION_KEY}"
+    --answer-key "${ANSWER_KEY}"
+    --candidates-per-row 12
+    --max-examples "${MAX_EXAMPLES}"
     --sidecar-path "${OUT_DIR}/step0_candidate_bank_stats_v3.json"
+  )
+  if (( ${#dataset_extra_args[@]} > 0 )); then
+    candidate_bank_args+=("${dataset_extra_args[@]}")
+  fi
+  python "${repo_root}/src/tools/build_duet_candidate_bank.py" "${candidate_bank_args[@]}"
 
   python "${repo_root}/src/tools/make_counterfactuals.py" "${make_cf_args[@]}"
 

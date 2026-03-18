@@ -278,6 +278,124 @@ The v3 scripts preserve the existing two-phase flow:
 - `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
 - `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
 
+### Local macOS Phase A helpers
+
+For local non-GPU counterfactual generation before any GPU scoring or training,
+use the additive helpers under `scripts/api_cf/`. They generate an external
+sidecar JSONL first, feed it into the existing v3 prep scripts through
+`CF_SIDECAR_JSONL`, stop at `STOP_AFTER_CLEAN_CF=1`, and then verify the saved
+`step1*` / `step1b*` files locally.
+
+OpenAI API path:
+
+```bash
+export OPENAI_API_KEY=YOUR_KEY
+export OPENAI_MODEL=gpt-4.1-mini
+export MAX_EXAMPLES=16
+export NUM_ALTERNATES=4
+
+bash scripts/api_cf/run_duet_phase_a_openai.sh
+bash scripts/api_cf/run_rwku_phase_a_openai.sh
+```
+
+Codex CLI path using ChatGPT login instead of API billing:
+
+```bash
+unset CODEX_API_KEY
+codex login status
+# if a real `codex exec` reports a stale refresh token:
+# codex logout && codex login
+
+export CODEX_MODEL=gpt-5.4-mini
+export CODEX_REASONING_EFFORT=medium
+export CODEX_CONCURRENT=1
+export MAX_EXAMPLES=16
+export NUM_ALTERNATES=4
+
+bash scripts/api_cf/run_duet_phase_a_codex.sh
+bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+Those Codex wrappers call `scripts/api_cf/generate_codex_cf_sidecar.py`.
+They also accept:
+
+- `CODEX_REASONING_EFFORT=low|medium|high|xhigh`
+- `CODEX_CONCURRENT=N` to run up to `N` Codex batch requests in parallel
+- `RUN_TAG=...` to isolate outputs for different model runs
+- `STOP_AFTER_SIDECAR=1` to stop after writing `api_sidecar.jsonl`
+- `SKIP_SIDECAR_GENERATION=1` to reuse an already merged sidecar
+- `DUET_TARGETS="rare popular"` to skip direct merged generation during
+  multi-model sidecar collection
+
+Both helper families write split-matched artifacts under
+`artifacts/dualcf_api_v3/`:
+
+- DUET: `rare_api_v3`, `popular_api_v3`, `merged_api_v3` for OpenAI API, and
+  `rare_codex_v3`, `popular_codex_v3`, `merged_codex_v3` for Codex CLI
+- RWKU: `${FORGET_SPLIT}_api_v3` or `${FORGET_SPLIT}_codex_v3`
+
+Each output directory should contain:
+
+- `api_sidecar.jsonl`
+- `api_sidecar.jsonl.meta.json`
+- `api_sidecar.jsonl.summary.json`
+- `step1_counterfactuals_raw_v3.jsonl`
+- `step1b_counterfactuals_clean_v3.jsonl`
+- `step1b_clean_report.json`
+
+DUET also writes `step0_candidate_bank.jsonl` and
+`step0_candidate_bank_stats_v3.json`.
+
+When the 16-row smoke passes, rerun with:
+
+```bash
+export MAX_EXAMPLES=0
+```
+
+and keep the same split order: DUET `rare -> popular -> merged`, then RWKU.
+
+If you do not want a separate merged Codex generation pass, DUET now also has a
+merged-from-parts helper that rebuilds `merged_codex_v3` from the existing
+`rare_codex_v3` and `popular_codex_v3` artifacts:
+
+```bash
+bash scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
+```
+
+That helper:
+
+- writes `merged_input.jsonl` under the merged artifact directory
+- rewrites the combined sidecar indices to synthetic merged-local indices
+- runs `scripts/duet/prepare_dual_cf_duet_v3.sh` against `DATASET_PATH=json`
+  and `DATA_FILES=.../merged_input.jsonl`
+- preserves the standard merged Phase A outputs:
+  `step0_candidate_bank.jsonl`, `step1_counterfactuals_raw_v3.jsonl`,
+  `step1b_counterfactuals_clean_v3.jsonl`, `step1b_clean_report.json`
+
+This is the correct way to make merged equal rare+popular for partial local
+smokes. A raw `cat rare_sidecar + popular_sidecar` is not enough on its own,
+because the prep flow joins on local `index` and the official merged split
+prefix is not the same as a partial rare+popular union.
+
+For multi-model runs where you want, for example, `2` candidates from each of
+`4` different models and then one final `8`-candidate sidecar, first run the
+Codex wrappers with `NUM_ALTERNATES=2`, `STOP_AFTER_SIDECAR=1`, and distinct
+`RUN_TAG` values, optionally raise `CODEX_CONCURRENT`, then combine the
+resulting sidecars with:
+
+```bash
+python scripts/api_cf/merge_codex_sidecars.py \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run1 \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run2 \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run3 \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run4 \
+  --output-path artifacts/dualcf_api_v3/duet/rare_codex_v3__mix/api_sidecar.jsonl \
+  --max-alternates 8
+```
+
+Use the same merge helper for `popular` and RWKU. Do not raw-`cat` sidecars.
+The Codex generator also shows a `tqdm` batch bar during generation.
+
 The standard train launchers now default to the v3 experiment configs, so
 regular DualCF runs do not need an `EXPERIMENT=` override:
 

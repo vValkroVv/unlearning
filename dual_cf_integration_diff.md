@@ -151,6 +151,55 @@ Updates:
   validator failures plus nested `artifact_quality`; `calibrate_dual_cf_scores.py`
   now also supports `--report-path`, while the v3 prep launchers persist the
   same artifact-quality summary inside `step4_calibration_stats_v3.json`
+- external Phase A helpers were added for macOS / non-GPU sidecar generation:
+  - `scripts/api_cf/generate_external_cf_sidecar.py`
+  - `scripts/api_cf/generate_codex_cf_sidecar.py`
+  - `scripts/api_cf/merge_codex_sidecars.py`
+  - `scripts/api_cf/check_phase_a_outputs.py`
+  - `scripts/api_cf/run_duet_phase_a_openai.sh`
+  - `scripts/api_cf/run_rwku_phase_a_openai.sh`
+  - `scripts/api_cf/run_duet_phase_a_codex.sh`
+  - `scripts/api_cf/run_rwku_phase_a_codex.sh`
+  - `scripts/api_cf/build_duet_merged_sidecar_from_parts.py`
+  - `scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`
+- the new helper flow keeps the existing v3 artifact contract:
+  external sidecars still feed `CF_SIDECAR_JSONL` with `alternates`, `scores`,
+  `relation_scores`, `shared_fact_scores`, and `candidate_sources`, then stop
+  at `STOP_AFTER_CLEAN_CF=1`
+- `scripts/api_cf/generate_external_cf_sidecar.py` remains the mixed backend
+  helper, while the active Codex launcher path now uses the dedicated
+  `scripts/api_cf/generate_codex_cf_sidecar.py`; both write the same sidecar
+  JSONL contract and preserve `.meta.json` / `.summary.json` outputs
+- the Codex-only generator now supports explicit `--reasoning-effort`, writes
+  `generator_reasoning_effort` / `reasoning_effort` provenance, and shows a
+  terminal `tqdm` batch bar during generation
+- the Codex-only generator now also supports `--concurrent` for parallel batch
+  requests, while the Codex shell launchers expose that through
+  `CODEX_CONCURRENT`
+- the Codex launchers now support `RUN_TAG` for per-model artifact isolation,
+  `STOP_AFTER_SIDECAR=1` for sidecar-only generation, and DUET
+  `DUET_TARGETS="rare popular"` style subset selection to avoid paying for a
+  direct merged run when doing multi-model sidecar mixing
+- `scripts/api_cf/merge_codex_sidecars.py` is the correct replacement for raw
+  `cat` when combining multiple model sidecars into one 8-candidate file; it
+  merges by `index`, concatenates aligned metadata arrays, deduplicates
+  alternates, and writes merged `.meta.json` / `.summary.json`
+- `scripts/api_cf/build_duet_merged_sidecar_from_parts.py` can now derive a
+  merged DUET sidecar from existing `rare` and `popular` sidecars by writing a
+  synthetic merged JSONL dataset with reindexed rows; this avoids a second
+  merged Codex generation pass when merged should be the union of the already
+  generated rare/pop rows
+- `src/tools/make_counterfactuals.py` now preserves `generator_backend` and
+  `generator_model` from external sidecars in `cf_generator_backend`,
+  `cf_generator_model`, and `cf_provenance` instead of always reporting the
+  launcher default backend
+- `scripts/duet/prepare_dual_cf_duet_v3.sh` now accepts optional `DATASET_NAME`
+  and `DATA_FILES` env inputs and forwards them to
+  `build_duet_candidate_bank.py` and `make_counterfactuals.py`; this keeps the
+  standard DUET Phase A wrapper usable for synthetic JSONL merged inputs
+- local Codex automation uses the installed CLI surface here:
+  `codex -s read-only -a never exec ... --output-schema ... -o ... -`
+  rather than unsupported per-subcommand approval flags or `--ephemeral`
 
 Validation status for this follow-up:
 
@@ -158,10 +207,41 @@ Validation status for this follow-up:
   - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/vllm_cf_client.py src/tools/clean_counterfactuals.py src/tools/retry_invalid_counterfactuals.py src/tools/validate_dual_cf_artifact.py src/tools/calibrate_dual_cf_scores.py src/tools/build_duet_candidate_bank.py src/trainer/__init__.py src/evals/__init__.py`
   - `bash -n scripts/duet/_splits.sh scripts/utility/eval_checkpoints_utility.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
   - `python -m unittest discover -s tests -p 'test_*.py'`
+  - `python -m py_compile scripts/api_cf/generate_external_cf_sidecar.py scripts/api_cf/generate_codex_cf_sidecar.py scripts/api_cf/merge_codex_sidecars.py scripts/api_cf/check_phase_a_outputs.py src/tools/make_counterfactuals.py`
+  - `python -m py_compile scripts/api_cf/build_duet_merged_sidecar_from_parts.py`
+  - `bash -n scripts/api_cf/run_duet_phase_a_openai.sh scripts/api_cf/run_rwku_phase_a_openai.sh scripts/api_cf/run_duet_phase_a_codex.sh scripts/api_cf/run_rwku_phase_a_codex.sh`
+  - `bash -n scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh scripts/duet/prepare_dual_cf_duet_v3.sh`
+  - `python scripts/api_cf/generate_external_cf_sidecar.py --help`
+  - `python scripts/api_cf/generate_codex_cf_sidecar.py --help`
+  - `python scripts/api_cf/merge_codex_sidecars.py --help`
+  - live Codex smoke on RWKU `forget_level2` with `gpt-5.4-mini`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=2` -> success in `real 21.93s`
+  - live Codex smoke on RWKU `forget_level2` with `gpt-5.4-mini`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=4` -> success in `real 12.96s`
+  - live Codex smoke on RWKU `forget_level2` with `codex-spark`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=2` -> failed because that model is not supported when using
+    Codex with a ChatGPT account
+  - live Codex smoke on RWKU `forget_level2` with `codex-spark`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=4` -> failed for the same account/model support reason
+  - `python scripts/api_cf/check_phase_a_outputs.py --help`
+  - `python scripts/api_cf/build_duet_merged_sidecar_from_parts.py --dataset-path SwetieePawsss/DUET --rare-dir artifacts/dualcf_api_v3/duet/rare_codex_v3 --popular-dir artifacts/dualcf_api_v3/duet/popular_codex_v3 --output-dir artifacts/dualcf_api_v3/duet/merged_codex_v3`
+  - `bash scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`
 - results:
   - full non-GPU unittest suite passed with `OK (skipped=3)`
   - the three skips are the optional `lm_eval`-dependent tests
+  - the merged-from-parts DUET helper rebuilt `merged_codex_v3` as a 32-row
+    synthetic rare+popular union from the existing 16-row `rare_codex_v3` and
+    `popular_codex_v3` artifacts, and the Phase A checker passed with
+    `valid_row_rate=1.0`, `exact_match_count=0`, `gold_substring_count=0`
 - not completed here:
+  - live OpenAI API sidecar generation against a real key
+  - live Codex CLI sidecar generation end-to-end; the local CLI accepted the
+    `gpt-5.4-mini` model flag but the saved ChatGPT auth token needed a refresh
+    (`codex logout && codex login`) before a real `codex exec` run
   - GPU-backed vLLM generation checks
   - GPU-backed attribution scoring
   - GPU-backed prep smokes
