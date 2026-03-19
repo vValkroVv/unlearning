@@ -323,7 +323,8 @@ They also accept:
 - `CODEX_CONCURRENT=N` to run up to `N` Codex batch requests in parallel
 - `RUN_TAG=...` to isolate outputs for different model runs
 - `STOP_AFTER_SIDECAR=1` to stop after writing `api_sidecar.jsonl`
-- `SKIP_SIDECAR_GENERATION=1` to reuse an already merged sidecar
+- `SKIP_SIDECAR_GENERATION=1` to reuse an already merged sidecar, including a
+  mixed Codex + imported ChatGPT Pro sidecar that records `model=multiple`
 - `DUET_TARGETS="rare popular"` to skip direct merged generation during
   multi-model sidecar collection
 
@@ -342,6 +343,13 @@ Each output directory should contain:
 - `step1_counterfactuals_raw_v3.jsonl`
 - `step1b_counterfactuals_clean_v3.jsonl`
 - `step1b_clean_report.json`
+
+If a Codex run is interrupted after `api_sidecar.jsonl` has been appended but
+before the launcher finishes, rerunning the same command now bootstraps a
+missing `api_sidecar.jsonl.meta.json` from the existing sidecar rows and then
+continues the normal coverage check. New runs also write the metadata sidecar
+before batch generation starts, so this recovery path is mainly for older or
+previously interrupted artifacts.
 
 DUET also writes `step0_candidate_bank.jsonl` and
 `step0_candidate_bank_stats_v3.json`.

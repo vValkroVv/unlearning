@@ -24,6 +24,18 @@ if [[ "${CODEX_USE_CHATGPT_LOGIN:-1}" == "1" ]]; then
   unset CODEX_API_KEY || true
 fi
 
+parse_key_value_output() {
+  local payload="$1"
+  local target_name="$2"
+  local value=""
+  value=$(printf '%s\n' "$payload" | awk -F= -v key="$target_name" '$1 == key {print $2}')
+  if [[ -z "$value" ]]; then
+    echo "[run_duet_phase_a_codex] missing ${target_name} in helper output" >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
 mkdir -p "$ARTIFACT_ROOT/duet"
 
 safe_run_tag="${RUN_TAG// /_}"
@@ -56,12 +68,33 @@ for label in $DUET_TARGETS; do
       ;;
   esac
   out_dir="$ARTIFACT_ROOT/duet/${label}_codex_v3${suffix}"
+  sidecar_path="$out_dir/api_sidecar.jsonl"
 
   echo "=== DUET ${label} / codex_cli ==="
   echo "split=${forget_split}"
   echo "out_dir=${out_dir}"
 
   mkdir -p "$out_dir"
+
+  resume_info=$(
+    python scripts/api_cf/codex_phase_a_resume.py resolve \
+      --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+      --split "$forget_split" \
+      --question-key question \
+      --answer-key answer \
+      --sidecar-path "$sidecar_path" \
+      --model "$CODEX_MODEL" \
+      --prompt-family duet_relation_safe \
+      --num-alternates "$NUM_ALTERNATES" \
+      --requested-max-examples "$MAX_EXAMPLES"
+  )
+  printf '%s\n' "$resume_info"
+
+  effective_max_examples=$(parse_key_value_output "$resume_info" effective_max_examples)
+  completed_rows=$(parse_key_value_output "$resume_info" completed_rows)
+  remaining_rows=$(parse_key_value_output "$resume_info" remaining_rows)
+
+  echo "[run_duet_phase_a_codex] label=${label} requested_max_examples=${MAX_EXAMPLES} completed_rows=${completed_rows} effective_max_examples=${effective_max_examples} remaining_rows=${remaining_rows}"
 
   python src/tools/build_duet_candidate_bank.py \
     --dataset-path "$DUET_DATASET_PATH_LOCAL" \
@@ -70,12 +103,12 @@ for label in $DUET_TARGETS; do
     --question-key question \
     --answer-key answer \
     --candidates-per-row 12 \
-    --max-examples "$MAX_EXAMPLES" \
+    --max-examples "$effective_max_examples" \
     --sidecar-path "$out_dir/step0_candidate_bank_stats_v3.json"
 
   if [[ "$SKIP_SIDECAR_GENERATION" == "1" ]]; then
-    if [[ ! -s "$out_dir/api_sidecar.jsonl" ]]; then
-      echo "[run_duet_phase_a_codex] missing sidecar while SKIP_SIDECAR_GENERATION=1: $out_dir/api_sidecar.jsonl" >&2
+    if [[ ! -s "$sidecar_path" ]]; then
+      echo "[run_duet_phase_a_codex] missing sidecar while SKIP_SIDECAR_GENERATION=1: $sidecar_path" >&2
       exit 1
     fi
     echo "[run_duet_phase_a_codex] skipping sidecar generation for $label"
@@ -86,18 +119,32 @@ for label in $DUET_TARGETS; do
       --question-key question \
       --answer-key answer \
       --candidate-bank "$out_dir/step0_candidate_bank.jsonl" \
-      --output-path "$out_dir/api_sidecar.jsonl" \
+      --output-path "$sidecar_path" \
       --model "$CODEX_MODEL" \
       --prompt-family duet_relation_safe \
       --num-alternates "$NUM_ALTERNATES" \
       --batch-size "$CODEX_BATCH_SIZE" \
       --concurrent "$CODEX_CONCURRENT" \
-      --max-examples "$MAX_EXAMPLES" \
+      --max-examples "$effective_max_examples" \
       "${reasoning_args[@]}" \
       --timeout-seconds "$CODEX_TIMEOUT_SECONDS" \
       --max-attempts "$CODEX_MAX_ATTEMPTS" \
       --resume
   fi
+
+  verify_info=$(
+    python scripts/api_cf/codex_phase_a_resume.py verify \
+      --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+      --split "$forget_split" \
+      --question-key question \
+      --answer-key answer \
+      --sidecar-path "$sidecar_path" \
+      --model "$CODEX_MODEL" \
+      --prompt-family duet_relation_safe \
+      --num-alternates "$NUM_ALTERNATES" \
+      --effective-max-examples "$effective_max_examples"
+  )
+  printf '%s\n' "$verify_info"
 
   if [[ "$STOP_AFTER_SIDECAR" == "1" ]]; then
     echo "[run_duet_phase_a_codex] stop_after_sidecar=1; skipping Phase A prep for $label"
@@ -106,7 +153,7 @@ for label in $DUET_TARGETS; do
 
   export FORGET_LABEL="$label"
   export OUT_DIR="$out_dir"
-  export CF_SIDECAR_JSONL="$out_dir/api_sidecar.jsonl"
+  export CF_SIDECAR_JSONL="$sidecar_path"
   export CF_SIDECAR_ALTERNATE_KEY=alternates
   export CF_SIDECAR_SCORE_KEY=scores
   export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
@@ -115,7 +162,7 @@ for label in $DUET_TARGETS; do
   export STOP_AFTER_CLEAN_CF=1
   export DROP_INVALID_AFTER_CLEAN=1
   export NUM_ALTERNATES="$NUM_ALTERNATES"
-  export MAX_EXAMPLES="$MAX_EXAMPLES"
+  export MAX_EXAMPLES="$effective_max_examples"
   export ALLOW_LOW_CONFIDENCE_FALLBACK="$ALLOW_LOW_CONFIDENCE_FALLBACK"
   unset SKIP_CF_GENERATION
 

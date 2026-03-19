@@ -88,6 +88,18 @@ def require_common_meta(metas: list[dict[str, Any]], key: str) -> Any:
     return first
 
 
+def clean_meta_values(metas: list[dict[str, Any]], key: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for meta in metas:
+        value = clean_text(meta.get(key))
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
 def summarize_sidecar(path: Path) -> dict[str, Any]:
     rows = read_jsonl(path)
     duplicates: list[int] = []
@@ -156,6 +168,15 @@ def merge_row(
 
     prompt_family = clean_text(source_rows[0].get("prompt_family")) or "unknown"
     answer_type = clean_text(source_rows[0].get("answer_type")) or "unknown"
+    merged_backends: list[str] = []
+    seen_backends: set[str] = set()
+    for row in source_rows:
+        backend = clean_text(row.get("generator_backend")) or "unknown"
+        if backend in seen_backends:
+            continue
+        seen_backends.add(backend)
+        merged_backends.append(backend)
+    generator_backend = merged_backends[0] if len(merged_backends) == 1 else "multiple"
     return {
         "index": index,
         "alternates": merged_alts,
@@ -166,7 +187,7 @@ def merge_row(
         "answer_type": answer_type,
         "candidate_count": len(merged_alts),
         "generator": "codex_cli_merged",
-        "generator_backend": "codex_cli",
+        "generator_backend": generator_backend,
         "generator_model": "multiple",
         "generator_reasoning_effort": None,
         "model": "multiple",
@@ -174,6 +195,7 @@ def merge_row(
         "prompt_version": f"codex_cli_merged:{prompt_family}:v1",
         "structured_outputs": True,
         "merged_model_count": len(source_rows),
+        "merged_backends": merged_backends,
         "merged_models": [
             clean_text(row.get("generator_model") or row.get("model")) for row in source_rows
         ],
@@ -206,7 +228,6 @@ def main() -> None:
             raise RuntimeError(f"{path}: index set mismatch with the first input sidecar")
 
     for key in (
-        "backend",
         "prompt_family",
         "dataset_path",
         "dataset_name",
@@ -216,6 +237,8 @@ def main() -> None:
         "answer_key",
         "answer_index",
     ):
+        if key == "dataset_path":
+            continue
         require_common_meta(metas, key)
 
     merged_rows: list[dict[str, Any]] = []
@@ -232,17 +255,21 @@ def main() -> None:
         for row in merged_rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    input_models = [clean_text(meta.get("model")) for meta in metas]
-    input_reasoning = [clean_text(meta.get("reasoning_effort")) for meta in metas]
+    input_models = clean_meta_values(metas, "model")
+    input_reasoning = clean_meta_values(metas, "reasoning_effort")
+    input_backends = clean_meta_values(metas, "backend")
+    input_dataset_paths = clean_meta_values(metas, "dataset_path")
     merged_meta = {
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
-        "backend": "codex_cli",
+        "backend": input_backends[0] if len(input_backends) == 1 else "multiple",
         "model": "multiple",
+        "input_backends": input_backends,
         "input_models": input_models,
+        "input_dataset_paths": input_dataset_paths,
         "input_reasoning_efforts": input_reasoning,
         "input_sidecars": [str(path) for path in input_paths],
         "prompt_family": require_common_meta(metas, "prompt_family"),
-        "dataset_path": require_common_meta(metas, "dataset_path"),
+        "dataset_path": input_dataset_paths[0] if input_dataset_paths else None,
         "dataset_name": require_common_meta(metas, "dataset_name"),
         "split": require_common_meta(metas, "split"),
         "data_files": require_common_meta(metas, "data_files"),
@@ -269,6 +296,8 @@ def main() -> None:
     summary = summarize_sidecar(output_path)
     summary.update(
         {
+            "input_backends": input_backends,
+            "input_dataset_paths": input_dataset_paths,
             "input_sidecar_count": len(input_paths),
             "input_models": input_models,
             "input_reasoning_efforts": input_reasoning,

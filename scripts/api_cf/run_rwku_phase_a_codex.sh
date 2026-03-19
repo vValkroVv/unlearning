@@ -25,6 +25,18 @@ if [[ "${CODEX_USE_CHATGPT_LOGIN:-1}" == "1" ]]; then
   unset CODEX_API_KEY || true
 fi
 
+parse_key_value_output() {
+  local payload="$1"
+  local target_name="$2"
+  local value=""
+  value=$(printf '%s\n' "$payload" | awk -F= -v key="$target_name" '$1 == key {print $2}')
+  if [[ -z "$value" ]]; then
+    echo "[run_rwku_phase_a_codex] missing ${target_name} in helper output" >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
 safe_run_tag="${RUN_TAG// /_}"
 safe_run_tag="${safe_run_tag//\//_}"
 safe_run_tag="${safe_run_tag//:/_}"
@@ -40,13 +52,36 @@ fi
 
 out_dir="$ARTIFACT_ROOT/rwku/${FORGET_SPLIT}_codex_v3${suffix}"
 mkdir -p "$out_dir"
+sidecar_path="$out_dir/api_sidecar.jsonl"
 
 echo "=== RWKU ${FORGET_SPLIT} / codex_cli ==="
 echo "out_dir=${out_dir}"
 
+resume_info=$(
+  python scripts/api_cf/codex_phase_a_resume.py resolve \
+    --dataset-path "$RWKU_DATASET_PATH_LOCAL" \
+    --dataset-name "$FORGET_SPLIT" \
+    --split test \
+    --question-key query \
+    --answer-key answer \
+    --sidecar-path "$sidecar_path" \
+    --model "$CODEX_MODEL" \
+    --prompt-family rwku_shared_fact_safe \
+    --num-alternates "$NUM_ALTERNATES" \
+    --requested-max-examples "$MAX_EXAMPLES"
+)
+printf '%s\n' "$resume_info"
+
+effective_max_examples=$(parse_key_value_output "$resume_info" effective_max_examples)
+completed_rows=$(parse_key_value_output "$resume_info" completed_rows)
+remaining_rows=$(parse_key_value_output "$resume_info" remaining_rows)
+
+echo "[run_rwku_phase_a_codex] requested_max_examples=${MAX_EXAMPLES} completed_rows=${completed_rows} effective_max_examples=${effective_max_examples} remaining_rows=${remaining_rows}"
+export MAX_EXAMPLES="$effective_max_examples"
+
 if [[ "$SKIP_SIDECAR_GENERATION" == "1" ]]; then
-  if [[ ! -s "$out_dir/api_sidecar.jsonl" ]]; then
-    echo "[run_rwku_phase_a_codex] missing sidecar while SKIP_SIDECAR_GENERATION=1: $out_dir/api_sidecar.jsonl" >&2
+  if [[ ! -s "$sidecar_path" ]]; then
+    echo "[run_rwku_phase_a_codex] missing sidecar while SKIP_SIDECAR_GENERATION=1: $sidecar_path" >&2
     exit 1
   fi
   echo "[run_rwku_phase_a_codex] skipping sidecar generation"
@@ -57,18 +92,33 @@ else
     --split test \
     --question-key query \
     --answer-key answer \
-    --output-path "$out_dir/api_sidecar.jsonl" \
+    --output-path "$sidecar_path" \
     --model "$CODEX_MODEL" \
     --prompt-family rwku_shared_fact_safe \
     --num-alternates "$NUM_ALTERNATES" \
     --batch-size "$CODEX_BATCH_SIZE" \
     --concurrent "$CODEX_CONCURRENT" \
-    --max-examples "$MAX_EXAMPLES" \
+    --max-examples "$effective_max_examples" \
     "${reasoning_args[@]}" \
     --timeout-seconds "$CODEX_TIMEOUT_SECONDS" \
     --max-attempts "$CODEX_MAX_ATTEMPTS" \
     --resume
 fi
+
+verify_info=$(
+  python scripts/api_cf/codex_phase_a_resume.py verify \
+    --dataset-path "$RWKU_DATASET_PATH_LOCAL" \
+    --dataset-name "$FORGET_SPLIT" \
+    --split test \
+    --question-key query \
+    --answer-key answer \
+    --sidecar-path "$sidecar_path" \
+    --model "$CODEX_MODEL" \
+    --prompt-family rwku_shared_fact_safe \
+    --num-alternates "$NUM_ALTERNATES" \
+    --effective-max-examples "$effective_max_examples"
+)
+printf '%s\n' "$verify_info"
 
 if [[ "$STOP_AFTER_SIDECAR" == "1" ]]; then
   echo "[run_rwku_phase_a_codex] stop_after_sidecar=1; skipping Phase A prep"
@@ -78,7 +128,7 @@ fi
 export FORGET_SPLIT
 export RETAIN_SPLIT
 export OUT_DIR="$out_dir"
-export CF_SIDECAR_JSONL="$out_dir/api_sidecar.jsonl"
+export CF_SIDECAR_JSONL="$sidecar_path"
 export CF_SIDECAR_ALTERNATE_KEY=alternates
 export CF_SIDECAR_SCORE_KEY=scores
 export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores

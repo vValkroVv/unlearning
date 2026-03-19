@@ -1,13 +1,16 @@
-# Codex Counterfactual Generation On macOS
+# Codex Counterfactual Generation Full Runbook On macOS
 
-This runbook is now Codex-only.
-The filename is historical, but the commands below use the dedicated Codex generator only.
+This runbook is Codex-first with verified ChatGPT Pro imports.
+The filename is historical, but the commands below use the dedicated Codex generator plus canonical imported ChatGPT Pro sidecars, matching the exact multi-model workflow validated in `smoke_test_codex.md`.
 
-It shows the exact local commands to:
+It shows the full-run path to:
 
-- generate DUET Codex sidecars and Phase A artifacts
-- generate RWKU Codex sidecars and Phase A artifacts
-- rebuild merged DUET from existing `rare_codex_v3` + `popular_codex_v3`
+- generate DUET sidecars from the same three validated Codex source-model configurations
+- add the verified ChatGPT Pro DUET and RWKU sidecars generated outside Codex CLI
+- generate RWKU sidecars from the same three validated source-model configurations
+- merge DUET and RWKU to `8` alternates per row
+- run Phase A from the merged sidecars without regenerating them
+- rebuild merged DUET from the merged rare + popular parts
 
 Current repo path on this machine:
 
@@ -15,7 +18,39 @@ Current repo path on this machine:
 cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
 ```
 
-## 1. Common setup
+## 1. Validated source-model matrix
+
+The smoke accepted these exact Codex model / reasoning pairs that this runbook still uses:
+
+- `gpt-5.4-mini` with `medium`
+- `gpt-5.4-mini` with `high`
+- `gpt-5.4` with `low`
+
+Additional verified ChatGPT Pro sources added outside Codex CLI:
+
+- `gpt-5.4-pro` via ChatGPT Pro chat, normalized as `full_g54pro_xhigh`
+- canonical rare import:
+  `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh`
+- canonical popular import:
+  `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh`
+- `gpt-5.4-pro` via ChatGPT Pro chat for RWKU, normalized as `full_g54pro_high`
+- canonical RWKU import:
+  `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high`
+
+Each source-model run generates:
+
+- `NUM_ALTERNATES=2` alternates per row
+- sidecar only first
+- separate tagged output directories
+
+Then the three Codex sidecars plus the imported ChatGPT Pro sidecars are merged to:
+
+- `8` alternates per row for DUET rare
+- `8` alternates per row for DUET popular
+- `8` alternates per row for DUET merged from parts
+- `8` alternates per row for RWKU
+
+## 2. Common setup
 
 ```bash
 cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
@@ -23,400 +58,323 @@ cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
 unset CODEX_API_KEY
 codex login status
 
-export CODEX_MODEL="gpt-5.4-mini"
-export CODEX_REASONING_EFFORT="medium"
-export CODEX_CONCURRENT=1
-export MAX_EXAMPLES=16
-export NUM_ALTERNATES=4
+export CODEX_CONCURRENT=4
 export CODEX_TIMEOUT_SECONDS=900
-```
+export CODEX_BATCH_SIZE=10
+export CODEX_MAX_ATTEMPTS=3
 
-Use `MAX_EXAMPLES=16` for a smoke run.
-
-For a full run later:
-
-```bash
 export MAX_EXAMPLES=0
+export NUM_ALTERNATES=2
+export STOP_AFTER_SIDECAR=1
+export SKIP_SIDECAR_GENERATION=0
 ```
 
-If a real `codex exec` run reports stale auth, refresh it once:
+`MAX_EXAMPLES=0` means full dataset, not smoke.
+
+If auth is stale:
 
 ```bash
 codex logout
 codex login
 ```
 
-## 2. DUET Codex generation
+Optional preflight model check:
 
-This runs the validated Codex Phase A wrapper for:
+```bash
+python - <<'PY'
+import subprocess, tempfile
+pairs = [
+    ("gpt-5.4-mini", "medium"),
+    ("gpt-5.4-mini", "high"),
+    ("gpt-5.4", "low"),
+]
+for model, effort in pairs:
+    tmp = tempfile.mkdtemp()
+    cmd = [
+        "codex", "-s", "read-only", "-a", "never", "exec",
+        "-C", tmp,
+        "--skip-git-repo-check",
+        "-m", model,
+        "-c", f'model_reasoning_effort="{effort}"',
+        "--color", "never",
+        "Reply with OK only",
+    ]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    combined = ((p.stdout or "") + "\n" + (p.stderr or "")).strip().splitlines()
+    tail = combined[-1] if combined else ""
+    print(f"{model}\t{effort}\t{p.returncode}\t{tail[:180]}")
+PY
+```
 
-- `rare_codex_v3`
-- `popular_codex_v3`
-- `merged_codex_v3`
+## 3. Generate sidecar-only outputs for the three validated Codex source runs
+
+This is the smoke-tested approach, but with full-dataset settings and stable `RUN_TAG` names.
+
+The naming convention is:
+
+- `full_g54mini_med`
+- `full_g54mini_high`
+- `full_g54_low`
+
+Run all three DUET + RWKU source passes:
 
 ```bash
 cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
 
-unset CODEX_API_KEY
-export CODEX_MODEL="gpt-5.4-mini"
-export CODEX_REASONING_EFFORT="medium"
-export CODEX_CONCURRENT=1
-export MAX_EXAMPLES=16
-export NUM_ALTERNATES=4
-export CODEX_TIMEOUT_SECONDS=900
+configs=(
+  "gpt-5.4-mini medium full_g54mini_med"
+  "gpt-5.4-mini high full_g54mini_high"
+  "gpt-5.4 low full_g54_low"
+)
 
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
+for cfg in "${configs[@]}"; do
+  read -r model effort tag <<<"$cfg"
+
+  env \
+    CODEX_MODEL="$model" \
+    CODEX_REASONING_EFFORT="$effort" \
+    CODEX_CONCURRENT=4 \
+    CODEX_TIMEOUT_SECONDS=900 \
+    MAX_EXAMPLES=0 \
+    NUM_ALTERNATES=2 \
+    STOP_AFTER_SIDECAR=1 \
+    DUET_TARGETS="rare popular" \
+    RUN_TAG="$tag" \
+    bash scripts/api_cf/run_duet_phase_a_codex.sh
+
+  env \
+    CODEX_MODEL="$model" \
+    CODEX_REASONING_EFFORT="$effort" \
+    CODEX_CONCURRENT=4 \
+    CODEX_TIMEOUT_SECONDS=900 \
+    MAX_EXAMPLES=0 \
+    NUM_ALTERNATES=2 \
+    STOP_AFTER_SIDECAR=1 \
+    RUN_TAG="$tag" \
+    bash scripts/api_cf/run_rwku_phase_a_codex.sh
+done
 ```
 
-The wrapper calls:
+This writes per-model source directories like:
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/generate_codex_cf_sidecar.py`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_med`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54mini_med`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54mini_med`
 
-That writes:
+and the matching `__full_g54mini_high` and `__full_g54_low` directories.
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3`
+Do not run DUET `merged` in this stage.
+The supported path is rare + popular first, then merged from parts.
 
-## 3. RWKU Codex generation
+## 4. Verified ChatGPT Pro imports
+
+### 4.1 DUET import
+
+The extra DUET source came from ChatGPT Pro chat rather than the Codex CLI wrappers.
+The verified source directories on this machine were:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts-gpt-pro-rare/dualcf_api_v3/duet/rare_codex_v3`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts-gpt-pro-popular/dualcf_api_v3/duet/popular_codex_v3`
+
+The canonical copies were checked with:
 
 ```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset duet \
+  --question-key question \
+  --out-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh
 
-unset CODEX_API_KEY
-export CODEX_MODEL="gpt-5.4-mini"
-export CODEX_REASONING_EFFORT="medium"
-export CODEX_CONCURRENT=1
-export MAX_EXAMPLES=16
-export NUM_ALTERNATES=4
-export CODEX_TIMEOUT_SECONDS=900
-
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_rwku_phase_a_codex.sh
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset duet \
+  --question-key question \
+  --out-dir artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh
 ```
 
-The wrapper calls:
+The canonical imported directories used below are:
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/generate_codex_cf_sidecar.py`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh`
 
-That writes:
+Their copied metadata keeps the actual chat backend (`chatgpt_manual` for rare,
+`chatgpt_assistant` for popular) while the canonical tag records the intended
+source label `g54pro_xhigh`.
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3`
+### 4.2 RWKU import
 
-## 4. Rebuild merged DUET from rare + popular Codex artifacts
+The extra RWKU source also came from ChatGPT Pro chat rather than the Codex CLI wrappers.
+The verified source directory on this machine was:
 
-If you do not want a separate merged Codex generation pass, first make sure these exist:
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts-gpt-pro-rwku/dualcf_api_v3/rwku/forget_level2_codex_v3`
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3`
-
-Then rebuild merged from those two directories:
+The canonical copy was checked with:
 
 ```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset rwku \
+  --question-key query \
+  --out-dir artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high
 ```
 
-You can override `RARE_DIR`, `POPULAR_DIR`, and `OUT_DIR` when the rare/popular
-source directories are model-tagged or merged sidecars.
+The canonical imported directory used below is:
 
-That writes:
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high`
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/merged_input.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/api_sidecar.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/api_sidecar.jsonl.meta.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/api_sidecar.jsonl.summary.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step0_candidate_bank.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step1_counterfactuals_raw_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step1b_counterfactuals_clean_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step1b_clean_report.json`
+This RWKU copy has no `step0_candidate_bank.jsonl`, which is expected for RWKU.
+Its copied metadata keeps the actual chat backend (`chatgpt_manual`) while the
+canonical tag records the imported source label `g54pro_high`. The supplied RWKU
+Pro metadata recorded `reasoning_effort=high`, so the canonical tag stays
+`high` rather than inventing `xhigh`.
 
-## 5. Multi-model workflow: 8 counterfactuals from 4 models
+## 5. Merge the source sidecars
 
-The supported path is:
+Use the merge helper.
+Do not raw-`cat` the sidecars.
+The helper now accepts the imported ChatGPT Pro sidecars even when their copied
+metadata preserves `backend=chatgpt_manual` / `chatgpt_assistant` or a
+different canonical dataset path than the local Codex-generated runs.
 
-1. run sidecar-only generation separately for each model
-2. generate `2` alternates per model
-3. merge the resulting sidecars by `index`
-4. rebuild merged DUET from the merged rare + merged popular sidecars
-
-Do not raw-`cat` the files. Use the merge helper:
-
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py`
-
-### 5.1 Per-model sidecar-only runs
-
-Use a distinct `RUN_TAG` for each model run so the output directories do not
-overwrite each other.
-
-```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-unset CODEX_API_KEY
-export MAX_EXAMPLES=16
-export NUM_ALTERNATES=2
-export STOP_AFTER_SIDECAR=1
-export DUET_TARGETS="rare popular"
-export CODEX_CONCURRENT=4
-export CODEX_TIMEOUT_SECONDS=900
-```
-
-Example model run:
-
-```bash
-export CODEX_MODEL="gpt-5.4-mini"
-export CODEX_REASONING_EFFORT="medium"
-export RUN_TAG="m1_gpt54mini_medium"
-
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_rwku_phase_a_codex.sh
-```
-
-Repeat that block with three more model / reasoning combinations, for example:
-
-```bash
-export CODEX_MODEL="MODEL_2"
-export CODEX_REASONING_EFFORT="medium"
-export RUN_TAG="m2_model2_medium"
-```
-
-```bash
-export CODEX_MODEL="MODEL_3"
-export CODEX_REASONING_EFFORT="medium"
-export RUN_TAG="m3_model3_medium"
-```
-
-```bash
-export CODEX_MODEL="MODEL_4"
-export CODEX_REASONING_EFFORT="medium"
-export RUN_TAG="m4_model4_medium"
-```
-
-### 5.2 Merge rare sidecars to 8 total alternates
+### 5.1 Merge DUET rare to 8 alternates
 
 ```bash
 python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__m1_gpt54mini_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__m2_model2_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__m3_model3_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__m4_model4_medium \
-  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__mix/api_sidecar.jsonl \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_med \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_high \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54_low \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh \
+  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_mix4/api_sidecar.jsonl \
   --max-alternates 8
 ```
 
-### 5.3 Merge popular sidecars to 8 total alternates
+### 5.2 Merge DUET popular to 8 alternates
 
 ```bash
 python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__m1_gpt54mini_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__m2_model2_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__m3_model3_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__m4_model4_medium \
-  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__mix/api_sidecar.jsonl \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54mini_med \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54mini_high \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54_low \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh \
+  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_mix4/api_sidecar.jsonl \
   --max-alternates 8
 ```
 
-### 5.4 Merge RWKU sidecars to 8 total alternates
+### 5.3 Merge RWKU to 8 alternates
 
 ```bash
 python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__m1_gpt54mini_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__m2_model2_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__m3_model3_medium \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__m4_model4_medium \
-  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__mix/api_sidecar.jsonl \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54mini_med \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54mini_high \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54_low \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high \
+  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_mix4/api_sidecar.jsonl \
   --max-alternates 8
 ```
 
-### 5.5 Build merged DUET from the merged rare + popular sidecars
+## 6. Run Phase A from the merged sidecars
+
+At this point the mixed sidecars already exist in the final artifact directories.
+Run Phase A prep without regenerating the sidecars.
+The reuse path now accepts merged metadata with `merged_from_sidecars=true`,
+`model=multiple`, and local dataset-path aliases recorded in
+`input_dataset_paths`.
+
+### 6.1 DUET rare from merged sidecar
 
 ```bash
-RARE_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__mix \
-POPULAR_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__mix \
-OUT_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__mix \
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
-```
-
-### 5.6 Reuse a merged sidecar for Phase A without regenerating
-
-If you already wrote a merged or mixed sidecar into the final artifact
-directory, you can skip sidecar generation and run only Phase A prep:
-
-```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-export RUN_TAG="mix"
-export SKIP_SIDECAR_GENERATION=1
-export STOP_AFTER_SIDECAR=0
-```
-
-RWKU:
-
-```bash
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_rwku_phase_a_codex.sh
-```
-
-DUET rare only:
-
-```bash
-export DUET_TARGETS="rare"
-bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
-```
-
-### 5.7 Exact smoke40 commands for the artifacts already on disk
-
-If you already have these four source-model smoke directories:
-
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54mini_med`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54mini_high`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54_med`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g53codex_med`
-
-and the matching `popular_codex_v3__smoke40_*` plus
-`forget_level2_codex_v3__smoke40_*` directories, you do not need any new
-generation. Use the commands below.
-
-Merge rare to `8` alternates:
-
-```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54mini_med \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54mini_high \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54_med \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g53codex_med \
-  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_mix4/api_sidecar.jsonl \
-  --max-alternates 8
-```
-
-Merge popular to `8` alternates:
-
-```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g54mini_med \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g54mini_high \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g54_med \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g53codex_med \
-  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_mix4/api_sidecar.jsonl \
-  --max-alternates 8
-```
-
-Merge RWKU to `8` alternates:
-
-```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g54mini_med \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g54mini_high \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g54_med \
-  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g53codex_med \
-  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_mix4/api_sidecar.jsonl \
-  --max-alternates 8
-```
-
-Reuse the merged rare sidecar for Phase A:
-
-```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 DUET_TARGETS="rare" \
+env \
+  MAX_EXAMPLES=0 \
+  NUM_ALTERNATES=8 \
+  SKIP_SIDECAR_GENERATION=1 \
+  STOP_AFTER_SIDECAR=0 \
+  RUN_TAG=full_mix4 \
+  DUET_TARGETS="rare" \
   bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
 ```
 
-Reuse the merged popular sidecar for Phase A:
+### 6.2 DUET popular from merged sidecar
 
 ```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 DUET_TARGETS="popular" \
+env \
+  MAX_EXAMPLES=0 \
+  NUM_ALTERNATES=8 \
+  SKIP_SIDECAR_GENERATION=1 \
+  STOP_AFTER_SIDECAR=0 \
+  RUN_TAG=full_mix4 \
+  DUET_TARGETS="popular" \
   bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
 ```
 
-Reuse the merged RWKU sidecar for Phase A:
+### 6.3 RWKU from merged sidecar
 
 ```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 \
+env \
+  MAX_EXAMPLES=0 \
+  NUM_ALTERNATES=8 \
+  SKIP_SIDECAR_GENERATION=1 \
+  STOP_AFTER_SIDECAR=0 \
+  RUN_TAG=full_mix4 \
   bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_rwku_phase_a_codex.sh
 ```
 
-Rebuild merged DUET from the smoke40 rare + popular mixed dirs:
+## 7. Rebuild merged DUET from the merged rare + popular parts
+
+This keeps merged DUET exactly aligned with the already-prepared rare and popular artifacts.
 
 ```bash
-cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
-
-RARE_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_mix4 \
-POPULAR_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_mix4 \
-OUT_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__smoke40_mix4 \
+RARE_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_mix4 \
+POPULAR_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_mix4 \
+OUT_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__full_mix4 \
+NUM_ALTERNATES=8 \
 bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
 ```
 
-These smoke40 outputs are already present on this machine and currently validate
-cleanly:
+## 8. Expected full-run outputs
 
-- rare mixed: `40` rows
-- popular mixed: `40` rows
-- RWKU mixed: `40` rows
-- merged DUET from parts: `80` rows
+After success, these directories should exist:
 
-## 6. What should exist after success
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_mix4`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_mix4`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__full_mix4`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_mix4`
 
-DUET rare:
+For DUET rare, DUET popular, DUET merged, and RWKU mixed outputs, the successful Phase A directories should contain:
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/api_sidecar.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/api_sidecar.jsonl.meta.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/api_sidecar.jsonl.summary.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/step0_candidate_bank.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/step1_counterfactuals_raw_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/step1b_counterfactuals_clean_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3/step1b_clean_report.json`
+- `api_sidecar.jsonl`
+- `api_sidecar.jsonl.meta.json`
+- `api_sidecar.jsonl.summary.json`
+- `step1_counterfactuals_raw_v3.jsonl`
+- `step1b_counterfactuals_clean_v3.jsonl`
+- `step1b_clean_report.json`
 
-DUET popular:
+DUET directories should also contain:
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/api_sidecar.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/api_sidecar.jsonl.meta.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/api_sidecar.jsonl.summary.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/step0_candidate_bank.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/step1_counterfactuals_raw_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/step1b_counterfactuals_clean_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3/step1b_clean_report.json`
+- `step0_candidate_bank.jsonl`
 
-DUET merged from parts:
+Merged DUET from parts should also contain:
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/merged_input.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/api_sidecar.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/api_sidecar.jsonl.meta.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/api_sidecar.jsonl.summary.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step0_candidate_bank.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step1_counterfactuals_raw_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step1b_counterfactuals_clean_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3/step1b_clean_report.json`
+- `merged_input.jsonl`
 
-RWKU:
+DUET mixed outputs now carry `8` alternates per row.
+RWKU mixed outputs now also carry `8` alternates per row.
 
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3/api_sidecar.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3/api_sidecar.jsonl.meta.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3/api_sidecar.jsonl.summary.json`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3/step1_counterfactuals_raw_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3/step1b_counterfactuals_clean_v3.jsonl`
-- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3/step1b_clean_report.json`
+## 9. Notes
 
-## 7. Notes
-
-- This file is Codex-only. No OpenAI API commands remain here.
-- The active generator for DUET and RWKU is `scripts/api_cf/generate_codex_cf_sidecar.py`.
-- You can pass `CODEX_REASONING_EFFORT=low|medium|high|xhigh` to the wrappers.
-- You can pass `CODEX_CONCURRENT=N` to run up to `N` Codex batch requests in parallel.
-- You can pass `RUN_TAG=...` to isolate outputs for different model runs.
-- You can pass `STOP_AFTER_SIDECAR=1` to generate only `api_sidecar.jsonl` plus metadata.
-- You can pass `SKIP_SIDECAR_GENERATION=1` to consume an already-merged sidecar without regenerating it.
-- For partial smoke runs, merged-from-parts is the correct way to make merged equal rare + popular.
-- Do not raw-`cat` sidecars. Use `merge_codex_sidecars.py` for model mixing and `run_duet_phase_a_codex_merged_from_parts.sh` for merged DUET reconstruction.
-- `CODEX_TIMEOUT_SECONDS=900` is the safe local default for merged Codex runs on this machine.
-- The generator shows a `tqdm` batch progress bar in terminal.
-- Local live check on this machine: `codex-spark` is rejected under ChatGPT-login auth with `The 'codex-spark' model is not supported when using Codex with a ChatGPT account.`
+- This file now documents the full run, not the `MAX_EXAMPLES=40` smoke.
+- The generator for DUET and RWKU is `scripts/api_cf/generate_codex_cf_sidecar.py`.
+- The merge helper is `scripts/api_cf/merge_codex_sidecars.py`.
+- The merged DUET reconstruction path is `scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`.
+- The extra DUET `gpt-5.4-pro` sources were generated via ChatGPT Pro chat and then normalized into the canonical `__full_g54pro_xhigh` directories under `artifacts/dualcf_api_v3/duet/`.
+- The extra RWKU `gpt-5.4-pro` source was generated via ChatGPT Pro chat and then normalized into the canonical `__full_g54pro_high` directory under `artifacts/dualcf_api_v3/rwku/`.
+- Mixed `full_mix4` sidecars now preserve `input_backends`,
+  `input_dataset_paths`, and `input_models` in the merged metadata so the
+  provenance of imported ChatGPT Pro rows is kept even though the merged sidecar
+  itself records `model=multiple`.
+- `RUN_TAG` becomes the `__suffix` on the artifact directory name, so the tags above are chosen to stay short and readable.
+- `CODEX_REASONING_EFFORT` may be `low|medium|high|xhigh`, but this runbook keeps only the combinations that passed the smoke.
+- `codex-spark` is not part of this workflow. The smoke showed it is rejected under ChatGPT-login auth.
+- The DUET Phase A reuse path now works under `set -u`; the smoke exposed and validated that fix.
+- The merged-sidecar reuse path now also works for mixed Codex + ChatGPT Pro
+  sources under `SKIP_SIDECAR_GENERATION=1`; the validator accepts
+  `model=multiple` if the requested `CODEX_MODEL` is one of the recorded
+  `input_models`.
+- Do not raw-`cat` the sidecars, including the imported ChatGPT Pro files. Keep using `merge_codex_sidecars.py`.
+- Do not compare merged DualCF artifacts against rare-only or popular-only baselines. Keep split matching intact.

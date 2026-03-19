@@ -82,6 +82,51 @@ def maybe_str(value: Any) -> Optional[str]:
     return str(value)
 
 
+def build_run_meta(
+    args: argparse.Namespace,
+    *,
+    codex_status: Optional[str],
+) -> RunMeta:
+    return RunMeta(
+        created_at_utc=datetime.now(timezone.utc).isoformat(),
+        backend="codex_cli",
+        model=args.model,
+        prompt_family=args.prompt_family,
+        dataset_path=args.dataset_path,
+        dataset_name=maybe_str(args.dataset_name),
+        split=args.split,
+        data_files=maybe_str(args.data_files),
+        question_key=args.question_key,
+        answer_key=args.answer_key,
+        answer_index=args.answer_index,
+        num_alternates=args.num_alternates,
+        batch_size=args.batch_size,
+        max_examples=args.max_examples,
+        candidate_bank=maybe_str(args.candidate_bank),
+        candidate_bank_limit=args.candidate_bank_limit,
+        concurrent=args.concurrent,
+        reasoning_effort=args.reasoning_effort,
+        timeout_seconds=args.timeout_seconds,
+        sleep_seconds=args.sleep_seconds,
+        max_attempts=args.max_attempts,
+        resume=bool(args.resume),
+        codex_login_status=codex_status,
+    )
+
+
+def write_run_meta(
+    output_path: Path,
+    args: argparse.Namespace,
+    *,
+    codex_status: Optional[str],
+) -> None:
+    meta_path = output_path.with_name(output_path.name + ".meta.json")
+    meta_path.write_text(
+        json.dumps(asdict(build_run_meta(args, codex_status=codex_status)), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def model_validate(model_cls: type[BaseModel], payload: Any) -> BaseModel:
     if hasattr(model_cls, "model_validate"):
         return model_cls.model_validate(payload)  # type: ignore[attr-defined]
@@ -737,6 +782,9 @@ def main() -> None:
     done_indices = load_existing_indices(output_path) if args.resume else set()
     log(f"backend=codex_cli rows={len(rows)} already_done={len(done_indices)} output={output_path}")
 
+    # Persist request metadata before generation so interrupted runs remain resumable.
+    write_run_meta(output_path, args, codex_status=None)
+
     written, codex_status = generate_codex_sidecar(
         args=args,
         rows=rows,
@@ -745,36 +793,7 @@ def main() -> None:
         done_indices=done_indices,
     )
 
-    meta = RunMeta(
-        created_at_utc=datetime.now(timezone.utc).isoformat(),
-        backend="codex_cli",
-        model=args.model,
-        prompt_family=args.prompt_family,
-        dataset_path=args.dataset_path,
-        dataset_name=maybe_str(args.dataset_name),
-        split=args.split,
-        data_files=maybe_str(args.data_files),
-        question_key=args.question_key,
-        answer_key=args.answer_key,
-        answer_index=args.answer_index,
-        num_alternates=args.num_alternates,
-        batch_size=args.batch_size,
-        max_examples=args.max_examples,
-        candidate_bank=maybe_str(args.candidate_bank),
-        candidate_bank_limit=args.candidate_bank_limit,
-        concurrent=args.concurrent,
-        reasoning_effort=args.reasoning_effort,
-        timeout_seconds=args.timeout_seconds,
-        sleep_seconds=args.sleep_seconds,
-        max_attempts=args.max_attempts,
-        resume=bool(args.resume),
-        codex_login_status=codex_status,
-    )
-    meta_path = output_path.with_name(output_path.name + ".meta.json")
-    meta_path.write_text(
-        json.dumps(asdict(meta), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    write_run_meta(output_path, args, codex_status=codex_status)
 
     summary = summarize_sidecar(output_path)
     summary_path = output_path.with_name(output_path.name + ".summary.json")

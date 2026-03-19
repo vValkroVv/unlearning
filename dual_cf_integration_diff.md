@@ -180,10 +180,24 @@ Updates:
   `STOP_AFTER_SIDECAR=1` for sidecar-only generation, and DUET
   `DUET_TARGETS="rare popular"` style subset selection to avoid paying for a
   direct merged run when doing multi-model sidecar mixing
+- the Codex phase-A launchers now verify any existing `api_sidecar.jsonl`
+  against the current request metadata before reuse; mismatched model,
+  prompt family, dataset, split, or answer contract now fail fast instead of
+  silently mixing runs in one output directory
+- the Codex phase-A launchers now treat `MAX_EXAMPLES` as a resumable chunk
+  size for repeated identical commands: if the current sidecar has fewer than
+  `MAX_EXAMPLES` valid rows for the target prefix, the next run finishes that
+  prefix; once the prefix is complete, the same command advances the target
+  window by another `MAX_EXAMPLES` unseen rows and rebuilds candidate-bank /
+  raw / clean artifacts against that larger verified prefix
 - `scripts/api_cf/merge_codex_sidecars.py` is the correct replacement for raw
   `cat` when combining multiple model sidecars into one 8-candidate file; it
   merges by `index`, concatenates aligned metadata arrays, deduplicates
   alternates, and writes merged `.meta.json` / `.summary.json`
+- the merge helper now also supports mixed Codex CLI plus imported ChatGPT Pro
+  sidecars whose copied metadata preserves different `backend` values or
+  canonical dataset paths; the merged metadata records
+  `input_backends` / `input_dataset_paths` while keeping `model=multiple`
 - `scripts/api_cf/build_duet_merged_sidecar_from_parts.py` can now derive a
   merged DUET sidecar from existing `rare` and `popular` sidecars by writing a
   synthetic merged JSONL dataset with reindexed rows; this avoids a second
@@ -197,6 +211,10 @@ Updates:
   and `DATA_FILES` env inputs and forwards them to
   `build_duet_candidate_bank.py` and `make_counterfactuals.py`; this keeps the
   standard DUET Phase A wrapper usable for synthetic JSONL merged inputs
+- `scripts/api_cf/codex_phase_a_resume.py` now accepts merged sidecars with
+  `merged_from_sidecars=true`, `model=multiple`, and dataset aliases listed in
+  `input_dataset_paths`, so `SKIP_SIDECAR_GENERATION=1` works for `full_mix4`
+  reuse without rewriting the imported sidecar provenance
 - local Codex automation uses the installed CLI surface here:
   `codex -s read-only -a never exec ... --output-schema ... -o ... -`
   rather than unsupported per-subcommand approval flags or `--ephemeral`
@@ -208,12 +226,30 @@ Validation status for this follow-up:
   - `bash -n scripts/duet/_splits.sh scripts/utility/eval_checkpoints_utility.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
   - `python -m unittest discover -s tests -p 'test_*.py'`
   - `python -m py_compile scripts/api_cf/generate_external_cf_sidecar.py scripts/api_cf/generate_codex_cf_sidecar.py scripts/api_cf/merge_codex_sidecars.py scripts/api_cf/check_phase_a_outputs.py src/tools/make_counterfactuals.py`
+  - `python -m py_compile scripts/api_cf/codex_phase_a_resume.py scripts/api_cf/generate_codex_cf_sidecar.py scripts/api_cf/check_phase_a_outputs.py`
   - `python -m py_compile scripts/api_cf/build_duet_merged_sidecar_from_parts.py`
+  - `python -m py_compile scripts/api_cf/merge_codex_sidecars.py scripts/api_cf/codex_phase_a_resume.py tests/test_api_cf_merge_resume.py`
   - `bash -n scripts/api_cf/run_duet_phase_a_openai.sh scripts/api_cf/run_rwku_phase_a_openai.sh scripts/api_cf/run_duet_phase_a_codex.sh scripts/api_cf/run_rwku_phase_a_codex.sh`
   - `bash -n scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh scripts/duet/prepare_dual_cf_duet_v3.sh`
+  - `python -m unittest discover -s tests -p 'test_api_cf_merge_resume.py'`
   - `python scripts/api_cf/generate_external_cf_sidecar.py --help`
   - `python scripts/api_cf/generate_codex_cf_sidecar.py --help`
   - `python scripts/api_cf/merge_codex_sidecars.py --help`
+  - live Codex smoke on RWKU `forget_level2` with `gpt-5.4`,
+    `reasoning_effort=low`, `max_examples=2`, `batch_size=1`:
+    first run -> verified 2 rows, second identical run -> resolved
+    `completed_rows=2`, `effective_max_examples=4`, wrote 2 new rows,
+    rebuilt clean Phase A outputs to 4 rows
+  - partial-resume smoke on RWKU `forget_level2` with `gpt-5.4`,
+    `reasoning_effort=low`, preseeded 1 valid sidecar row and reran with
+    `max_examples=2`: resolved `completed_rows=1`,
+    `effective_max_examples=2`, wrote exactly 1 new row, and finished with
+    2 verified clean rows
+  - live Codex smoke on DUET `rare` with `gpt-5.4`,
+    `reasoning_effort=low`, `max_examples=2`, `batch_size=1`:
+    first run -> verified 2 rows, second identical run -> resolved
+    `completed_rows=2`, `effective_max_examples=4`, wrote 2 new rows,
+    rebuilt candidate bank and clean Phase A outputs to 4 rows
   - live Codex smoke on RWKU `forget_level2` with `gpt-5.4-mini`,
     `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
     `concurrent=2` -> success in `real 21.93s`
@@ -230,6 +266,13 @@ Validation status for this follow-up:
   - `python scripts/api_cf/check_phase_a_outputs.py --help`
   - `python scripts/api_cf/build_duet_merged_sidecar_from_parts.py --dataset-path SwetieePawsss/DUET --rare-dir artifacts/dualcf_api_v3/duet/rare_codex_v3 --popular-dir artifacts/dualcf_api_v3/duet/popular_codex_v3 --output-dir artifacts/dualcf_api_v3/duet/merged_codex_v3`
   - `bash scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`
+  - full local `full_mix4` closure with imported ChatGPT Pro sidecars:
+    merged DUET `rare` / `popular`, merged RWKU, then Phase A prep with
+    `MAX_EXAMPLES=0`, `NUM_ALTERNATES=8`, `SKIP_SIDECAR_GENERATION=1`,
+    followed by `run_duet_phase_a_codex_merged_from_parts.sh`;
+    final checks passed for DUET `rare` (`482` rows), DUET `popular`
+    (`482` rows), DUET `merged` (`964` rows), and RWKU `forget_level2`
+    (`2879` rows), each with `valid_row_rate=1.0`
 - results:
   - full non-GPU unittest suite passed with `OK (skipped=3)`
   - the three skips are the optional `lm_eval`-dependent tests

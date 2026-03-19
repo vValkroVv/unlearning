@@ -297,6 +297,7 @@ Directory Structure:
 ├── npo_integration_diff.md
 ├── npo_sam_integration_diff.md
 ├── npo_sam.md
+├── openai_generation_counterfscts.md
 ├── package_saves.sh
 ├── plan-test-dual.md
 ├── prod-gpu-runs-new-5ep.md
@@ -309,6 +310,17 @@ Directory Structure:
 ├── README.md
 ├── results-run.md
 ├── run-bert-cos-sim.md
+│   │   ├── scripts/api_cf/build_duet_merged_sidecar_from_parts.py
+│   │   ├── scripts/api_cf/check_phase_a_outputs.py
+│   │   ├── scripts/api_cf/codex_phase_a_resume.py
+│   │   ├── scripts/api_cf/generate_codex_cf_sidecar.py
+│   │   ├── scripts/api_cf/generate_external_cf_sidecar.py
+│   │   ├── scripts/api_cf/merge_codex_sidecars.py
+│   │   ├── scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
+│   │   ├── scripts/api_cf/run_duet_phase_a_codex.sh
+│   │   ├── scripts/api_cf/run_duet_phase_a_openai.sh
+│   │   ├── scripts/api_cf/run_rwku_phase_a_codex.sh
+│   │   └── scripts/api_cf/run_rwku_phase_a_openai.sh
 │   ├── scripts/calc_cos_sim.py
 │   ├── scripts/dualcf
 │   │   └── scripts/dualcf/run_campaign_one_lr.sh
@@ -392,6 +404,7 @@ Directory Structure:
 ├── setup_data.py
 ├── setup_vast_env.sh
 ├── setup.py
+├── smoke_test_codex.md
 │   ├── src/eval.py
 │   ├── src/evals
 │   │   ├── src/evals/__init__.py
@@ -457,6 +470,7 @@ Directory Structure:
 │       │   ├── src/trainer/unlearn/undial.py
 │       │   └── src/trainer/unlearn/wga.py
 │       └── src/trainer/utils.py
+│   ├── tests/test_api_cf_merge_resume.py
 │   ├── tests/test_dualcf_v3_counterfactual_selection.py
 │   ├── tests/test_dualcf_v3_helpers.py
 │   ├── tests/test_dualcf_v3_routing.py
@@ -3153,6 +3167,390 @@ For full runs with default script hyperparameters (same style as other algorithm
 
 </content>
 
+<content full_path="openai_generation_counterfscts.md">
+# Codex Counterfactual Generation Full Runbook On macOS
+
+This runbook is Codex-first with verified ChatGPT Pro imports.
+The filename is historical, but the commands below use the dedicated Codex generator plus canonical imported ChatGPT Pro sidecars, matching the exact multi-model workflow validated in `smoke_test_codex.md`.
+
+It shows the full-run path to:
+
+- generate DUET sidecars from the same three validated Codex source-model configurations
+- add the verified ChatGPT Pro DUET and RWKU sidecars generated outside Codex CLI
+- generate RWKU sidecars from the same three validated source-model configurations
+- merge DUET and RWKU to `8` alternates per row
+- run Phase A from the merged sidecars without regenerating them
+- rebuild merged DUET from the merged rare + popular parts
+
+Current repo path on this machine:
+
+```bash
+cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
+```
+
+## 1. Validated source-model matrix
+
+The smoke accepted these exact Codex model / reasoning pairs that this runbook still uses:
+
+- `gpt-5.4-mini` with `medium`
+- `gpt-5.4-mini` with `high`
+- `gpt-5.4` with `low`
+
+Additional verified ChatGPT Pro sources added outside Codex CLI:
+
+- `gpt-5.4-pro` via ChatGPT Pro chat, normalized as `full_g54pro_xhigh`
+- canonical rare import:
+  `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh`
+- canonical popular import:
+  `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh`
+- `gpt-5.4-pro` via ChatGPT Pro chat for RWKU, normalized as `full_g54pro_high`
+- canonical RWKU import:
+  `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high`
+
+Each source-model run generates:
+
+- `NUM_ALTERNATES=2` alternates per row
+- sidecar only first
+- separate tagged output directories
+
+Then the three Codex sidecars plus the imported ChatGPT Pro sidecars are merged to:
+
+- `8` alternates per row for DUET rare
+- `8` alternates per row for DUET popular
+- `8` alternates per row for DUET merged from parts
+- `8` alternates per row for RWKU
+
+## 2. Common setup
+
+```bash
+cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
+
+unset CODEX_API_KEY
+codex login status
+
+export CODEX_CONCURRENT=4
+export CODEX_TIMEOUT_SECONDS=900
+export CODEX_BATCH_SIZE=10
+export CODEX_MAX_ATTEMPTS=3
+
+export MAX_EXAMPLES=0
+export NUM_ALTERNATES=2
+export STOP_AFTER_SIDECAR=1
+export SKIP_SIDECAR_GENERATION=0
+```
+
+`MAX_EXAMPLES=0` means full dataset, not smoke.
+
+If auth is stale:
+
+```bash
+codex logout
+codex login
+```
+
+Optional preflight model check:
+
+```bash
+python - <<'PY'
+import subprocess, tempfile
+pairs = [
+    ("gpt-5.4-mini", "medium"),
+    ("gpt-5.4-mini", "high"),
+    ("gpt-5.4", "low"),
+]
+for model, effort in pairs:
+    tmp = tempfile.mkdtemp()
+    cmd = [
+        "codex", "-s", "read-only", "-a", "never", "exec",
+        "-C", tmp,
+        "--skip-git-repo-check",
+        "-m", model,
+        "-c", f'model_reasoning_effort="{effort}"',
+        "--color", "never",
+        "Reply with OK only",
+    ]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    combined = ((p.stdout or "") + "\n" + (p.stderr or "")).strip().splitlines()
+    tail = combined[-1] if combined else ""
+    print(f"{model}\t{effort}\t{p.returncode}\t{tail[:180]}")
+PY
+```
+
+## 3. Generate sidecar-only outputs for the three validated Codex source runs
+
+This is the smoke-tested approach, but with full-dataset settings and stable `RUN_TAG` names.
+
+The naming convention is:
+
+- `full_g54mini_med`
+- `full_g54mini_high`
+- `full_g54_low`
+
+Run all three DUET + RWKU source passes:
+
+```bash
+cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
+
+configs=(
+  "gpt-5.4-mini medium full_g54mini_med"
+  "gpt-5.4-mini high full_g54mini_high"
+  "gpt-5.4 low full_g54_low"
+)
+
+for cfg in "${configs[@]}"; do
+  read -r model effort tag <<<"$cfg"
+
+  env \
+    CODEX_MODEL="$model" \
+    CODEX_REASONING_EFFORT="$effort" \
+    CODEX_CONCURRENT=4 \
+    CODEX_TIMEOUT_SECONDS=900 \
+    MAX_EXAMPLES=0 \
+    NUM_ALTERNATES=2 \
+    STOP_AFTER_SIDECAR=1 \
+    DUET_TARGETS="rare popular" \
+    RUN_TAG="$tag" \
+    bash scripts/api_cf/run_duet_phase_a_codex.sh
+
+  env \
+    CODEX_MODEL="$model" \
+    CODEX_REASONING_EFFORT="$effort" \
+    CODEX_CONCURRENT=4 \
+    CODEX_TIMEOUT_SECONDS=900 \
+    MAX_EXAMPLES=0 \
+    NUM_ALTERNATES=2 \
+    STOP_AFTER_SIDECAR=1 \
+    RUN_TAG="$tag" \
+    bash scripts/api_cf/run_rwku_phase_a_codex.sh
+done
+```
+
+This writes per-model source directories like:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_med`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54mini_med`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54mini_med`
+
+and the matching `__full_g54mini_high` and `__full_g54_low` directories.
+
+Do not run DUET `merged` in this stage.
+The supported path is rare + popular first, then merged from parts.
+
+## 4. Verified ChatGPT Pro imports
+
+### 4.1 DUET import
+
+The extra DUET source came from ChatGPT Pro chat rather than the Codex CLI wrappers.
+The verified source directories on this machine were:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts-gpt-pro-rare/dualcf_api_v3/duet/rare_codex_v3`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts-gpt-pro-popular/dualcf_api_v3/duet/popular_codex_v3`
+
+The canonical copies were checked with:
+
+```bash
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset duet \
+  --question-key question \
+  --out-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh
+
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset duet \
+  --question-key question \
+  --out-dir artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh
+```
+
+The canonical imported directories used below are:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh`
+
+Their copied metadata keeps the actual chat backend (`chatgpt_manual` for rare,
+`chatgpt_assistant` for popular) while the canonical tag records the intended
+source label `g54pro_xhigh`.
+
+### 4.2 RWKU import
+
+The extra RWKU source also came from ChatGPT Pro chat rather than the Codex CLI wrappers.
+The verified source directory on this machine was:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts-gpt-pro-rwku/dualcf_api_v3/rwku/forget_level2_codex_v3`
+
+The canonical copy was checked with:
+
+```bash
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset rwku \
+  --question-key query \
+  --out-dir artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high
+```
+
+The canonical imported directory used below is:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high`
+
+This RWKU copy has no `step0_candidate_bank.jsonl`, which is expected for RWKU.
+Its copied metadata keeps the actual chat backend (`chatgpt_manual`) while the
+canonical tag records the imported source label `g54pro_high`. The supplied RWKU
+Pro metadata recorded `reasoning_effort=high`, so the canonical tag stays
+`high` rather than inventing `xhigh`.
+
+## 5. Merge the source sidecars
+
+Use the merge helper.
+Do not raw-`cat` the sidecars.
+The helper now accepts the imported ChatGPT Pro sidecars even when their copied
+metadata preserves `backend=chatgpt_manual` / `chatgpt_assistant` or a
+different canonical dataset path than the local Codex-generated runs.
+
+### 5.1 Merge DUET rare to 8 alternates
+
+```bash
+python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_med \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_high \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54_low \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh \
+  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_mix4/api_sidecar.jsonl \
+  --max-alternates 8
+```
+
+### 5.2 Merge DUET popular to 8 alternates
+
+```bash
+python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54mini_med \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54mini_high \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54_low \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_g54pro_xhigh \
+  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_mix4/api_sidecar.jsonl \
+  --max-alternates 8
+```
+
+### 5.3 Merge RWKU to 8 alternates
+
+```bash
+python /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/merge_codex_sidecars.py \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54mini_med \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54mini_high \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54_low \
+  --input-dir /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_g54pro_high \
+  --output-path /Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_mix4/api_sidecar.jsonl \
+  --max-alternates 8
+```
+
+## 6. Run Phase A from the merged sidecars
+
+At this point the mixed sidecars already exist in the final artifact directories.
+Run Phase A prep without regenerating the sidecars.
+The reuse path now accepts merged metadata with `merged_from_sidecars=true`,
+`model=multiple`, and local dataset-path aliases recorded in
+`input_dataset_paths`.
+
+### 6.1 DUET rare from merged sidecar
+
+```bash
+env \
+  MAX_EXAMPLES=0 \
+  NUM_ALTERNATES=8 \
+  SKIP_SIDECAR_GENERATION=1 \
+  STOP_AFTER_SIDECAR=0 \
+  RUN_TAG=full_mix4 \
+  DUET_TARGETS="rare" \
+  bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+### 6.2 DUET popular from merged sidecar
+
+```bash
+env \
+  MAX_EXAMPLES=0 \
+  NUM_ALTERNATES=8 \
+  SKIP_SIDECAR_GENERATION=1 \
+  STOP_AFTER_SIDECAR=0 \
+  RUN_TAG=full_mix4 \
+  DUET_TARGETS="popular" \
+  bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+### 6.3 RWKU from merged sidecar
+
+```bash
+env \
+  MAX_EXAMPLES=0 \
+  NUM_ALTERNATES=8 \
+  SKIP_SIDECAR_GENERATION=1 \
+  STOP_AFTER_SIDECAR=0 \
+  RUN_TAG=full_mix4 \
+  bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+## 7. Rebuild merged DUET from the merged rare + popular parts
+
+This keeps merged DUET exactly aligned with the already-prepared rare and popular artifacts.
+
+```bash
+RARE_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_mix4 \
+POPULAR_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_mix4 \
+OUT_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__full_mix4 \
+NUM_ALTERNATES=8 \
+bash /Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
+```
+
+## 8. Expected full-run outputs
+
+After success, these directories should exist:
+
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__full_mix4`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__full_mix4`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__full_mix4`
+- `/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__full_mix4`
+
+For DUET rare, DUET popular, DUET merged, and RWKU mixed outputs, the successful Phase A directories should contain:
+
+- `api_sidecar.jsonl`
+- `api_sidecar.jsonl.meta.json`
+- `api_sidecar.jsonl.summary.json`
+- `step1_counterfactuals_raw_v3.jsonl`
+- `step1b_counterfactuals_clean_v3.jsonl`
+- `step1b_clean_report.json`
+
+DUET directories should also contain:
+
+- `step0_candidate_bank.jsonl`
+
+Merged DUET from parts should also contain:
+
+- `merged_input.jsonl`
+
+DUET mixed outputs now carry `8` alternates per row.
+RWKU mixed outputs now also carry `8` alternates per row.
+
+## 9. Notes
+
+- This file now documents the full run, not the `MAX_EXAMPLES=40` smoke.
+- The generator for DUET and RWKU is `scripts/api_cf/generate_codex_cf_sidecar.py`.
+- The merge helper is `scripts/api_cf/merge_codex_sidecars.py`.
+- The merged DUET reconstruction path is `scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`.
+- The extra DUET `gpt-5.4-pro` sources were generated via ChatGPT Pro chat and then normalized into the canonical `__full_g54pro_xhigh` directories under `artifacts/dualcf_api_v3/duet/`.
+- The extra RWKU `gpt-5.4-pro` source was generated via ChatGPT Pro chat and then normalized into the canonical `__full_g54pro_high` directory under `artifacts/dualcf_api_v3/rwku/`.
+- Mixed `full_mix4` sidecars now preserve `input_backends`,
+  `input_dataset_paths`, and `input_models` in the merged metadata so the
+  provenance of imported ChatGPT Pro rows is kept even though the merged sidecar
+  itself records `model=multiple`.
+- `RUN_TAG` becomes the `__suffix` on the artifact directory name, so the tags above are chosen to stay short and readable.
+- `CODEX_REASONING_EFFORT` may be `low|medium|high|xhigh`, but this runbook keeps only the combinations that passed the smoke.
+- `codex-spark` is not part of this workflow. The smoke showed it is rejected under ChatGPT-login auth.
+- The DUET Phase A reuse path now works under `set -u`; the smoke exposed and validated that fix.
+- The merged-sidecar reuse path now also works for mixed Codex + ChatGPT Pro
+  sources under `SKIP_SIDECAR_GENERATION=1`; the validator accepts
+  `model=multiple` if the requested `CODEX_MODEL` is one of the recorded
+  `input_models`.
+- Do not raw-`cat` the sidecars, including the imported ChatGPT Pro files. Keep using `merge_codex_sidecars.py`.
+- Do not compare merged DualCF artifacts against rare-only or popular-only baselines. Keep split matching intact.
+
+</content>
+
 <content full_path="idea2_dualcf_v3_verified_cf_plan_and_review_extended.md">
 # Idea2 for DualCF: verified multi-alternate counterfactual supervision
 
@@ -3740,6 +4138,277 @@ That gives the cleanest scientific progression:
 - Which Retain Set Matters? — A Case Study on Entity Unlearning
 - your `difficulty_attribution_counterfactual_unlearning_idea1_extended.md`
 - your `dual_cf_integration_diff.md`
+
+</content>
+
+<content full_path="smoke_test_codex.md">
+# Codex Smoke Test Log
+
+Repo:
+
+```bash
+cd /Users/valerii.kropotin/НОД/Diploma/open-unlearning
+```
+
+## Requested smoke configuration
+
+- `MAX_EXAMPLES=40`
+- `NUM_ALTERNATES=2` per source model run
+- `CODEX_CONCURRENT=4`
+- source models:
+  - `gpt-5.4-mini` with `medium`
+  - `gpt-5.4-mini` with `high`
+  - `gpt-5.4` with `medium`
+  - `gpt-5.3-codex` with `medium`
+- merged sidecars:
+  - rare: `40` rows, `8` alternates per row
+  - popular: `40` rows, `8` alternates per row
+  - RWKU: `40` rows, `8` alternates per row
+  - merged DUET from rare+popular parts: `80` rows, `8` alternates per row
+
+## Untimed preflight commands
+
+These were run without `/usr/bin/time -p`.
+
+```bash
+ps -axo pid,ppid,stat,etime,command | rg 'generate_codex_cf_sidecar|codex exec|run_duet_phase_a_codex|run_rwku_phase_a_codex'
+```
+
+```bash
+codex login status
+```
+
+```bash
+python - <<'PY'
+import subprocess, tempfile
+models=['gpt-5.4-mini','gpt-5.4','gpt-5.3-codex']
+for model in models:
+    tmp=tempfile.mkdtemp()
+    cmd=['codex','-s','read-only','-a','never','exec','-C',tmp,'--skip-git-repo-check','-m',model,'-c','model_reasoning_effort="medium"','--color','never','Reply with OK only']
+    p=subprocess.run(cmd,capture_output=True,text=True,timeout=60)
+    combined=((p.stdout or '')+'\n'+(p.stderr or '')).strip().splitlines()
+    tail=combined[-1] if combined else ''
+    print(f'{model}\t{p.returncode}\t{tail[:180]}')
+PY
+```
+
+Result:
+
+- `gpt-5.4-mini` accepted
+- `gpt-5.4` accepted
+- `gpt-5.3-codex` accepted
+
+## Timed commands
+
+### 1. DUET sidecar-only: `gpt-5.4-mini / medium`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.4-mini CODEX_REASONING_EFFORT=medium CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 "DUET_TARGETS=rare popular" RUN_TAG=smoke40_g54mini_med CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `94.14s`
+
+### 2. RWKU sidecar-only: `gpt-5.4-mini / medium`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.4-mini CODEX_REASONING_EFFORT=medium CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 RUN_TAG=smoke40_g54mini_med CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `20.47s`
+
+### 3. DUET sidecar-only: `gpt-5.4-mini / high`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.4-mini CODEX_REASONING_EFFORT=high CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 "DUET_TARGETS=rare popular" RUN_TAG=smoke40_g54mini_high CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `119.30s`
+
+### 4. RWKU sidecar-only: `gpt-5.4-mini / high`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.4-mini CODEX_REASONING_EFFORT=high CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 RUN_TAG=smoke40_g54mini_high CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `23.00s`
+
+### 5. DUET sidecar-only: `gpt-5.4 / medium`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.4 CODEX_REASONING_EFFORT=medium CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 "DUET_TARGETS=rare popular" RUN_TAG=smoke40_g54_med CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `138.83s`
+
+### 6. RWKU sidecar-only: `gpt-5.4 / medium`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.4 CODEX_REASONING_EFFORT=medium CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 RUN_TAG=smoke40_g54_med CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `49.72s`
+
+### 7. DUET sidecar-only: `gpt-5.3-codex / medium`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.3-codex CODEX_REASONING_EFFORT=medium CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 "DUET_TARGETS=rare popular" RUN_TAG=smoke40_g53codex_med CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `114.86s`
+
+### 8. RWKU sidecar-only: `gpt-5.3-codex / medium`
+
+```bash
+/usr/bin/time -p env CODEX_MODEL=gpt-5.3-codex CODEX_REASONING_EFFORT=medium CODEX_CONCURRENT=4 MAX_EXAMPLES=40 NUM_ALTERNATES=2 STOP_AFTER_SIDECAR=1 RUN_TAG=smoke40_g53codex_med CODEX_TIMEOUT_SECONDS=900 bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `43.68s`
+
+### 9. Merge rare sidecars
+
+```bash
+/usr/bin/time -p python scripts/api_cf/merge_codex_sidecars.py --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54mini_med --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54mini_high --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g54_med --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_g53codex_med --output-path artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_mix4/api_sidecar.jsonl --max-alternates 8
+```
+
+- exit: `0`
+- real: `0.04s`
+
+### 10. Merge popular sidecars
+
+```bash
+/usr/bin/time -p python scripts/api_cf/merge_codex_sidecars.py --input-dir artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g54mini_med --input-dir artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g54mini_high --input-dir artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g54_med --input-dir artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_g53codex_med --output-path artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_mix4/api_sidecar.jsonl --max-alternates 8
+```
+
+- exit: `0`
+- real: `0.04s`
+
+### 11. Merge RWKU sidecars
+
+```bash
+/usr/bin/time -p python scripts/api_cf/merge_codex_sidecars.py --input-dir artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g54mini_med --input-dir artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g54mini_high --input-dir artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g54_med --input-dir artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_g53codex_med --output-path artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_mix4/api_sidecar.jsonl --max-alternates 8
+```
+
+- exit: `0`
+- real: `0.03s`
+
+### 12. Mixed DUET rare Phase A reuse, first failed attempt
+
+This exposed an empty-array shell bug in `scripts/duet/prepare_dual_cf_duet_v3.sh`.
+
+```bash
+/usr/bin/time -p env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 "DUET_TARGETS=rare" bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `1`
+- real: `17.86s`
+- failure: `dataset_extra_args[@]: unbound variable`
+
+### 13. Mixed DUET rare Phase A reuse, second failed attempt
+
+There was a second `dataset_extra_args[@]` expansion later in the same DUET prep script.
+
+```bash
+/usr/bin/time -p env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 "DUET_TARGETS=rare" bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `1`
+- real: `17.90s`
+- failure: `dataset_extra_args[@]: unbound variable`
+
+### 14. Mixed DUET rare Phase A reuse, successful retry
+
+```bash
+/usr/bin/time -p env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 "DUET_TARGETS=rare" bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `68.98s`
+
+### 15. Mixed DUET popular Phase A reuse
+
+```bash
+/usr/bin/time -p env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 "DUET_TARGETS=popular" bash scripts/api_cf/run_duet_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `61.08s`
+
+### 16. Mixed RWKU Phase A reuse
+
+```bash
+/usr/bin/time -p env MAX_EXAMPLES=40 NUM_ALTERNATES=8 SKIP_SIDECAR_GENERATION=1 STOP_AFTER_SIDECAR=0 RUN_TAG=smoke40_mix4 bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+- exit: `0`
+- real: `13.61s`
+
+### 17. Rebuild merged DUET from mixed rare + popular
+
+```bash
+/usr/bin/time -p env RARE_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_mix4 POPULAR_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_mix4 OUT_DIR=/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__smoke40_mix4 bash scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
+```
+
+- exit: `0`
+- real: `38.71s`
+
+## Patch applied during the smoke
+
+The smoke required one repo fix before the mixed DUET Phase A reuse path could succeed:
+
+- [prepare_dual_cf_duet_v3.sh](/Users/valerii.kropotin/НОД/Diploma/open-unlearning/scripts/duet/prepare_dual_cf_duet_v3.sh)
+
+What changed:
+
+- guarded the optional `dataset_extra_args` append in `make_cf_args`
+- replaced a direct `build_duet_candidate_bank.py ... "${dataset_extra_args[@]}"` call with a guarded `candidate_bank_args` array
+
+This was needed only because `set -u` treats empty optional arrays as unbound in this environment.
+
+## Final artifact summary
+
+### Source model sidecars
+
+All four source-model rare sidecars are structurally clean:
+
+- `rare_codex_v3__smoke40_g54mini_med`: `rows=40`, `unique_indices=40`, `bad_rows=0`
+- `rare_codex_v3__smoke40_g54mini_high`: `rows=40`, `unique_indices=40`, `bad_rows=0`
+- `rare_codex_v3__smoke40_g54_med`: `rows=40`, `unique_indices=40`, `bad_rows=0`
+- `rare_codex_v3__smoke40_g53codex_med`: `rows=40`, `unique_indices=40`, `bad_rows=0`
+
+The same pattern holds for the matching popular and RWKU source sidecars.
+
+### Mixed artifacts
+
+- [rare mixed](/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/rare_codex_v3__smoke40_mix4)
+  - `api_sidecar.jsonl.summary.json`: `rows=40`, `bad_rows=0`
+  - `step1b_clean_report.json`: `rows=40`, `valid_row_rate=1.0`, `exact_match_count=0`, `gold_substring_count=0`, `invalid_reason_counts={}`
+- [popular mixed](/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/popular_codex_v3__smoke40_mix4)
+  - `api_sidecar.jsonl.summary.json`: `rows=40`, `bad_rows=0`
+  - `step1b_clean_report.json`: `rows=40`, `valid_row_rate=1.0`, `exact_match_count=0`, `gold_substring_count=0`, `invalid_reason_counts={}`
+- [rwku mixed](/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/rwku/forget_level2_codex_v3__smoke40_mix4)
+  - `api_sidecar.jsonl.summary.json`: `rows=40`, `bad_rows=0`
+  - `step1b_clean_report.json`: `rows=40`, `valid_row_rate=1.0`, `exact_match_count=0`, `gold_substring_count=0`, `invalid_reason_counts={}`
+- [merged mixed](/Users/valerii.kropotin/НОД/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__smoke40_mix4)
+  - `api_sidecar.jsonl.summary.json`: `rows=80`, `bad_rows=0`
+  - `step1b_clean_report.json`: `rows=80`, `valid_row_rate=1.0`, `exact_match_count=0`, `gold_substring_count=0`, `invalid_reason_counts={}`
+
+## Important note about merged row count
+
+The merged DUET artifact is `80` rows, not `40`, because it was built from the
+union of:
+
+- `40` rare rows
+- `40` popular rows
+
+via `run_duet_phase_a_codex_merged_from_parts.sh`.
 
 </content>
 
@@ -14526,6 +15195,132 @@ The v3 scripts preserve the existing two-phase flow:
 - `SKIP_CF_GENERATION=1` for score/calibrate-only reuse
 - `REBUILD_CLEAN_CF=1` to regenerate the clean JSONL from saved raw CF output
 
+### Local macOS Phase A helpers
+
+For local non-GPU counterfactual generation before any GPU scoring or training,
+use the additive helpers under `scripts/api_cf/`. They generate an external
+sidecar JSONL first, feed it into the existing v3 prep scripts through
+`CF_SIDECAR_JSONL`, stop at `STOP_AFTER_CLEAN_CF=1`, and then verify the saved
+`step1*` / `step1b*` files locally.
+
+OpenAI API path:
+
+```bash
+export OPENAI_API_KEY=YOUR_KEY
+export OPENAI_MODEL=gpt-4.1-mini
+export MAX_EXAMPLES=16
+export NUM_ALTERNATES=4
+
+bash scripts/api_cf/run_duet_phase_a_openai.sh
+bash scripts/api_cf/run_rwku_phase_a_openai.sh
+```
+
+Codex CLI path using ChatGPT login instead of API billing:
+
+```bash
+unset CODEX_API_KEY
+codex login status
+# if a real `codex exec` reports a stale refresh token:
+# codex logout && codex login
+
+export CODEX_MODEL=gpt-5.4-mini
+export CODEX_REASONING_EFFORT=medium
+export CODEX_CONCURRENT=1
+export MAX_EXAMPLES=16
+export NUM_ALTERNATES=4
+
+bash scripts/api_cf/run_duet_phase_a_codex.sh
+bash scripts/api_cf/run_rwku_phase_a_codex.sh
+```
+
+Those Codex wrappers call `scripts/api_cf/generate_codex_cf_sidecar.py`.
+They also accept:
+
+- `CODEX_REASONING_EFFORT=low|medium|high|xhigh`
+- `CODEX_CONCURRENT=N` to run up to `N` Codex batch requests in parallel
+- `RUN_TAG=...` to isolate outputs for different model runs
+- `STOP_AFTER_SIDECAR=1` to stop after writing `api_sidecar.jsonl`
+- `SKIP_SIDECAR_GENERATION=1` to reuse an already merged sidecar, including a
+  mixed Codex + imported ChatGPT Pro sidecar that records `model=multiple`
+- `DUET_TARGETS="rare popular"` to skip direct merged generation during
+  multi-model sidecar collection
+
+Both helper families write split-matched artifacts under
+`artifacts/dualcf_api_v3/`:
+
+- DUET: `rare_api_v3`, `popular_api_v3`, `merged_api_v3` for OpenAI API, and
+  `rare_codex_v3`, `popular_codex_v3`, `merged_codex_v3` for Codex CLI
+- RWKU: `${FORGET_SPLIT}_api_v3` or `${FORGET_SPLIT}_codex_v3`
+
+Each output directory should contain:
+
+- `api_sidecar.jsonl`
+- `api_sidecar.jsonl.meta.json`
+- `api_sidecar.jsonl.summary.json`
+- `step1_counterfactuals_raw_v3.jsonl`
+- `step1b_counterfactuals_clean_v3.jsonl`
+- `step1b_clean_report.json`
+
+If a Codex run is interrupted after `api_sidecar.jsonl` has been appended but
+before the launcher finishes, rerunning the same command now bootstraps a
+missing `api_sidecar.jsonl.meta.json` from the existing sidecar rows and then
+continues the normal coverage check. New runs also write the metadata sidecar
+before batch generation starts, so this recovery path is mainly for older or
+previously interrupted artifacts.
+
+DUET also writes `step0_candidate_bank.jsonl` and
+`step0_candidate_bank_stats_v3.json`.
+
+When the 16-row smoke passes, rerun with:
+
+```bash
+export MAX_EXAMPLES=0
+```
+
+and keep the same split order: DUET `rare -> popular -> merged`, then RWKU.
+
+If you do not want a separate merged Codex generation pass, DUET now also has a
+merged-from-parts helper that rebuilds `merged_codex_v3` from the existing
+`rare_codex_v3` and `popular_codex_v3` artifacts:
+
+```bash
+bash scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh
+```
+
+That helper:
+
+- writes `merged_input.jsonl` under the merged artifact directory
+- rewrites the combined sidecar indices to synthetic merged-local indices
+- runs `scripts/duet/prepare_dual_cf_duet_v3.sh` against `DATASET_PATH=json`
+  and `DATA_FILES=.../merged_input.jsonl`
+- preserves the standard merged Phase A outputs:
+  `step0_candidate_bank.jsonl`, `step1_counterfactuals_raw_v3.jsonl`,
+  `step1b_counterfactuals_clean_v3.jsonl`, `step1b_clean_report.json`
+
+This is the correct way to make merged equal rare+popular for partial local
+smokes. A raw `cat rare_sidecar + popular_sidecar` is not enough on its own,
+because the prep flow joins on local `index` and the official merged split
+prefix is not the same as a partial rare+popular union.
+
+For multi-model runs where you want, for example, `2` candidates from each of
+`4` different models and then one final `8`-candidate sidecar, first run the
+Codex wrappers with `NUM_ALTERNATES=2`, `STOP_AFTER_SIDECAR=1`, and distinct
+`RUN_TAG` values, optionally raise `CODEX_CONCURRENT`, then combine the
+resulting sidecars with:
+
+```bash
+python scripts/api_cf/merge_codex_sidecars.py \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run1 \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run2 \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run3 \
+  --input-dir artifacts/dualcf_api_v3/duet/rare_codex_v3__run4 \
+  --output-path artifacts/dualcf_api_v3/duet/rare_codex_v3__mix/api_sidecar.jsonl \
+  --max-alternates 8
+```
+
+Use the same merge helper for `popular` and RWKU. Do not raw-`cat` sidecars.
+The Codex generator also shows a `tqdm` batch bar during generation.
+
 The standard train launchers now default to the v3 experiment configs, so
 regular DualCF runs do not need an `EXPERIMENT=` override:
 
@@ -14917,6 +15712,73 @@ Updates:
   validator failures plus nested `artifact_quality`; `calibrate_dual_cf_scores.py`
   now also supports `--report-path`, while the v3 prep launchers persist the
   same artifact-quality summary inside `step4_calibration_stats_v3.json`
+- external Phase A helpers were added for macOS / non-GPU sidecar generation:
+  - `scripts/api_cf/generate_external_cf_sidecar.py`
+  - `scripts/api_cf/generate_codex_cf_sidecar.py`
+  - `scripts/api_cf/merge_codex_sidecars.py`
+  - `scripts/api_cf/check_phase_a_outputs.py`
+  - `scripts/api_cf/run_duet_phase_a_openai.sh`
+  - `scripts/api_cf/run_rwku_phase_a_openai.sh`
+  - `scripts/api_cf/run_duet_phase_a_codex.sh`
+  - `scripts/api_cf/run_rwku_phase_a_codex.sh`
+  - `scripts/api_cf/build_duet_merged_sidecar_from_parts.py`
+  - `scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`
+- the new helper flow keeps the existing v3 artifact contract:
+  external sidecars still feed `CF_SIDECAR_JSONL` with `alternates`, `scores`,
+  `relation_scores`, `shared_fact_scores`, and `candidate_sources`, then stop
+  at `STOP_AFTER_CLEAN_CF=1`
+- `scripts/api_cf/generate_external_cf_sidecar.py` remains the mixed backend
+  helper, while the active Codex launcher path now uses the dedicated
+  `scripts/api_cf/generate_codex_cf_sidecar.py`; both write the same sidecar
+  JSONL contract and preserve `.meta.json` / `.summary.json` outputs
+- the Codex-only generator now supports explicit `--reasoning-effort`, writes
+  `generator_reasoning_effort` / `reasoning_effort` provenance, and shows a
+  terminal `tqdm` batch bar during generation
+- the Codex-only generator now also supports `--concurrent` for parallel batch
+  requests, while the Codex shell launchers expose that through
+  `CODEX_CONCURRENT`
+- the Codex launchers now support `RUN_TAG` for per-model artifact isolation,
+  `STOP_AFTER_SIDECAR=1` for sidecar-only generation, and DUET
+  `DUET_TARGETS="rare popular"` style subset selection to avoid paying for a
+  direct merged run when doing multi-model sidecar mixing
+- the Codex phase-A launchers now verify any existing `api_sidecar.jsonl`
+  against the current request metadata before reuse; mismatched model,
+  prompt family, dataset, split, or answer contract now fail fast instead of
+  silently mixing runs in one output directory
+- the Codex phase-A launchers now treat `MAX_EXAMPLES` as a resumable chunk
+  size for repeated identical commands: if the current sidecar has fewer than
+  `MAX_EXAMPLES` valid rows for the target prefix, the next run finishes that
+  prefix; once the prefix is complete, the same command advances the target
+  window by another `MAX_EXAMPLES` unseen rows and rebuilds candidate-bank /
+  raw / clean artifacts against that larger verified prefix
+- `scripts/api_cf/merge_codex_sidecars.py` is the correct replacement for raw
+  `cat` when combining multiple model sidecars into one 8-candidate file; it
+  merges by `index`, concatenates aligned metadata arrays, deduplicates
+  alternates, and writes merged `.meta.json` / `.summary.json`
+- the merge helper now also supports mixed Codex CLI plus imported ChatGPT Pro
+  sidecars whose copied metadata preserves different `backend` values or
+  canonical dataset paths; the merged metadata records
+  `input_backends` / `input_dataset_paths` while keeping `model=multiple`
+- `scripts/api_cf/build_duet_merged_sidecar_from_parts.py` can now derive a
+  merged DUET sidecar from existing `rare` and `popular` sidecars by writing a
+  synthetic merged JSONL dataset with reindexed rows; this avoids a second
+  merged Codex generation pass when merged should be the union of the already
+  generated rare/pop rows
+- `src/tools/make_counterfactuals.py` now preserves `generator_backend` and
+  `generator_model` from external sidecars in `cf_generator_backend`,
+  `cf_generator_model`, and `cf_provenance` instead of always reporting the
+  launcher default backend
+- `scripts/duet/prepare_dual_cf_duet_v3.sh` now accepts optional `DATASET_NAME`
+  and `DATA_FILES` env inputs and forwards them to
+  `build_duet_candidate_bank.py` and `make_counterfactuals.py`; this keeps the
+  standard DUET Phase A wrapper usable for synthetic JSONL merged inputs
+- `scripts/api_cf/codex_phase_a_resume.py` now accepts merged sidecars with
+  `merged_from_sidecars=true`, `model=multiple`, and dataset aliases listed in
+  `input_dataset_paths`, so `SKIP_SIDECAR_GENERATION=1` works for `full_mix4`
+  reuse without rewriting the imported sidecar provenance
+- local Codex automation uses the installed CLI surface here:
+  `codex -s read-only -a never exec ... --output-schema ... -o ... -`
+  rather than unsupported per-subcommand approval flags or `--ephemeral`
 
 Validation status for this follow-up:
 
@@ -14924,10 +15786,66 @@ Validation status for this follow-up:
   - `python -m py_compile src/tools/dual_cf_artifact_utils.py src/tools/make_counterfactuals.py src/tools/vllm_cf_client.py src/tools/clean_counterfactuals.py src/tools/retry_invalid_counterfactuals.py src/tools/validate_dual_cf_artifact.py src/tools/calibrate_dual_cf_scores.py src/tools/build_duet_candidate_bank.py src/trainer/__init__.py src/evals/__init__.py`
   - `bash -n scripts/duet/_splits.sh scripts/utility/eval_checkpoints_utility.sh scripts/duet/prepare_dual_cf_duet_v3.sh scripts/rwku/prepare_dual_cf_rwku_v3.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
   - `python -m unittest discover -s tests -p 'test_*.py'`
+  - `python -m py_compile scripts/api_cf/generate_external_cf_sidecar.py scripts/api_cf/generate_codex_cf_sidecar.py scripts/api_cf/merge_codex_sidecars.py scripts/api_cf/check_phase_a_outputs.py src/tools/make_counterfactuals.py`
+  - `python -m py_compile scripts/api_cf/codex_phase_a_resume.py scripts/api_cf/generate_codex_cf_sidecar.py scripts/api_cf/check_phase_a_outputs.py`
+  - `python -m py_compile scripts/api_cf/build_duet_merged_sidecar_from_parts.py`
+  - `python -m py_compile scripts/api_cf/merge_codex_sidecars.py scripts/api_cf/codex_phase_a_resume.py tests/test_api_cf_merge_resume.py`
+  - `bash -n scripts/api_cf/run_duet_phase_a_openai.sh scripts/api_cf/run_rwku_phase_a_openai.sh scripts/api_cf/run_duet_phase_a_codex.sh scripts/api_cf/run_rwku_phase_a_codex.sh`
+  - `bash -n scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh scripts/duet/prepare_dual_cf_duet_v3.sh`
+  - `python -m unittest discover -s tests -p 'test_api_cf_merge_resume.py'`
+  - `python scripts/api_cf/generate_external_cf_sidecar.py --help`
+  - `python scripts/api_cf/generate_codex_cf_sidecar.py --help`
+  - `python scripts/api_cf/merge_codex_sidecars.py --help`
+  - live Codex smoke on RWKU `forget_level2` with `gpt-5.4`,
+    `reasoning_effort=low`, `max_examples=2`, `batch_size=1`:
+    first run -> verified 2 rows, second identical run -> resolved
+    `completed_rows=2`, `effective_max_examples=4`, wrote 2 new rows,
+    rebuilt clean Phase A outputs to 4 rows
+  - partial-resume smoke on RWKU `forget_level2` with `gpt-5.4`,
+    `reasoning_effort=low`, preseeded 1 valid sidecar row and reran with
+    `max_examples=2`: resolved `completed_rows=1`,
+    `effective_max_examples=2`, wrote exactly 1 new row, and finished with
+    2 verified clean rows
+  - live Codex smoke on DUET `rare` with `gpt-5.4`,
+    `reasoning_effort=low`, `max_examples=2`, `batch_size=1`:
+    first run -> verified 2 rows, second identical run -> resolved
+    `completed_rows=2`, `effective_max_examples=4`, wrote 2 new rows,
+    rebuilt candidate bank and clean Phase A outputs to 4 rows
+  - live Codex smoke on RWKU `forget_level2` with `gpt-5.4-mini`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=2` -> success in `real 21.93s`
+  - live Codex smoke on RWKU `forget_level2` with `gpt-5.4-mini`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=4` -> success in `real 12.96s`
+  - live Codex smoke on RWKU `forget_level2` with `codex-spark`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=2` -> failed because that model is not supported when using
+    Codex with a ChatGPT account
+  - live Codex smoke on RWKU `forget_level2` with `codex-spark`,
+    `reasoning_effort=low`, `batch_size=1`, `max_examples=4`,
+    `concurrent=4` -> failed for the same account/model support reason
+  - `python scripts/api_cf/check_phase_a_outputs.py --help`
+  - `python scripts/api_cf/build_duet_merged_sidecar_from_parts.py --dataset-path SwetieePawsss/DUET --rare-dir artifacts/dualcf_api_v3/duet/rare_codex_v3 --popular-dir artifacts/dualcf_api_v3/duet/popular_codex_v3 --output-dir artifacts/dualcf_api_v3/duet/merged_codex_v3`
+  - `bash scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh`
+  - full local `full_mix4` closure with imported ChatGPT Pro sidecars:
+    merged DUET `rare` / `popular`, merged RWKU, then Phase A prep with
+    `MAX_EXAMPLES=0`, `NUM_ALTERNATES=8`, `SKIP_SIDECAR_GENERATION=1`,
+    followed by `run_duet_phase_a_codex_merged_from_parts.sh`;
+    final checks passed for DUET `rare` (`482` rows), DUET `popular`
+    (`482` rows), DUET `merged` (`964` rows), and RWKU `forget_level2`
+    (`2879` rows), each with `valid_row_rate=1.0`
 - results:
   - full non-GPU unittest suite passed with `OK (skipped=3)`
   - the three skips are the optional `lm_eval`-dependent tests
+  - the merged-from-parts DUET helper rebuilt `merged_codex_v3` as a 32-row
+    synthetic rare+popular union from the existing 16-row `rare_codex_v3` and
+    `popular_codex_v3` artifacts, and the Phase A checker passed with
+    `valid_row_rate=1.0`, `exact_match_count=0`, `gold_substring_count=0`
 - not completed here:
+  - live OpenAI API sidecar generation against a real key
+  - live Codex CLI sidecar generation end-to-end; the local CLI accepted the
+    `gpt-5.4-mini` model flag but the saved ChatGPT auth token needed a refresh
+    (`codex logout && codex login`) before a real `codex exec` run
   - GPU-backed vLLM generation checks
   - GPU-backed attribution scoring
   - GPU-backed prep smokes
@@ -26041,6 +26959,8 @@ esac
 DATASET_PATH=${DATASET_PATH:-${DUET_DATASET_PATH_LOCAL:-SwetieePawsss/DUET}}
 DATASET_PATH=$(resolve_dataset_path "${DATASET_PATH}")
 warn_if_dataset_unresolved "${DATASET_PATH}"
+DATASET_NAME=${DATASET_NAME:-}
+DATA_FILES=${DATA_FILES:-}
 RETAIN_SPLIT=${RETAIN_SPLIT:-city_fast_retain_500}
 QUESTION_KEY=${QUESTION_KEY:-question}
 ANSWER_KEY=${ANSWER_KEY:-answer}
@@ -26136,6 +27056,14 @@ if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
   clean_extra_args+=(--allow-low-confidence-fallback)
 fi
 
+dataset_extra_args=()
+if [[ -n "${DATASET_NAME}" ]]; then
+  dataset_extra_args+=(--dataset-name "${DATASET_NAME}")
+fi
+if [[ -n "${DATA_FILES}" ]]; then
+  dataset_extra_args+=(--data-files "${DATA_FILES}")
+fi
+
 make_cf_args=(
   --dataset-path "${DATASET_PATH}"
   --split "${FORGET_SPLIT}"
@@ -26161,6 +27089,9 @@ make_cf_args=(
   --max-overlap-ratio 0.85
   --max-alt-length-chars 128
 )
+if (( ${#dataset_extra_args[@]} > 0 )); then
+  make_cf_args+=("${dataset_extra_args[@]}")
+fi
 if [[ "${ALLOW_LOW_CONFIDENCE_FALLBACK}" == "1" ]]; then
   make_cf_args+=(--allow-low-confidence-fallback)
 fi
@@ -26197,15 +27128,20 @@ if [[ "${skip_cf_generation}" == "1" ]]; then
     echo "[prepare_dual_cf_duet_v3] Reusing existing candidate / raw / clean counterfactual files from ${OUT_DIR}"
   fi
 else
-  python "${repo_root}/src/tools/build_duet_candidate_bank.py" \
-    --dataset-path "${DATASET_PATH}" \
-    --split "${FORGET_SPLIT}" \
-    --output-path "${CANDIDATE_BANK_JSONL}" \
-    --question-key "${QUESTION_KEY}" \
-    --answer-key "${ANSWER_KEY}" \
-    --candidates-per-row 12 \
-    --max-examples "${MAX_EXAMPLES}" \
+  candidate_bank_args=(
+    --dataset-path "${DATASET_PATH}"
+    --split "${FORGET_SPLIT}"
+    --output-path "${CANDIDATE_BANK_JSONL}"
+    --question-key "${QUESTION_KEY}"
+    --answer-key "${ANSWER_KEY}"
+    --candidates-per-row 12
+    --max-examples "${MAX_EXAMPLES}"
     --sidecar-path "${OUT_DIR}/step0_candidate_bank_stats_v3.json"
+  )
+  if (( ${#dataset_extra_args[@]} > 0 )); then
+    candidate_bank_args+=("${dataset_extra_args[@]}")
+  fi
+  python "${repo_root}/src/tools/build_duet_candidate_bank.py" "${candidate_bank_args[@]}"
 
   python "${repo_root}/src/tools/make_counterfactuals.py" "${make_cf_args[@]}"
 
@@ -30338,6 +31274,3478 @@ if [[ -n "${QUANTIZATION}" ]]; then
 fi
 
 exec "${cmd[@]}"
+
+</content>
+
+<content full_path="scripts/api_cf/run_rwku_phase_a_codex.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$repo_root"
+
+export ARTIFACT_ROOT="${ARTIFACT_ROOT:-$repo_root/artifacts/dualcf_api_v3}"
+export RWKU_DATASET_PATH_LOCAL="${RWKU_DATASET_PATH_LOCAL:-SwetieePawsss/exp_r}"
+export CODEX_MODEL="${CODEX_MODEL:-gpt-5.4-mini}"
+export CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-}"
+export FORGET_SPLIT="${FORGET_SPLIT:-forget_level2}"
+export RETAIN_SPLIT="${RETAIN_SPLIT:-neighbor_level2}"
+export NUM_ALTERNATES="${NUM_ALTERNATES:-4}"
+export MAX_EXAMPLES="${MAX_EXAMPLES:-16}"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}"
+export CODEX_BATCH_SIZE="${CODEX_BATCH_SIZE:-10}"
+export CODEX_CONCURRENT="${CODEX_CONCURRENT:-1}"
+export CODEX_TIMEOUT_SECONDS="${CODEX_TIMEOUT_SECONDS:-240}"
+export CODEX_MAX_ATTEMPTS="${CODEX_MAX_ATTEMPTS:-3}"
+export STOP_AFTER_SIDECAR="${STOP_AFTER_SIDECAR:-0}"
+export SKIP_SIDECAR_GENERATION="${SKIP_SIDECAR_GENERATION:-0}"
+export RUN_TAG="${RUN_TAG:-}"
+
+if [[ "${CODEX_USE_CHATGPT_LOGIN:-1}" == "1" ]]; then
+  unset CODEX_API_KEY || true
+fi
+
+parse_key_value_output() {
+  local payload="$1"
+  local target_name="$2"
+  local value=""
+  value=$(printf '%s\n' "$payload" | awk -F= -v key="$target_name" '$1 == key {print $2}')
+  if [[ -z "$value" ]]; then
+    echo "[run_rwku_phase_a_codex] missing ${target_name} in helper output" >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
+safe_run_tag="${RUN_TAG// /_}"
+safe_run_tag="${safe_run_tag//\//_}"
+safe_run_tag="${safe_run_tag//:/_}"
+suffix=""
+if [[ -n "$safe_run_tag" ]]; then
+  suffix="__${safe_run_tag}"
+fi
+
+reasoning_args=()
+if [[ -n "$CODEX_REASONING_EFFORT" ]]; then
+  reasoning_args=(--reasoning-effort "$CODEX_REASONING_EFFORT")
+fi
+
+out_dir="$ARTIFACT_ROOT/rwku/${FORGET_SPLIT}_codex_v3${suffix}"
+mkdir -p "$out_dir"
+sidecar_path="$out_dir/api_sidecar.jsonl"
+
+echo "=== RWKU ${FORGET_SPLIT} / codex_cli ==="
+echo "out_dir=${out_dir}"
+
+resume_info=$(
+  python scripts/api_cf/codex_phase_a_resume.py resolve \
+    --dataset-path "$RWKU_DATASET_PATH_LOCAL" \
+    --dataset-name "$FORGET_SPLIT" \
+    --split test \
+    --question-key query \
+    --answer-key answer \
+    --sidecar-path "$sidecar_path" \
+    --model "$CODEX_MODEL" \
+    --prompt-family rwku_shared_fact_safe \
+    --num-alternates "$NUM_ALTERNATES" \
+    --requested-max-examples "$MAX_EXAMPLES"
+)
+printf '%s\n' "$resume_info"
+
+effective_max_examples=$(parse_key_value_output "$resume_info" effective_max_examples)
+completed_rows=$(parse_key_value_output "$resume_info" completed_rows)
+remaining_rows=$(parse_key_value_output "$resume_info" remaining_rows)
+
+echo "[run_rwku_phase_a_codex] requested_max_examples=${MAX_EXAMPLES} completed_rows=${completed_rows} effective_max_examples=${effective_max_examples} remaining_rows=${remaining_rows}"
+export MAX_EXAMPLES="$effective_max_examples"
+
+if [[ "$SKIP_SIDECAR_GENERATION" == "1" ]]; then
+  if [[ ! -s "$sidecar_path" ]]; then
+    echo "[run_rwku_phase_a_codex] missing sidecar while SKIP_SIDECAR_GENERATION=1: $sidecar_path" >&2
+    exit 1
+  fi
+  echo "[run_rwku_phase_a_codex] skipping sidecar generation"
+else
+  python scripts/api_cf/generate_codex_cf_sidecar.py \
+    --dataset-path "$RWKU_DATASET_PATH_LOCAL" \
+    --dataset-name "$FORGET_SPLIT" \
+    --split test \
+    --question-key query \
+    --answer-key answer \
+    --output-path "$sidecar_path" \
+    --model "$CODEX_MODEL" \
+    --prompt-family rwku_shared_fact_safe \
+    --num-alternates "$NUM_ALTERNATES" \
+    --batch-size "$CODEX_BATCH_SIZE" \
+    --concurrent "$CODEX_CONCURRENT" \
+    --max-examples "$effective_max_examples" \
+    "${reasoning_args[@]}" \
+    --timeout-seconds "$CODEX_TIMEOUT_SECONDS" \
+    --max-attempts "$CODEX_MAX_ATTEMPTS" \
+    --resume
+fi
+
+verify_info=$(
+  python scripts/api_cf/codex_phase_a_resume.py verify \
+    --dataset-path "$RWKU_DATASET_PATH_LOCAL" \
+    --dataset-name "$FORGET_SPLIT" \
+    --split test \
+    --question-key query \
+    --answer-key answer \
+    --sidecar-path "$sidecar_path" \
+    --model "$CODEX_MODEL" \
+    --prompt-family rwku_shared_fact_safe \
+    --num-alternates "$NUM_ALTERNATES" \
+    --effective-max-examples "$effective_max_examples"
+)
+printf '%s\n' "$verify_info"
+
+if [[ "$STOP_AFTER_SIDECAR" == "1" ]]; then
+  echo "[run_rwku_phase_a_codex] stop_after_sidecar=1; skipping Phase A prep"
+  exit 0
+fi
+
+export FORGET_SPLIT
+export RETAIN_SPLIT
+export OUT_DIR="$out_dir"
+export CF_SIDECAR_JSONL="$sidecar_path"
+export CF_SIDECAR_ALTERNATE_KEY=alternates
+export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
+export STOP_AFTER_CLEAN_CF=1
+export DROP_INVALID_AFTER_CLEAN=1
+export NUM_ALTERNATES="$NUM_ALTERNATES"
+export MAX_EXAMPLES="$MAX_EXAMPLES"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="$ALLOW_LOW_CONFIDENCE_FALLBACK"
+unset SKIP_CF_GENERATION
+
+bash scripts/rwku/prepare_dual_cf_rwku_v3.sh
+
+python src/tools/clean_counterfactuals.py \
+  --input-path "$out_dir/step1_counterfactuals_raw_v3.jsonl" \
+  --output-path "$out_dir/step1b_counterfactuals_clean_v3.jsonl" \
+  --repair-invalid \
+  --drop-invalid \
+  --reject-gold-substring \
+  --require-short-answer \
+  --max-overlap-ratio 0.85 \
+  --max-alt-length-chars 128 \
+  --report-path "$out_dir/step1b_clean_report.json"
+
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset rwku \
+  --out-dir "$out_dir" \
+  --question-key query
+
+</content>
+
+<content full_path="scripts/api_cf/run_duet_phase_a_codex.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$repo_root"
+
+export ARTIFACT_ROOT="${ARTIFACT_ROOT:-$repo_root/artifacts/dualcf_api_v3}"
+export DUET_DATASET_PATH_LOCAL="${DUET_DATASET_PATH_LOCAL:-SwetieePawsss/DUET}"
+export CODEX_MODEL="${CODEX_MODEL:-gpt-5.4-mini}"
+export CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-}"
+export NUM_ALTERNATES="${NUM_ALTERNATES:-4}"
+export MAX_EXAMPLES="${MAX_EXAMPLES:-16}"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}"
+export CODEX_BATCH_SIZE="${CODEX_BATCH_SIZE:-10}"
+export CODEX_CONCURRENT="${CODEX_CONCURRENT:-1}"
+export CODEX_TIMEOUT_SECONDS="${CODEX_TIMEOUT_SECONDS:-240}"
+export CODEX_MAX_ATTEMPTS="${CODEX_MAX_ATTEMPTS:-3}"
+export STOP_AFTER_SIDECAR="${STOP_AFTER_SIDECAR:-0}"
+export SKIP_SIDECAR_GENERATION="${SKIP_SIDECAR_GENERATION:-0}"
+export RUN_TAG="${RUN_TAG:-}"
+export DUET_TARGETS="${DUET_TARGETS:-rare popular merged}"
+
+if [[ "${CODEX_USE_CHATGPT_LOGIN:-1}" == "1" ]]; then
+  unset CODEX_API_KEY || true
+fi
+
+parse_key_value_output() {
+  local payload="$1"
+  local target_name="$2"
+  local value=""
+  value=$(printf '%s\n' "$payload" | awk -F= -v key="$target_name" '$1 == key {print $2}')
+  if [[ -z "$value" ]]; then
+    echo "[run_duet_phase_a_codex] missing ${target_name} in helper output" >&2
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
+mkdir -p "$ARTIFACT_ROOT/duet"
+
+safe_run_tag="${RUN_TAG// /_}"
+safe_run_tag="${safe_run_tag//\//_}"
+safe_run_tag="${safe_run_tag//:/_}"
+suffix=""
+if [[ -n "$safe_run_tag" ]]; then
+  suffix="__${safe_run_tag}"
+fi
+
+reasoning_args=()
+if [[ -n "$CODEX_REASONING_EFFORT" ]]; then
+  reasoning_args=(--reasoning-effort "$CODEX_REASONING_EFFORT")
+fi
+
+for label in $DUET_TARGETS; do
+  case "$label" in
+    rare)
+      forget_split="city_forget_rare_5"
+      ;;
+    popular)
+      forget_split="city_forget_popular_5"
+      ;;
+    merged)
+      forget_split="city_forget_rare_5+city_forget_popular_5"
+      ;;
+    *)
+      echo "[run_duet_phase_a_codex] unknown DUET target: $label" >&2
+      exit 1
+      ;;
+  esac
+  out_dir="$ARTIFACT_ROOT/duet/${label}_codex_v3${suffix}"
+  sidecar_path="$out_dir/api_sidecar.jsonl"
+
+  echo "=== DUET ${label} / codex_cli ==="
+  echo "split=${forget_split}"
+  echo "out_dir=${out_dir}"
+
+  mkdir -p "$out_dir"
+
+  resume_info=$(
+    python scripts/api_cf/codex_phase_a_resume.py resolve \
+      --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+      --split "$forget_split" \
+      --question-key question \
+      --answer-key answer \
+      --sidecar-path "$sidecar_path" \
+      --model "$CODEX_MODEL" \
+      --prompt-family duet_relation_safe \
+      --num-alternates "$NUM_ALTERNATES" \
+      --requested-max-examples "$MAX_EXAMPLES"
+  )
+  printf '%s\n' "$resume_info"
+
+  effective_max_examples=$(parse_key_value_output "$resume_info" effective_max_examples)
+  completed_rows=$(parse_key_value_output "$resume_info" completed_rows)
+  remaining_rows=$(parse_key_value_output "$resume_info" remaining_rows)
+
+  echo "[run_duet_phase_a_codex] label=${label} requested_max_examples=${MAX_EXAMPLES} completed_rows=${completed_rows} effective_max_examples=${effective_max_examples} remaining_rows=${remaining_rows}"
+
+  python src/tools/build_duet_candidate_bank.py \
+    --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+    --split "$forget_split" \
+    --output-path "$out_dir/step0_candidate_bank.jsonl" \
+    --question-key question \
+    --answer-key answer \
+    --candidates-per-row 12 \
+    --max-examples "$effective_max_examples" \
+    --sidecar-path "$out_dir/step0_candidate_bank_stats_v3.json"
+
+  if [[ "$SKIP_SIDECAR_GENERATION" == "1" ]]; then
+    if [[ ! -s "$sidecar_path" ]]; then
+      echo "[run_duet_phase_a_codex] missing sidecar while SKIP_SIDECAR_GENERATION=1: $sidecar_path" >&2
+      exit 1
+    fi
+    echo "[run_duet_phase_a_codex] skipping sidecar generation for $label"
+  else
+    python scripts/api_cf/generate_codex_cf_sidecar.py \
+      --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+      --split "$forget_split" \
+      --question-key question \
+      --answer-key answer \
+      --candidate-bank "$out_dir/step0_candidate_bank.jsonl" \
+      --output-path "$sidecar_path" \
+      --model "$CODEX_MODEL" \
+      --prompt-family duet_relation_safe \
+      --num-alternates "$NUM_ALTERNATES" \
+      --batch-size "$CODEX_BATCH_SIZE" \
+      --concurrent "$CODEX_CONCURRENT" \
+      --max-examples "$effective_max_examples" \
+      "${reasoning_args[@]}" \
+      --timeout-seconds "$CODEX_TIMEOUT_SECONDS" \
+      --max-attempts "$CODEX_MAX_ATTEMPTS" \
+      --resume
+  fi
+
+  verify_info=$(
+    python scripts/api_cf/codex_phase_a_resume.py verify \
+      --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+      --split "$forget_split" \
+      --question-key question \
+      --answer-key answer \
+      --sidecar-path "$sidecar_path" \
+      --model "$CODEX_MODEL" \
+      --prompt-family duet_relation_safe \
+      --num-alternates "$NUM_ALTERNATES" \
+      --effective-max-examples "$effective_max_examples"
+  )
+  printf '%s\n' "$verify_info"
+
+  if [[ "$STOP_AFTER_SIDECAR" == "1" ]]; then
+    echo "[run_duet_phase_a_codex] stop_after_sidecar=1; skipping Phase A prep for $label"
+    continue
+  fi
+
+  export FORGET_LABEL="$label"
+  export OUT_DIR="$out_dir"
+  export CF_SIDECAR_JSONL="$sidecar_path"
+  export CF_SIDECAR_ALTERNATE_KEY=alternates
+  export CF_SIDECAR_SCORE_KEY=scores
+  export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+  export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+  export CF_SIDECAR_SOURCE_KEY=candidate_sources
+  export STOP_AFTER_CLEAN_CF=1
+  export DROP_INVALID_AFTER_CLEAN=1
+  export NUM_ALTERNATES="$NUM_ALTERNATES"
+  export MAX_EXAMPLES="$effective_max_examples"
+  export ALLOW_LOW_CONFIDENCE_FALLBACK="$ALLOW_LOW_CONFIDENCE_FALLBACK"
+  unset SKIP_CF_GENERATION
+
+  bash scripts/duet/prepare_dual_cf_duet_v3.sh
+
+  python src/tools/clean_counterfactuals.py \
+    --input-path "$out_dir/step1_counterfactuals_raw_v3.jsonl" \
+    --output-path "$out_dir/step1b_counterfactuals_clean_v3.jsonl" \
+    --candidate-bank "$out_dir/step0_candidate_bank.jsonl" \
+    --repair-invalid \
+    --drop-invalid \
+    --reject-gold-substring \
+    --require-short-answer \
+    --max-overlap-ratio 0.85 \
+    --max-alt-length-chars 128 \
+    --report-path "$out_dir/step1b_clean_report.json"
+
+  python scripts/api_cf/check_phase_a_outputs.py \
+    --dataset duet \
+    --out-dir "$out_dir" \
+    --question-key question
+done
+
+</content>
+
+<content full_path="scripts/api_cf/merge_codex_sidecars.py">
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def clean_text(text: Any) -> str:
+    value = str(text or "").strip().strip('"').strip("'")
+    if value:
+        value = value.splitlines()[0].strip()
+    return " ".join(value.split())[:128]
+
+
+def normalize_text(text: Any) -> str:
+    return " ".join(clean_text(text).lower().split())
+
+
+def log(message: str) -> None:
+    print(f"[merge_codex_sidecars] {message}", flush=True)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Merge multiple Codex sidecars by index, concatenating per-row candidates "
+            "and aligned metadata arrays. Use this instead of raw `cat`."
+        )
+    )
+    parser.add_argument("--input-dir", action="append", default=[])
+    parser.add_argument("--input-sidecar", action="append", default=[])
+    parser.add_argument("--sidecar-name", default="api_sidecar.jsonl")
+    parser.add_argument("--output-path", required=True)
+    parser.add_argument("--max-alternates", type=int, default=0)
+    return parser.parse_args()
+
+
+def resolve_inputs(args: argparse.Namespace) -> list[Path]:
+    paths: list[Path] = []
+    for input_dir in args.input_dir:
+        paths.append(Path(input_dir) / args.sidecar_name)
+    for input_sidecar in args.input_sidecar:
+        paths.append(Path(input_sidecar))
+    if not paths:
+        raise RuntimeError("Provide at least one --input-dir or --input-sidecar.")
+    return paths
+
+
+def read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def validate_rows(path: Path, rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    by_index: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        idx = int(row["index"])
+        if idx in by_index:
+            raise RuntimeError(f"{path}: duplicate index={idx}")
+        alts = row.get("alternates")
+        if not isinstance(alts, list) or not alts:
+            raise RuntimeError(f"{path}: index={idx} has empty alternates")
+        for key in ("scores", "relation_scores", "shared_fact_scores", "candidate_sources"):
+            value = row.get(key)
+            if not isinstance(value, list) or len(value) != len(alts):
+                raise RuntimeError(f"{path}: index={idx} has misaligned `{key}` metadata")
+        by_index[idx] = row
+    return by_index
+
+
+def require_common_meta(metas: list[dict[str, Any]], key: str) -> Any:
+    values = [meta.get(key) for meta in metas]
+    first = values[0]
+    for value in values[1:]:
+        if value != first:
+            raise RuntimeError(f"Input sidecars disagree on `{key}`: {values!r}")
+    return first
+
+
+def clean_meta_values(metas: list[dict[str, Any]], key: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for meta in metas:
+        value = clean_text(meta.get(key))
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        values.append(value)
+    return values
+
+
+def summarize_sidecar(path: Path) -> dict[str, Any]:
+    rows = read_jsonl(path)
+    duplicates: list[int] = []
+    seen: set[int] = set()
+    bad_rows = 0
+    for row in rows:
+        idx = int(row["index"])
+        if idx in seen:
+            duplicates.append(idx)
+        seen.add(idx)
+        alts = row.get("alternates")
+        if not isinstance(alts, list) or not alts:
+            bad_rows += 1
+            continue
+        for key in ("scores", "relation_scores", "shared_fact_scores", "candidate_sources"):
+            value = row.get(key)
+            if not isinstance(value, list) or len(value) != len(alts):
+                bad_rows += 1
+                break
+    return {
+        "rows": len(rows),
+        "unique_indices": len(seen),
+        "duplicate_indices": duplicates,
+        "bad_rows": bad_rows,
+    }
+
+
+def merge_row(
+    *,
+    index: int,
+    source_rows: list[dict[str, Any]],
+    max_alternates: int,
+) -> dict[str, Any]:
+    merged_alts: list[str] = []
+    scores: list[float] = []
+    relation_scores: list[float] = []
+    shared_fact_scores: list[float] = []
+    candidate_sources: list[str] = []
+    seen: set[str] = set()
+
+    for row in source_rows:
+        for alt, score, relation_score, shared_score, source in zip(
+            row["alternates"],
+            row["scores"],
+            row["relation_scores"],
+            row["shared_fact_scores"],
+            row["candidate_sources"],
+        ):
+            alt_text = clean_text(alt)
+            alt_norm = normalize_text(alt_text)
+            if not alt_norm or alt_norm in seen:
+                continue
+            seen.add(alt_norm)
+            merged_alts.append(alt_text)
+            scores.append(float(score))
+            relation_scores.append(float(relation_score))
+            shared_fact_scores.append(float(shared_score))
+            candidate_sources.append(clean_text(source) or "codex_cli:merged")
+            if max_alternates > 0 and len(merged_alts) >= max_alternates:
+                break
+        if max_alternates > 0 and len(merged_alts) >= max_alternates:
+            break
+
+    if not merged_alts:
+        raise RuntimeError(f"Merged row index={index} has no alternates.")
+
+    prompt_family = clean_text(source_rows[0].get("prompt_family")) or "unknown"
+    answer_type = clean_text(source_rows[0].get("answer_type")) or "unknown"
+    merged_backends: list[str] = []
+    seen_backends: set[str] = set()
+    for row in source_rows:
+        backend = clean_text(row.get("generator_backend")) or "unknown"
+        if backend in seen_backends:
+            continue
+        seen_backends.add(backend)
+        merged_backends.append(backend)
+    generator_backend = merged_backends[0] if len(merged_backends) == 1 else "multiple"
+    return {
+        "index": index,
+        "alternates": merged_alts,
+        "scores": scores,
+        "relation_scores": relation_scores,
+        "shared_fact_scores": shared_fact_scores,
+        "candidate_sources": candidate_sources,
+        "answer_type": answer_type,
+        "candidate_count": len(merged_alts),
+        "generator": "codex_cli_merged",
+        "generator_backend": generator_backend,
+        "generator_model": "multiple",
+        "generator_reasoning_effort": None,
+        "model": "multiple",
+        "prompt_family": prompt_family,
+        "prompt_version": f"codex_cli_merged:{prompt_family}:v1",
+        "structured_outputs": True,
+        "merged_model_count": len(source_rows),
+        "merged_backends": merged_backends,
+        "merged_models": [
+            clean_text(row.get("generator_model") or row.get("model")) for row in source_rows
+        ],
+        "merged_reasoning_efforts": [
+            clean_text(row.get("generator_reasoning_effort")) for row in source_rows
+        ],
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    input_paths = resolve_inputs(args)
+    output_path = Path(args.output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    input_rows: list[dict[int, dict[str, Any]]] = []
+    metas: list[dict[str, Any]] = []
+    for path in input_paths:
+        if not path.exists():
+            raise RuntimeError(f"Missing sidecar: {path}")
+        meta_path = path.with_name(path.name + ".meta.json")
+        if not meta_path.exists():
+            raise RuntimeError(f"Missing metadata file: {meta_path}")
+        input_rows.append(validate_rows(path, read_jsonl(path)))
+        metas.append(read_json(meta_path))
+
+    base_indices = set(input_rows[0].keys())
+    for path, row_map in zip(input_paths[1:], input_rows[1:]):
+        if set(row_map.keys()) != base_indices:
+            raise RuntimeError(f"{path}: index set mismatch with the first input sidecar")
+
+    for key in (
+        "prompt_family",
+        "dataset_path",
+        "dataset_name",
+        "split",
+        "data_files",
+        "question_key",
+        "answer_key",
+        "answer_index",
+    ):
+        if key == "dataset_path":
+            continue
+        require_common_meta(metas, key)
+
+    merged_rows: list[dict[str, Any]] = []
+    for index in sorted(base_indices):
+        merged_rows.append(
+            merge_row(
+                index=index,
+                source_rows=[row_map[index] for row_map in input_rows],
+                max_alternates=args.max_alternates,
+            )
+        )
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        for row in merged_rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    input_models = clean_meta_values(metas, "model")
+    input_reasoning = clean_meta_values(metas, "reasoning_effort")
+    input_backends = clean_meta_values(metas, "backend")
+    input_dataset_paths = clean_meta_values(metas, "dataset_path")
+    merged_meta = {
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": input_backends[0] if len(input_backends) == 1 else "multiple",
+        "model": "multiple",
+        "input_backends": input_backends,
+        "input_models": input_models,
+        "input_dataset_paths": input_dataset_paths,
+        "input_reasoning_efforts": input_reasoning,
+        "input_sidecars": [str(path) for path in input_paths],
+        "prompt_family": require_common_meta(metas, "prompt_family"),
+        "dataset_path": input_dataset_paths[0] if input_dataset_paths else None,
+        "dataset_name": require_common_meta(metas, "dataset_name"),
+        "split": require_common_meta(metas, "split"),
+        "data_files": require_common_meta(metas, "data_files"),
+        "question_key": require_common_meta(metas, "question_key"),
+        "answer_key": require_common_meta(metas, "answer_key"),
+        "answer_index": require_common_meta(metas, "answer_index"),
+        "num_alternates": args.max_alternates
+        or sum(int(meta.get("num_alternates") or 0) for meta in metas),
+        "batch_size": None,
+        "max_examples": len(merged_rows),
+        "candidate_bank": None,
+        "candidate_bank_limit": None,
+        "reasoning_effort": None,
+        "timeout_seconds": None,
+        "sleep_seconds": None,
+        "max_attempts": None,
+        "resume": False,
+        "codex_login_status": None,
+        "merged_from_sidecars": True,
+    }
+    meta_path = output_path.with_name(output_path.name + ".meta.json")
+    meta_path.write_text(json.dumps(merged_meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    summary = summarize_sidecar(output_path)
+    summary.update(
+        {
+            "input_backends": input_backends,
+            "input_dataset_paths": input_dataset_paths,
+            "input_sidecar_count": len(input_paths),
+            "input_models": input_models,
+            "input_reasoning_efforts": input_reasoning,
+            "max_alternates": args.max_alternates,
+        }
+    )
+    summary_path = output_path.with_name(output_path.name + ".summary.json")
+    summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=True), encoding="utf-8")
+
+    log(
+        f"wrote rows={summary['rows']} input_sidecars={len(input_paths)} "
+        f"output={output_path} max_alternates={args.max_alternates}"
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="scripts/api_cf/run_rwku_phase_a_openai.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$repo_root"
+
+export ARTIFACT_ROOT="${ARTIFACT_ROOT:-$repo_root/artifacts/dualcf_api_v3}"
+export RWKU_DATASET_PATH_LOCAL="${RWKU_DATASET_PATH_LOCAL:-SwetieePawsss/exp_r}"
+export OPENAI_MODEL="${OPENAI_MODEL:?set OPENAI_MODEL first}"
+export FORGET_SPLIT="${FORGET_SPLIT:-forget_level2}"
+export RETAIN_SPLIT="${RETAIN_SPLIT:-neighbor_level2}"
+export NUM_ALTERNATES="${NUM_ALTERNATES:-4}"
+export MAX_EXAMPLES="${MAX_EXAMPLES:-16}"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}"
+export OPENAI_TIMEOUT_SECONDS="${OPENAI_TIMEOUT_SECONDS:-180}"
+export OPENAI_MAX_ATTEMPTS="${OPENAI_MAX_ATTEMPTS:-3}"
+
+out_dir="$ARTIFACT_ROOT/rwku/${FORGET_SPLIT}_api_v3"
+mkdir -p "$out_dir"
+
+echo "=== RWKU ${FORGET_SPLIT} / openai_api ==="
+echo "out_dir=${out_dir}"
+
+python scripts/api_cf/generate_external_cf_sidecar.py \
+  --backend openai_api \
+  --dataset-path "$RWKU_DATASET_PATH_LOCAL" \
+  --dataset-name "$FORGET_SPLIT" \
+  --split test \
+  --question-key query \
+  --answer-key answer \
+  --output-path "$out_dir/api_sidecar.jsonl" \
+  --model "$OPENAI_MODEL" \
+  --prompt-family rwku_shared_fact_safe \
+  --num-alternates "$NUM_ALTERNATES" \
+  --max-examples "$MAX_EXAMPLES" \
+  --timeout-seconds "$OPENAI_TIMEOUT_SECONDS" \
+  --max-attempts "$OPENAI_MAX_ATTEMPTS" \
+  --resume
+
+export FORGET_SPLIT
+export RETAIN_SPLIT
+export OUT_DIR="$out_dir"
+export CF_SIDECAR_JSONL="$out_dir/api_sidecar.jsonl"
+export CF_SIDECAR_ALTERNATE_KEY=alternates
+export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
+export STOP_AFTER_CLEAN_CF=1
+export DROP_INVALID_AFTER_CLEAN=1
+export NUM_ALTERNATES="$NUM_ALTERNATES"
+export MAX_EXAMPLES="$MAX_EXAMPLES"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="$ALLOW_LOW_CONFIDENCE_FALLBACK"
+unset SKIP_CF_GENERATION
+
+bash scripts/rwku/prepare_dual_cf_rwku_v3.sh
+
+python src/tools/clean_counterfactuals.py \
+  --input-path "$out_dir/step1_counterfactuals_raw_v3.jsonl" \
+  --output-path "$out_dir/step1b_counterfactuals_clean_v3.jsonl" \
+  --repair-invalid \
+  --drop-invalid \
+  --reject-gold-substring \
+  --require-short-answer \
+  --max-overlap-ratio 0.85 \
+  --max-alt-length-chars 128 \
+  --report-path "$out_dir/step1b_clean_report.json"
+
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset rwku \
+  --out-dir "$out_dir" \
+  --question-key query
+
+</content>
+
+<content full_path="scripts/api_cf/generate_external_cf_sidecar.py">
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from tools.dual_cf_artifact_utils import load_dataset_split, load_keyed_jsonish, resolve_answer
+
+
+class CandidateBundle(BaseModel):
+    alternates: list[str] = Field(default_factory=list)
+    scores: list[float] = Field(default_factory=list)
+    relation_scores: list[float] = Field(default_factory=list)
+    shared_fact_scores: list[float] = Field(default_factory=list)
+    candidate_sources: list[str] = Field(default_factory=list)
+    answer_type: str = "unknown"
+
+
+@dataclass
+class RunMeta:
+    created_at_utc: str
+    backend: str
+    model: str
+    prompt_family: str
+    dataset_path: str
+    dataset_name: Optional[str]
+    split: str
+    data_files: Optional[str]
+    question_key: str
+    answer_key: str
+    answer_index: Optional[int]
+    num_alternates: int
+    batch_size: int
+    max_examples: int
+    candidate_bank: Optional[str]
+    temperature: float
+    top_p: float
+    max_completion_tokens: int
+    timeout_seconds: float
+    max_attempts: int
+    resume: bool
+    codex_login_status: Optional[str] = None
+
+
+def log(message: str) -> None:
+    print(f"[generate_external_cf_sidecar] {message}", flush=True)
+
+
+def clean_text(text: Any) -> str:
+    value = str(text or "").strip().strip('"').strip("'")
+    if value:
+        value = value.splitlines()[0].strip()
+    value = " ".join(value.split())
+    return value[:128]
+
+
+def normalize_text(text: Any) -> str:
+    return " ".join(clean_text(text).lower().split())
+
+
+def maybe_str(value: Any) -> Optional[str]:
+    if value in (None, "", "null", "None"):
+        return None
+    return str(value)
+
+
+def model_validate(model_cls: type[BaseModel], payload: Any) -> BaseModel:
+    if hasattr(model_cls, "model_validate"):
+        return model_cls.model_validate(payload)  # type: ignore[attr-defined]
+    return model_cls.parse_obj(payload)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate a verified multi-candidate DualCF sidecar JSONL using either "
+            "the OpenAI API or Codex CLI."
+        )
+    )
+    parser.add_argument("--backend", choices=("openai_api", "codex_cli"), required=True)
+    parser.add_argument("--dataset-path", required=True)
+    parser.add_argument("--dataset-name", default=None)
+    parser.add_argument("--split", required=True)
+    parser.add_argument("--data-files", default=None)
+    parser.add_argument("--question-key", required=True)
+    parser.add_argument("--answer-key", required=True)
+    parser.add_argument("--answer-index", type=int, default=None)
+    parser.add_argument("--output-path", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--prompt-family",
+        choices=("default", "strict_short", "duet_relation_safe", "rwku_shared_fact_safe"),
+        required=True,
+    )
+    parser.add_argument("--num-alternates", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--candidate-bank", default=None)
+    parser.add_argument("--candidate-bank-limit", type=int, default=12)
+    parser.add_argument("--max-examples", type=int, default=0)
+    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--top-p", type=float, default=0.8)
+    parser.add_argument("--max-completion-tokens", type=int, default=256)
+    parser.add_argument("--timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--sleep-seconds", type=float, default=0.0)
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--resume", action="store_true")
+    return parser.parse_args()
+
+
+def load_rows(args: argparse.Namespace) -> list[dict[str, Any]]:
+    dataset = load_dataset_split(
+        path=args.dataset_path,
+        split=args.split,
+        name=maybe_str(args.dataset_name),
+        data_files=maybe_str(args.data_files),
+        max_examples=args.max_examples,
+    )
+    rows = [dict(row) for row in dataset]
+    for row_no, row in enumerate(rows, start=1):
+        if "index" not in row:
+            raise KeyError(f"Dataset row_no={row_no} is missing `index`.")
+    return rows
+
+
+def load_existing_indices(path: Path) -> set[int]:
+    if not path.exists():
+        return set()
+    done: set[int] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            done.add(int(row["index"]))
+    return done
+
+
+def load_candidate_bank(path: Optional[str]) -> dict[str, dict[str, Any]]:
+    if path in (None, "", "null", "None"):
+        return {}
+    return load_keyed_jsonish(path, key_field="index")
+
+
+def build_prompt_rules(prompt_family: str) -> list[str]:
+    rules = [
+        "Keep the same answer type as the gold answer.",
+        "Output only short answer spans, not explanations or full sentences.",
+        "Never repeat the gold answer.",
+        "Never output bullets, numbering, or commentary.",
+    ]
+    if prompt_family == "duet_relation_safe":
+        rules.extend(
+            [
+                "Preserve the same semantic relation as the gold answer.",
+                "Prefer candidate-bank-compatible alternatives when they fit.",
+                "Keep answers concise and relation-safe.",
+            ]
+        )
+    elif prompt_family == "rwku_shared_fact_safe":
+        rules.extend(
+            [
+                "Change only the target answer.",
+                "Avoid altering unrelated shared or public facts.",
+                "Be more conservative than DUET and avoid fabricated explanations.",
+            ]
+        )
+    elif prompt_family == "strict_short":
+        rules.extend(
+            [
+                "Prefer compact one-line spans.",
+                "Avoid unnecessary modifiers.",
+            ]
+        )
+    else:
+        rules.extend(
+            [
+                "Keep the answer plausible and concise.",
+                "Preserve the question's answer type and scope when possible.",
+            ]
+        )
+    return rules
+
+
+def build_openai_messages(
+    *,
+    question: str,
+    answer: str,
+    prompt_family: str,
+    num_alternates: int,
+    candidate_answers: list[str],
+) -> list[dict[str, str]]:
+    system_lines = [
+        "You generate short plausible but incorrect alternative answers for a factual unlearning dataset.",
+        "Rules:",
+    ]
+    for idx, rule in enumerate(build_prompt_rules(prompt_family), start=1):
+        system_lines.append(f"{idx}. {rule}")
+    system_lines.extend(
+        [
+            "Return JSON only.",
+            "JSON schema expectations:",
+            "- alternates: list of short incorrect alternatives",
+            "- scores: per-candidate overall quality in [0,1]",
+            "- relation_scores: per-candidate relation-preservation score in [0,1]",
+            "- shared_fact_scores: per-candidate shared-fact-preservation score in [0,1]",
+            "- candidate_sources: per-candidate provenance strings",
+            "- answer_type: short label like year/date/int/short_span/free",
+        ]
+    )
+
+    user_lines = [
+        f"Question: {question}",
+        f"Gold answer: {answer}",
+        f"Return exactly {num_alternates} candidates if possible.",
+    ]
+    if candidate_answers:
+        user_lines.append("Candidate bank hints:")
+        for idx, candidate in enumerate(candidate_answers, start=1):
+            user_lines.append(f"{idx}. {clean_text(candidate)}")
+
+    return [
+        {"role": "system", "content": "\n".join(system_lines)},
+        {"role": "user", "content": "\n".join(user_lines)},
+    ]
+
+
+def build_codex_batch_schema() -> dict[str, Any]:
+    score_array = {
+        "type": "array",
+        "items": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "alternates": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                            },
+                        },
+                        "scores": score_array,
+                        "relation_scores": score_array,
+                        "shared_fact_scores": score_array,
+                        "candidate_sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "answer_type": {"type": "string"},
+                    },
+                    "required": ["index", "alternates", "answer_type"],
+                    "required": [
+                        "index",
+                        "alternates",
+                        "scores",
+                        "relation_scores",
+                        "shared_fact_scores",
+                        "candidate_sources",
+                        "answer_type",
+                    ],
+                },
+            }
+        },
+        "required": ["results"],
+    }
+
+
+def build_codex_batch_prompt(
+    *,
+    prompt_family: str,
+    num_alternates: int,
+    batch_rows: list[dict[str, Any]],
+) -> str:
+    policy_lines = "\n".join(f"- {rule}" for rule in build_prompt_rules(prompt_family))
+    batch_payload = []
+    for row in batch_rows:
+        payload = {
+            "index": int(row["index"]),
+            "question": str(row["question"]),
+            "answer": str(row["answer"]),
+        }
+        if row["candidate_answers"]:
+            payload["candidate_answers"] = list(row["candidate_answers"])
+        batch_payload.append(payload)
+
+    return (
+        "You are generating verified multi-alternate counterfactual sidecar rows for DualCF v3.\n\n"
+        "Return JSON only matching the provided schema.\n"
+        "The top-level object must be {\"results\": [...]}.\n"
+        "results must contain exactly one item per input example.\n"
+        "Preserve the input index exactly.\n"
+        f"Return exactly {num_alternates} short wrong alternatives when possible.\n"
+        "Never repeat the gold answer.\n"
+        "Never output explanations, labels, or full sentences.\n"
+        "For each result, align any metadata arrays with alternates.\n\n"
+        "Policy:\n"
+        f"{policy_lines}\n\n"
+        "Per result:\n"
+        "- alternates: short counterfactual answers\n"
+        "- scores: overall quality in [0,1]\n"
+        "- relation_scores: relation preservation in [0,1]\n"
+        "- shared_fact_scores: shared/public fact preservation in [0,1]\n"
+        "- candidate_sources: provenance strings aligned to alternates\n"
+        "- answer_type: short label like year/date/person/place/number/string/unknown\n\n"
+        "Batch:\n"
+        + json.dumps(batch_payload, ensure_ascii=False, indent=2)
+    )
+
+
+def _pick_list(values: list[Any], kept_indices: list[int], default_value: Any) -> list[Any]:
+    output: list[Any] = []
+    for idx in kept_indices:
+        if idx < len(values):
+            output.append(values[idx])
+        else:
+            output.append(default_value)
+    return output
+
+
+def _normalize_float_list(values: list[Any], expected_length: int, default_value: float) -> list[float]:
+    normalized: list[float] = []
+    for raw_value in values[:expected_length]:
+        try:
+            value = float(raw_value)
+        except Exception:
+            value = default_value
+        value = max(0.0, min(1.0, value))
+        normalized.append(value)
+    while len(normalized) < expected_length:
+        normalized.append(default_value)
+    return normalized
+
+
+def normalize_bundle(
+    *,
+    bundle: CandidateBundle,
+    answer: str,
+    num_alternates: int,
+    default_source: str,
+) -> dict[str, Any]:
+    answer_norm = normalize_text(answer)
+    raw_alts = [clean_text(item) for item in bundle.alternates]
+    deduped_alts: list[str] = []
+    seen: set[str] = set()
+    kept_indices: list[int] = []
+
+    for idx, alt in enumerate(raw_alts):
+        alt_norm = normalize_text(alt)
+        if not alt_norm:
+            continue
+        if alt_norm == answer_norm:
+            continue
+        if alt_norm in seen:
+            continue
+        seen.add(alt_norm)
+        deduped_alts.append(alt)
+        kept_indices.append(idx)
+        if len(deduped_alts) >= num_alternates:
+            break
+
+    if not deduped_alts:
+        raise ValueError("No usable alternates after normalization.")
+
+    scores = _normalize_float_list(
+        _pick_list(list(bundle.scores), kept_indices, 0.5),
+        len(deduped_alts),
+        0.5,
+    )
+    relation_scores = _normalize_float_list(
+        _pick_list(list(bundle.relation_scores), kept_indices, 1.0),
+        len(deduped_alts),
+        1.0,
+    )
+    shared_fact_scores = _normalize_float_list(
+        _pick_list(list(bundle.shared_fact_scores), kept_indices, 1.0),
+        len(deduped_alts),
+        1.0,
+    )
+
+    raw_sources = _pick_list(list(bundle.candidate_sources), kept_indices, default_source)
+    candidate_sources: list[str] = []
+    for source in raw_sources:
+        source_text = clean_text(source) or default_source
+        candidate_sources.append(source_text)
+    while len(candidate_sources) < len(deduped_alts):
+        candidate_sources.append(default_source)
+
+    answer_type = clean_text(bundle.answer_type) or "unknown"
+    return {
+        "alternates": deduped_alts,
+        "scores": scores,
+        "relation_scores": relation_scores,
+        "shared_fact_scores": shared_fact_scores,
+        "candidate_sources": candidate_sources[: len(deduped_alts)],
+        "answer_type": answer_type,
+        "candidate_count": len(deduped_alts),
+    }
+
+
+def build_sidecar_row(
+    *,
+    index: int,
+    normalized: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    return {
+        "index": index,
+        "alternates": normalized["alternates"],
+        "scores": normalized["scores"],
+        "relation_scores": normalized["relation_scores"],
+        "shared_fact_scores": normalized["shared_fact_scores"],
+        "candidate_sources": normalized["candidate_sources"],
+        "answer_type": normalized["answer_type"],
+        "candidate_count": normalized["candidate_count"],
+        "generator": args.backend,
+        "generator_backend": args.backend,
+        "generator_model": args.model,
+        "model": args.model,
+        "prompt_family": args.prompt_family,
+        "prompt_version": f"{args.backend}:{args.prompt_family}:v1",
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "structured_outputs": True,
+    }
+
+
+def openai_parse_bundle(
+    *,
+    client: Any,
+    messages: list[dict[str, str]],
+    model: str,
+    temperature: float,
+    top_p: float,
+    max_completion_tokens: int,
+) -> CandidateBundle:
+    completion_api = getattr(getattr(client, "chat", None), "completions", None)
+    if completion_api is not None and hasattr(completion_api, "parse"):
+        response = completion_api.parse(
+            model=model,
+            messages=messages,
+            response_format=CandidateBundle,
+            temperature=temperature,
+            top_p=top_p,
+            max_completion_tokens=max_completion_tokens,
+        )
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise RuntimeError("chat.completions.parse returned no parsed payload")
+        return parsed
+
+    beta_chat = getattr(getattr(client, "beta", None), "chat", None)
+    beta_completions = getattr(beta_chat, "completions", None)
+    if beta_completions is not None and hasattr(beta_completions, "parse"):
+        response = beta_completions.parse(
+            model=model,
+            messages=messages,
+            response_format=CandidateBundle,
+            temperature=temperature,
+            top_p=top_p,
+            max_completion_tokens=max_completion_tokens,
+        )
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise RuntimeError("beta.chat.completions.parse returned no parsed payload")
+        return parsed
+
+    responses_api = getattr(client, "responses", None)
+    if responses_api is not None and hasattr(responses_api, "parse"):
+        response = responses_api.parse(
+            model=model,
+            instructions=messages[0]["content"],
+            input=messages[1]["content"],
+            text_format=CandidateBundle,
+            temperature=temperature,
+            top_p=top_p,
+            max_output_tokens=max_completion_tokens,
+        )
+        parsed = getattr(response, "output_parsed", None)
+        if parsed is None:
+            raise RuntimeError("responses.parse returned no parsed payload")
+        return parsed
+
+    raise RuntimeError(
+        "This openai-python build does not expose a structured parsing helper. "
+        "Upgrade the SDK or use the codex_cli backend."
+    )
+
+
+def generate_openai_sidecar(
+    *,
+    args: argparse.Namespace,
+    rows: list[dict[str, Any]],
+    candidate_bank: dict[str, dict[str, Any]],
+    output_path: Path,
+    done_indices: set[int],
+) -> int:
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("openai-python is required for --backend openai_api") from exc
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    client = OpenAI(
+        api_key=api_key,
+        timeout=args.timeout_seconds,
+        max_retries=max(0, int(args.max_attempts) - 1),
+    )
+    default_source = f"openai_api:{args.model}"
+    written = 0
+    mode = "a" if args.resume and output_path.exists() else "w"
+
+    with output_path.open(mode, encoding="utf-8") as fout:
+        for row_no, row in enumerate(rows, start=1):
+            idx = int(row["index"])
+            if idx in done_indices:
+                continue
+
+            question = clean_text(row.get(args.question_key, ""))
+            answer = resolve_answer(
+                row=row,
+                answer_key=args.answer_key,
+                answer_index=args.answer_index,
+            )
+            bank_row = candidate_bank.get(str(idx), {})
+            candidate_answers = [
+                clean_text(item)
+                for item in bank_row.get("candidate_answers", [])[: args.candidate_bank_limit]
+                if clean_text(item)
+            ]
+
+            last_error: Optional[Exception] = None
+            normalized: Optional[dict[str, Any]] = None
+            for attempt in range(1, args.max_attempts + 1):
+                try:
+                    bundle = openai_parse_bundle(
+                        client=client,
+                        messages=build_openai_messages(
+                            question=question,
+                            answer=answer,
+                            prompt_family=args.prompt_family,
+                            num_alternates=args.num_alternates,
+                            candidate_answers=candidate_answers,
+                        ),
+                        model=args.model,
+                        temperature=args.temperature,
+                        top_p=args.top_p,
+                        max_completion_tokens=args.max_completion_tokens,
+                    )
+                    normalized = normalize_bundle(
+                        bundle=bundle,
+                        answer=answer,
+                        num_alternates=args.num_alternates,
+                        default_source=default_source,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    log(
+                        f"row {row_no}/{len(rows)} index={idx} openai attempt={attempt} failed: {exc}"
+                    )
+                    time.sleep(min(2.0 * attempt, 10.0))
+
+            if normalized is None:
+                raise RuntimeError(
+                    f"OpenAI sidecar generation failed for index={idx}: {last_error}"
+                ) from last_error
+
+            fout.write(
+                json.dumps(
+                    build_sidecar_row(index=idx, normalized=normalized, args=args),
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            fout.flush()
+            written += 1
+
+            if args.sleep_seconds > 0:
+                time.sleep(args.sleep_seconds)
+            if written % 25 == 0:
+                log(f"openai rows_written={written}")
+
+    return written
+
+
+def codex_login_status() -> str:
+    if shutil.which("codex") is None:
+        raise RuntimeError("`codex` CLI is not installed or not on PATH.")
+
+    proc = subprocess.run(
+        ["codex", "login", "status"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    status_text = (proc.stdout or proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "Unable to read Codex CLI login status. "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+    return status_text
+
+
+def run_codex_batch(
+    *,
+    args: argparse.Namespace,
+    prompt: str,
+    schema_path: Path,
+    result_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    workspace_dir: Path,
+) -> dict[str, Any]:
+    cmd = [
+        "codex",
+        "-s",
+        "read-only",
+        "-a",
+        "never",
+        "exec",
+        "-C",
+        str(workspace_dir),
+        "--skip-git-repo-check",
+        "--model",
+        args.model,
+        "--color",
+        "never",
+        "--output-schema",
+        str(schema_path),
+        "-o",
+        str(result_path),
+        "-",
+    ]
+    proc = subprocess.run(
+        cmd,
+        input=prompt,
+        text=True,
+        capture_output=True,
+        timeout=args.timeout_seconds,
+        check=False,
+    )
+    stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+    stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+
+    if proc.returncode != 0:
+        combined = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        if (
+            "refresh token was already used" in combined
+            or "Please log out and sign in again" in combined
+        ):
+            raise RuntimeError(
+                "Codex CLI authentication is stale. Run `codex logout` and "
+                "`codex login` again, then rerun with --resume."
+            )
+        raise RuntimeError(
+            f"codex exec failed with code {proc.returncode}; see {stdout_path} and {stderr_path}"
+        )
+
+    if not result_path.exists():
+        raise RuntimeError(f"Codex did not write {result_path}")
+
+    return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+def generate_codex_sidecar(
+    *,
+    args: argparse.Namespace,
+    rows: list[dict[str, Any]],
+    candidate_bank: dict[str, dict[str, Any]],
+    output_path: Path,
+    done_indices: set[int],
+) -> tuple[int, str]:
+    status_text = codex_login_status()
+    pending_rows: list[dict[str, Any]] = []
+    for row in rows:
+        idx = int(row["index"])
+        if idx in done_indices:
+            continue
+        answer = resolve_answer(
+            row=row,
+            answer_key=args.answer_key,
+            answer_index=args.answer_index,
+        )
+        bank_row = candidate_bank.get(str(idx), {})
+        pending_rows.append(
+            {
+                "index": idx,
+                "question": clean_text(row.get(args.question_key, "")),
+                "answer": answer,
+                "candidate_answers": [
+                    clean_text(item)
+                    for item in bank_row.get("candidate_answers", [])[: args.candidate_bank_limit]
+                    if clean_text(item)
+                ],
+            }
+        )
+
+    debug_root = output_path.parent / "_codex_batches"
+    workspace_dir = output_path.parent / "_codex_workspace"
+    debug_root.mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    schema_path = debug_root / "schema.json"
+    schema_path.write_text(
+        json.dumps(build_codex_batch_schema(), indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+
+    mode = "a" if args.resume and output_path.exists() else "w"
+    default_source = f"codex_cli:{args.model}"
+    written = 0
+
+    with output_path.open(mode, encoding="utf-8") as fout:
+        for batch_id, start in enumerate(range(0, len(pending_rows), args.batch_size), start=1):
+            batch = pending_rows[start : start + args.batch_size]
+            prompt = build_codex_batch_prompt(
+                prompt_family=args.prompt_family,
+                num_alternates=args.num_alternates,
+                batch_rows=batch,
+            )
+            prompt_path = debug_root / f"batch_{batch_id:05d}.prompt.txt"
+            result_path = debug_root / f"batch_{batch_id:05d}.result.json"
+            stdout_path = debug_root / f"batch_{batch_id:05d}.stdout.log"
+            stderr_path = debug_root / f"batch_{batch_id:05d}.stderr.log"
+            prompt_path.write_text(prompt, encoding="utf-8")
+
+            last_error: Optional[Exception] = None
+            payload: Optional[dict[str, Any]] = None
+            for attempt in range(1, args.max_attempts + 1):
+                try:
+                    payload = run_codex_batch(
+                        args=args,
+                        prompt=prompt,
+                        schema_path=schema_path,
+                        result_path=result_path,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                        workspace_dir=workspace_dir,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    log(
+                        f"batch {batch_id} size={len(batch)} codex attempt={attempt} failed: {exc}"
+                    )
+                    time.sleep(min(2.0 * attempt, 10.0))
+
+            if payload is None:
+                raise RuntimeError(
+                    f"Codex sidecar generation failed for batch={batch_id}: {last_error}"
+                ) from last_error
+
+            results = payload.get("results")
+            if not isinstance(results, list):
+                raise RuntimeError(
+                    f"Codex result for batch={batch_id} has no `results` list: {payload}"
+                )
+
+            by_index: dict[int, dict[str, Any]] = {}
+            for item in results:
+                if not isinstance(item, dict) or "index" not in item:
+                    raise RuntimeError(
+                        f"Codex batch={batch_id} returned malformed item: {item!r}"
+                    )
+                by_index[int(item["index"])] = item
+
+            expected_indices = {int(row["index"]) for row in batch}
+            returned_indices = set(by_index.keys())
+            if returned_indices != expected_indices:
+                raise RuntimeError(
+                    f"Codex batch={batch_id} returned indices {sorted(returned_indices)} "
+                    f"but expected {sorted(expected_indices)}"
+                )
+
+            for row in batch:
+                idx = int(row["index"])
+                bundle = model_validate(CandidateBundle, by_index[idx])
+                normalized = normalize_bundle(
+                    bundle=bundle,
+                    answer=row["answer"],
+                    num_alternates=args.num_alternates,
+                    default_source=default_source,
+                )
+                fout.write(
+                    json.dumps(
+                        build_sidecar_row(index=idx, normalized=normalized, args=args),
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+                written += 1
+            fout.flush()
+
+            if args.sleep_seconds > 0:
+                time.sleep(args.sleep_seconds)
+            if written % 25 == 0:
+                log(f"codex rows_written={written}")
+
+    return written, status_text
+
+
+def summarize_sidecar(path: Path) -> dict[str, Any]:
+    rows = []
+    seen: set[int] = set()
+    duplicates: list[int] = []
+    bad_rows = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            rows.append(row)
+            idx = int(row["index"])
+            if idx in seen:
+                duplicates.append(idx)
+            seen.add(idx)
+            alternates = row.get("alternates")
+            if not isinstance(alternates, list) or not alternates:
+                bad_rows += 1
+                continue
+            for key in (
+                "scores",
+                "relation_scores",
+                "shared_fact_scores",
+                "candidate_sources",
+            ):
+                value = row.get(key)
+                if not isinstance(value, list) or len(value) != len(alternates):
+                    bad_rows += 1
+                    break
+    return {
+        "rows": len(rows),
+        "unique_indices": len(seen),
+        "duplicate_indices": duplicates,
+        "bad_rows": bad_rows,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    output_path = Path(args.output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows = load_rows(args)
+    candidate_bank = load_candidate_bank(args.candidate_bank)
+    done_indices = load_existing_indices(output_path) if args.resume else set()
+    log(
+        f"backend={args.backend} rows={len(rows)} already_done={len(done_indices)} "
+        f"output={output_path}"
+    )
+
+    codex_status: Optional[str] = None
+    written = 0
+    if args.backend == "openai_api":
+        written = generate_openai_sidecar(
+            args=args,
+            rows=rows,
+            candidate_bank=candidate_bank,
+            output_path=output_path,
+            done_indices=done_indices,
+        )
+    else:
+        written, codex_status = generate_codex_sidecar(
+            args=args,
+            rows=rows,
+            candidate_bank=candidate_bank,
+            output_path=output_path,
+            done_indices=done_indices,
+        )
+
+    meta = RunMeta(
+        created_at_utc=datetime.now(timezone.utc).isoformat(),
+        backend=args.backend,
+        model=args.model,
+        prompt_family=args.prompt_family,
+        dataset_path=args.dataset_path,
+        dataset_name=maybe_str(args.dataset_name),
+        split=args.split,
+        data_files=maybe_str(args.data_files),
+        question_key=args.question_key,
+        answer_key=args.answer_key,
+        answer_index=args.answer_index,
+        num_alternates=args.num_alternates,
+        batch_size=args.batch_size,
+        max_examples=args.max_examples,
+        candidate_bank=maybe_str(args.candidate_bank),
+        temperature=args.temperature,
+        top_p=args.top_p,
+        max_completion_tokens=args.max_completion_tokens,
+        timeout_seconds=args.timeout_seconds,
+        max_attempts=args.max_attempts,
+        resume=bool(args.resume),
+        codex_login_status=codex_status,
+    )
+    meta_path = output_path.with_name(output_path.name + ".meta.json")
+    meta_path.write_text(
+        json.dumps(asdict(meta), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    summary = summarize_sidecar(output_path)
+    summary_path = output_path.with_name(output_path.name + ".summary.json")
+    summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+
+    log(
+        f"done rows_written={written} total_rows={summary['rows']} "
+        f"unique_indices={summary['unique_indices']} bad_rows={summary['bad_rows']}"
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="scripts/api_cf/build_duet_merged_sidecar_from_parts.py">
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from tools.dual_cf_artifact_utils import load_dataset_split
+
+
+def log(message: str) -> None:
+    print(f"[build_duet_merged_sidecar_from_parts] {message}", flush=True)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build a synthetic merged DUET sidecar from existing rare and popular "
+            "sidecars by concatenating the already generated source rows."
+        )
+    )
+    parser.add_argument("--dataset-path", default="SwetieePawsss/DUET")
+    parser.add_argument("--rare-dir", required=True)
+    parser.add_argument("--popular-dir", required=True)
+    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--rare-split", default="city_forget_rare_5")
+    parser.add_argument("--popular-split", default="city_forget_popular_5")
+    parser.add_argument("--question-key", default="question")
+    parser.add_argument("--answer-key", default="answer")
+    parser.add_argument("--answer-index", type=int, default=None)
+    parser.add_argument("--sidecar-name", default="api_sidecar.jsonl")
+    parser.add_argument("--merged-data-name", default="merged_input.jsonl")
+    return parser.parse_args()
+
+
+def read_json(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def summarize_sidecar(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    seen: set[int] = set()
+    duplicates: list[int] = []
+    bad_rows = 0
+    for row in rows:
+        idx = int(row["index"])
+        if idx in seen:
+            duplicates.append(idx)
+        seen.add(idx)
+        alternates = row.get("alternates")
+        if not isinstance(alternates, list) or not alternates:
+            bad_rows += 1
+            continue
+        for key in (
+            "scores",
+            "relation_scores",
+            "shared_fact_scores",
+            "candidate_sources",
+        ):
+            value = row.get(key)
+            if not isinstance(value, list) or len(value) != len(alternates):
+                bad_rows += 1
+                break
+    return {
+        "rows": len(rows),
+        "unique_indices": len(seen),
+        "duplicate_indices": duplicates,
+        "bad_rows": bad_rows,
+    }
+
+
+def validate_source_sidecar(
+    sidecar_rows: list[dict[str, Any]],
+    *,
+    source_name: str,
+) -> list[dict[str, Any]]:
+    ordered = sorted(sidecar_rows, key=lambda row: int(row["index"]))
+    expected_index = 0
+    for row in ordered:
+        idx = int(row["index"])
+        if idx != expected_index:
+            fail(
+                f"{source_name} sidecar indices must be contiguous from 0. "
+                f"Expected {expected_index}, got {idx}."
+            )
+        expected_index += 1
+        alternates = row.get("alternates")
+        if not isinstance(alternates, list) or not alternates:
+            fail(f"{source_name} sidecar index={idx} has empty alternates.")
+        for key in (
+            "scores",
+            "relation_scores",
+            "shared_fact_scores",
+            "candidate_sources",
+        ):
+            value = row.get(key)
+            if not isinstance(value, list) or len(value) != len(alternates):
+                fail(
+                    f"{source_name} sidecar index={idx} has misaligned `{key}` metadata."
+                )
+    return ordered
+
+
+def load_meta(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        fail(f"Missing metadata file: {path}")
+    return read_json(path)
+
+
+def assert_compatible_metas(rare_meta: dict[str, Any], popular_meta: dict[str, Any]) -> None:
+    for key in (
+        "backend",
+        "model",
+        "input_models",
+        "input_reasoning_efforts",
+        "prompt_family",
+        "dataset_path",
+        "dataset_name",
+        "question_key",
+        "answer_key",
+        "answer_index",
+        "num_alternates",
+        "batch_size",
+        "reasoning_effort",
+        "temperature",
+        "top_p",
+        "max_completion_tokens",
+    ):
+        if rare_meta.get(key) != popular_meta.get(key):
+            fail(
+                f"Rare/popular sidecar metadata mismatch for `{key}`: "
+                f"{rare_meta.get(key)!r} != {popular_meta.get(key)!r}"
+            )
+
+
+def load_source_rows(
+    *,
+    dataset_path: str,
+    split: str,
+    count: int,
+) -> list[dict[str, Any]]:
+    dataset = load_dataset_split(
+        path=dataset_path,
+        split=split,
+        max_examples=count,
+    )
+    rows = [dict(row) for row in dataset]
+    if len(rows) != count:
+        fail(f"Loaded {len(rows)} rows for split={split}, expected {count}.")
+    return rows
+
+
+def main() -> None:
+    args = parse_args()
+    rare_dir = Path(args.rare_dir)
+    popular_dir = Path(args.popular_dir)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rare_sidecar_path = rare_dir / args.sidecar_name
+    popular_sidecar_path = popular_dir / args.sidecar_name
+    output_sidecar_path = output_dir / args.sidecar_name
+    merged_data_path = output_dir / args.merged_data_name
+
+    rare_rows = validate_source_sidecar(
+        read_jsonl(rare_sidecar_path),
+        source_name="rare",
+    )
+    popular_rows = validate_source_sidecar(
+        read_jsonl(popular_sidecar_path),
+        source_name="popular",
+    )
+    rare_meta = load_meta(rare_dir / f"{args.sidecar_name}.meta.json")
+    popular_meta = load_meta(popular_dir / f"{args.sidecar_name}.meta.json")
+    assert_compatible_metas(rare_meta, popular_meta)
+
+    rare_source_rows = load_source_rows(
+        dataset_path=args.dataset_path,
+        split=args.rare_split,
+        count=len(rare_rows),
+    )
+    popular_source_rows = load_source_rows(
+        dataset_path=args.dataset_path,
+        split=args.popular_split,
+        count=len(popular_rows),
+    )
+    combined_source_rows = rare_source_rows + popular_source_rows
+    repeated_signatures = Counter(
+        json.dumps(
+            {key: row[key] for key in sorted(row) if key != "index"},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        for row in combined_source_rows
+    )
+    duplicate_signatures = sum(1 for count in repeated_signatures.values() if count > 1)
+    if duplicate_signatures:
+        fail(
+            f"Rare/popular source rows are not unique enough to build a synthetic merge. "
+            f"duplicate_signatures={duplicate_signatures}"
+        )
+
+    merged_input_rows: list[dict[str, Any]] = []
+    for new_index, (source_row, split_label) in enumerate(
+        zip(
+            combined_source_rows,
+            ["rare"] * len(rare_source_rows) + ["popular"] * len(popular_source_rows),
+        )
+    ):
+        updated = dict(source_row)
+        updated["index"] = int(new_index)
+        updated["source_split_label"] = split_label
+        merged_input_rows.append(updated)
+
+    with merged_data_path.open("w", encoding="utf-8") as handle:
+        for row in merged_input_rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    merged_rows: list[dict[str, Any]] = []
+    source_sidecar_rows = rare_rows + popular_rows
+    for merged_row, source_sidecar_row, split_label in zip(
+        merged_input_rows,
+        source_sidecar_rows,
+        ["rare"] * len(rare_rows) + ["popular"] * len(popular_rows),
+    ):
+        updated = dict(source_sidecar_row)
+        updated["index"] = int(merged_row["index"])
+        updated["source_split_label"] = split_label
+        updated["source_split_index"] = int(source_sidecar_row["index"])
+        merged_rows.append(updated)
+
+    with output_sidecar_path.open("w", encoding="utf-8") as handle:
+        for row in merged_rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    summary = summarize_sidecar(merged_rows)
+    summary.update(
+        {
+            "source_rows_rare": len(rare_rows),
+            "source_rows_popular": len(popular_rows),
+            "merged_rows": len(merged_rows),
+            "synthetic_order": "rare_then_popular",
+            "duplicate_row_signatures": duplicate_signatures,
+            "merged_data_file": str(merged_data_path),
+        }
+    )
+    summary_path = output_dir / f"{args.sidecar_name}.summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+
+    merged_meta = dict(rare_meta)
+    merged_meta.update(
+        {
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "split": "synthetic_rare_then_popular",
+            "data_files": str(merged_data_path),
+            "max_examples": len(merged_rows),
+            "candidate_bank": str(output_dir / "step0_candidate_bank.jsonl"),
+            "source_rare_dir": str(rare_dir),
+            "source_popular_dir": str(popular_dir),
+            "source_rows_rare": len(rare_rows),
+            "source_rows_popular": len(popular_rows),
+            "derived_from_parts": True,
+            "derived_strategy": "synthetic_dataset_rare_then_popular_reindex",
+            "synthetic_order": "rare_then_popular",
+            "duplicate_row_signatures": duplicate_signatures,
+            "merged_data_file": str(merged_data_path),
+        }
+    )
+    meta_path = output_dir / f"{args.sidecar_name}.meta.json"
+    meta_path.write_text(
+        json.dumps(merged_meta, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    log(
+        f"wrote rows={len(merged_rows)} output={output_sidecar_path} "
+        f"rare_rows={len(rare_rows)} popular_rows={len(popular_rows)} "
+        f"merged_data={merged_data_path}"
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="scripts/api_cf/run_duet_phase_a_codex_merged_from_parts.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$repo_root"
+
+export ARTIFACT_ROOT="${ARTIFACT_ROOT:-$repo_root/artifacts/dualcf_api_v3}"
+export DUET_DATASET_PATH_LOCAL="${DUET_DATASET_PATH_LOCAL:-SwetieePawsss/DUET}"
+export OUT_DIR="${OUT_DIR:-$ARTIFACT_ROOT/duet/merged_codex_v3}"
+export RARE_DIR="${RARE_DIR:-$ARTIFACT_ROOT/duet/rare_codex_v3}"
+export POPULAR_DIR="${POPULAR_DIR:-$ARTIFACT_ROOT/duet/popular_codex_v3}"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}"
+
+mkdir -p "$OUT_DIR"
+
+python scripts/api_cf/build_duet_merged_sidecar_from_parts.py \
+  --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+  --rare-dir "$RARE_DIR" \
+  --popular-dir "$POPULAR_DIR" \
+  --output-dir "$OUT_DIR"
+
+merged_rows=$(wc -l < "$OUT_DIR/api_sidecar.jsonl" | tr -d '[:space:]')
+merged_data="$OUT_DIR/merged_input.jsonl"
+if [[ -z "$merged_rows" || "$merged_rows" == "0" ]]; then
+  echo "[run_duet_phase_a_codex_merged_from_parts] merged sidecar is empty: $OUT_DIR/api_sidecar.jsonl" >&2
+  exit 1
+fi
+if [[ ! -f "$merged_data" ]]; then
+  echo "[run_duet_phase_a_codex_merged_from_parts] missing synthetic merged dataset: $merged_data" >&2
+  exit 1
+fi
+
+echo "=== DUET merged / codex_cli / from_parts ==="
+echo "rare_dir=$RARE_DIR"
+echo "popular_dir=$POPULAR_DIR"
+echo "out_dir=$OUT_DIR"
+echo "merged_rows=$merged_rows"
+echo "merged_data=$merged_data"
+
+export FORGET_LABEL=merged
+export FORGET_SPLIT=train
+export DATASET_PATH=json
+export DATA_FILES="$merged_data"
+export CF_SIDECAR_JSONL="$OUT_DIR/api_sidecar.jsonl"
+export CF_SIDECAR_ALTERNATE_KEY=alternates
+export CF_SIDECAR_SCORE_KEY=scores
+export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+export CF_SIDECAR_SOURCE_KEY=candidate_sources
+export STOP_AFTER_CLEAN_CF=1
+export DROP_INVALID_AFTER_CLEAN=1
+export NUM_ALTERNATES="${NUM_ALTERNATES:-4}"
+export MAX_EXAMPLES=0
+export ALLOW_LOW_CONFIDENCE_FALLBACK
+unset SKIP_CF_GENERATION
+
+bash scripts/duet/prepare_dual_cf_duet_v3.sh
+
+python src/tools/clean_counterfactuals.py \
+  --input-path "$OUT_DIR/step1_counterfactuals_raw_v3.jsonl" \
+  --output-path "$OUT_DIR/step1b_counterfactuals_clean_v3.jsonl" \
+  --candidate-bank "$OUT_DIR/step0_candidate_bank.jsonl" \
+  --repair-invalid \
+  --drop-invalid \
+  --reject-gold-substring \
+  --require-short-answer \
+  --max-overlap-ratio 0.85 \
+  --max-alt-length-chars 128 \
+  --report-path "$OUT_DIR/step1b_clean_report.json"
+
+python scripts/api_cf/check_phase_a_outputs.py \
+  --dataset duet \
+  --out-dir "$OUT_DIR" \
+  --question-key question
+
+</content>
+
+<content full_path="scripts/api_cf/check_phase_a_outputs.py">
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def fail(message: str) -> None:
+    print(f"FAIL: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def check_sidecar(path: Path) -> None:
+    rows = load_jsonl(path)
+    seen: set[int] = set()
+
+    for line_no, row in enumerate(rows, start=1):
+        idx = int(row["index"])
+        if idx in seen:
+            fail(f"{path}: duplicate index={idx}")
+        seen.add(idx)
+
+        alternates = row.get("alternates")
+        if not isinstance(alternates, list) or not alternates:
+            fail(f"{path}: line {line_no} has empty alternates")
+
+        for key in ("scores", "relation_scores", "shared_fact_scores", "candidate_sources"):
+            value = row.get(key)
+            if not isinstance(value, list):
+                fail(f"{path}: line {line_no} {key} is not a list")
+            if len(value) != len(alternates):
+                fail(
+                    f"{path}: line {line_no} {key} len={len(value)} "
+                    f"!= alternates len={len(alternates)}"
+                )
+
+    print(f"[ok] sidecar rows={len(rows)} path={path}")
+
+
+def check_clean(path: Path, question_key: str) -> None:
+    rows = load_jsonl(path)
+    seen: set[int] = set()
+    failures: list[tuple[int, str]] = []
+
+    for line_no, row in enumerate(rows, start=1):
+        idx = int(row["index"])
+        if idx in seen:
+            failures.append((line_no, f"duplicate index={idx}"))
+        seen.add(idx)
+
+        for key in (question_key, "answer", "alternate"):
+            value = row.get(key)
+            if not isinstance(value, str) or not value.strip():
+                failures.append((line_no, f"empty/non-string {key}"))
+
+        alternate = str(row.get("alternate", "")).strip().lower()
+        answer = str(row.get("answer", "")).strip().lower()
+        if alternate == answer:
+            failures.append((line_no, "alternate == answer"))
+
+        if row.get("cf_invalid_reason") not in (None, "", "null", "None"):
+            failures.append((line_no, f"cf_invalid_reason={row.get('cf_invalid_reason')!r}"))
+
+        if "cf_is_valid" in row and row["cf_is_valid"] is not True:
+            failures.append((line_no, "cf_is_valid != True"))
+
+    if failures:
+        print(failures[:20], file=sys.stderr)
+        fail(f"{path}: found {len(failures)} bad rows")
+
+    print(f"[ok] clean rows={len(rows)} path={path}")
+
+
+def check_report(path: Path) -> None:
+    report = json.loads(path.read_text(encoding="utf-8"))
+    print(f"[report] {path}")
+    for key in (
+        "rows",
+        "valid_row_rate",
+        "exact_match_count",
+        "gold_substring_count",
+        "invalid_reason_counts",
+        "repair_source_counts",
+        "sidecar_coverage_rate",
+        "relation_metadata_coverage_rate",
+        "shared_fact_metadata_coverage_rate",
+    ):
+        if key in report:
+            print(f" {key}: {report[key]}")
+
+    if report.get("valid_row_rate") != 1.0:
+        fail(f"{path}: valid_row_rate != 1.0")
+    if report.get("exact_match_count", 0) != 0:
+        fail(f"{path}: exact_match_count != 0")
+    if report.get("gold_substring_count", 0) != 0:
+        fail(f"{path}: gold_substring_count != 0")
+    if report.get("invalid_reason_counts"):
+        fail(f"{path}: invalid_reason_counts not empty")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", choices=("duet", "rwku"), required=True)
+    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--question-key", required=True)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    out_dir = Path(args.out_dir)
+
+    sidecar = out_dir / "api_sidecar.jsonl"
+    check_sidecar(sidecar)
+
+    summary_path = out_dir / "api_sidecar.jsonl.summary.json"
+    if summary_path.exists():
+        print(f"[ok] exists: {summary_path}")
+
+    if args.dataset == "duet":
+        candidate_bank = out_dir / "step0_candidate_bank.jsonl"
+        if not candidate_bank.exists():
+            fail(f"missing {candidate_bank}")
+        print(f"[ok] candidate bank exists: {candidate_bank}")
+
+    raw_cf = out_dir / "step1_counterfactuals_raw_v3.jsonl"
+    clean_cf = out_dir / "step1b_counterfactuals_clean_v3.jsonl"
+    clean_report = out_dir / "step1b_clean_report.json"
+
+    for path in (raw_cf, clean_cf, clean_report):
+        if not path.exists():
+            fail(f"missing {path}")
+        print(f"[ok] exists: {path}")
+
+    check_clean(clean_cf, args.question_key)
+    check_report(clean_report)
+
+    print("[done] all phase-A checks passed")
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="scripts/api_cf/run_duet_phase_a_openai.sh">
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "$0")/../.." && pwd)
+cd "$repo_root"
+
+export ARTIFACT_ROOT="${ARTIFACT_ROOT:-$repo_root/artifacts/dualcf_api_v3}"
+export DUET_DATASET_PATH_LOCAL="${DUET_DATASET_PATH_LOCAL:-SwetieePawsss/DUET}"
+export OPENAI_MODEL="${OPENAI_MODEL:?set OPENAI_MODEL first}"
+export NUM_ALTERNATES="${NUM_ALTERNATES:-4}"
+export MAX_EXAMPLES="${MAX_EXAMPLES:-16}"
+export ALLOW_LOW_CONFIDENCE_FALLBACK="${ALLOW_LOW_CONFIDENCE_FALLBACK:-0}"
+export OPENAI_TIMEOUT_SECONDS="${OPENAI_TIMEOUT_SECONDS:-180}"
+export OPENAI_MAX_ATTEMPTS="${OPENAI_MAX_ATTEMPTS:-3}"
+
+mkdir -p "$ARTIFACT_ROOT/duet"
+
+for item in \
+  "rare city_forget_rare_5" \
+  "popular city_forget_popular_5" \
+  "merged city_forget_rare_5+city_forget_popular_5"
+do
+  label=$(echo "$item" | awk '{print $1}')
+  forget_split=$(echo "$item" | cut -d' ' -f2-)
+  out_dir="$ARTIFACT_ROOT/duet/${label}_api_v3"
+
+  echo "=== DUET ${label} / openai_api ==="
+  echo "split=${forget_split}"
+  echo "out_dir=${out_dir}"
+
+  mkdir -p "$out_dir"
+
+  python src/tools/build_duet_candidate_bank.py \
+    --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+    --split "$forget_split" \
+    --output-path "$out_dir/step0_candidate_bank.jsonl" \
+    --question-key question \
+    --answer-key answer \
+    --candidates-per-row 12 \
+    --max-examples "$MAX_EXAMPLES" \
+    --sidecar-path "$out_dir/step0_candidate_bank_stats_v3.json"
+
+  python scripts/api_cf/generate_external_cf_sidecar.py \
+    --backend openai_api \
+    --dataset-path "$DUET_DATASET_PATH_LOCAL" \
+    --split "$forget_split" \
+    --question-key question \
+    --answer-key answer \
+    --candidate-bank "$out_dir/step0_candidate_bank.jsonl" \
+    --output-path "$out_dir/api_sidecar.jsonl" \
+    --model "$OPENAI_MODEL" \
+    --prompt-family duet_relation_safe \
+    --num-alternates "$NUM_ALTERNATES" \
+    --max-examples "$MAX_EXAMPLES" \
+    --timeout-seconds "$OPENAI_TIMEOUT_SECONDS" \
+    --max-attempts "$OPENAI_MAX_ATTEMPTS" \
+    --resume
+
+  export FORGET_LABEL="$label"
+  export OUT_DIR="$out_dir"
+  export CF_SIDECAR_JSONL="$out_dir/api_sidecar.jsonl"
+  export CF_SIDECAR_ALTERNATE_KEY=alternates
+  export CF_SIDECAR_SCORE_KEY=scores
+  export CF_SIDECAR_RELATION_SCORE_KEY=relation_scores
+  export CF_SIDECAR_SHARED_FACT_SCORE_KEY=shared_fact_scores
+  export CF_SIDECAR_SOURCE_KEY=candidate_sources
+  export STOP_AFTER_CLEAN_CF=1
+  export DROP_INVALID_AFTER_CLEAN=1
+  export NUM_ALTERNATES="$NUM_ALTERNATES"
+  export MAX_EXAMPLES="$MAX_EXAMPLES"
+  export ALLOW_LOW_CONFIDENCE_FALLBACK="$ALLOW_LOW_CONFIDENCE_FALLBACK"
+  unset SKIP_CF_GENERATION
+
+  bash scripts/duet/prepare_dual_cf_duet_v3.sh
+
+  python src/tools/clean_counterfactuals.py \
+    --input-path "$out_dir/step1_counterfactuals_raw_v3.jsonl" \
+    --output-path "$out_dir/step1b_counterfactuals_clean_v3.jsonl" \
+    --candidate-bank "$out_dir/step0_candidate_bank.jsonl" \
+    --repair-invalid \
+    --drop-invalid \
+    --reject-gold-substring \
+    --require-short-answer \
+    --max-overlap-ratio 0.85 \
+    --max-alt-length-chars 128 \
+    --report-path "$out_dir/step1b_clean_report.json"
+
+  python scripts/api_cf/check_phase_a_outputs.py \
+    --dataset duet \
+    --out-dir "$out_dir" \
+    --question-key question
+done
+
+</content>
+
+<content full_path="scripts/api_cf/codex_phase_a_resume.py">
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from tools.dual_cf_artifact_utils import load_dataset_split
+
+
+SIDECAR_ARRAY_KEYS = (
+    "scores",
+    "relation_scores",
+    "shared_fact_scores",
+    "candidate_sources",
+)
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"[codex_phase_a_resume] {message}")
+
+
+def maybe_str(value: str | None) -> str | None:
+    if value in (None, "", "null", "None"):
+        return None
+    return value
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Resolve and verify resume targets for Codex Phase-A launchers."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--dataset-path", required=True)
+    common.add_argument("--dataset-name", default=None)
+    common.add_argument("--split", required=True)
+    common.add_argument("--data-files", default=None)
+    common.add_argument("--question-key", required=True)
+    common.add_argument("--answer-key", required=True)
+    common.add_argument("--answer-index", type=int, default=None)
+    common.add_argument("--sidecar-path", required=True)
+    common.add_argument("--model", required=True)
+    common.add_argument("--prompt-family", required=True)
+    common.add_argument("--num-alternates", type=int, required=True)
+
+    resolve = subparsers.add_parser("resolve", parents=[common])
+    resolve.add_argument("--requested-max-examples", type=int, required=True)
+
+    verify = subparsers.add_parser("verify", parents=[common])
+    verify.add_argument("--effective-max-examples", type=int, required=True)
+
+    return parser.parse_args()
+
+
+def load_dataset_indices(args: argparse.Namespace) -> list[int]:
+    dataset = load_dataset_split(
+        path=args.dataset_path,
+        split=args.split,
+        name=maybe_str(args.dataset_name),
+        data_files=maybe_str(args.data_files),
+        max_examples=0,
+    )
+    indices: list[int] = []
+    seen: set[int] = set()
+    for row_no, row in enumerate(dataset, start=1):
+        if "index" not in row:
+            fail(f"dataset row_no={row_no} is missing `index`")
+        idx = int(row["index"])
+        if idx in seen:
+            fail(f"dataset contains duplicate index={idx}")
+        seen.add(idx)
+        indices.append(idx)
+    return indices
+
+
+def validate_meta(args: argparse.Namespace, meta_path: Path) -> None:
+    if not meta_path.exists():
+        fail(f"existing sidecar requires metadata sidecar: missing {meta_path}")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    merged_sidecar = bool(meta.get("merged_from_sidecars"))
+    expected = {
+        "model": args.model,
+        "prompt_family": args.prompt_family,
+        "dataset_path": args.dataset_path,
+        "dataset_name": maybe_str(args.dataset_name),
+        "split": args.split,
+        "data_files": maybe_str(args.data_files),
+        "question_key": args.question_key,
+        "answer_key": args.answer_key,
+        "answer_index": args.answer_index,
+        "num_alternates": int(args.num_alternates),
+    }
+    for key, expected_value in expected.items():
+        actual_value = meta.get(key)
+        if merged_sidecar and key == "model":
+            if actual_value == expected_value:
+                continue
+            input_models = {
+                str(value).strip()
+                for value in meta.get("input_models", [])
+                if str(value).strip()
+            }
+            if actual_value == "multiple" and (not input_models or expected_value in input_models):
+                continue
+        if merged_sidecar and key == "dataset_path":
+            input_dataset_paths = {
+                str(value).strip()
+                for value in meta.get("input_dataset_paths", [])
+                if str(value).strip()
+            }
+            if actual_value == expected_value or expected_value in input_dataset_paths:
+                continue
+        if actual_value != expected_value:
+            fail(
+                f"existing sidecar metadata mismatch for {key}: "
+                f"expected {expected_value!r}, found {actual_value!r}"
+            )
+
+
+def maybe_bootstrap_meta(
+    args: argparse.Namespace,
+    sidecar_path: Path,
+    meta_path: Path,
+    dataset_index_set: set[int],
+) -> None:
+    if meta_path.exists() or not sidecar_path.exists():
+        return
+
+    seen_any = False
+    with sidecar_path.open("r", encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            idx = int(row["index"])
+            if idx not in dataset_index_set:
+                fail(f"{sidecar_path}: index={idx} on line {line_no} is not in the dataset")
+
+            row_model = row.get("model") or row.get("generator_model")
+            if row_model not in (None, args.model):
+                fail(
+                    f"{sidecar_path}: cannot bootstrap metadata because line {line_no} "
+                    f"model={row_model!r} != expected {args.model!r}"
+                )
+
+            row_prompt_family = row.get("prompt_family")
+            if row_prompt_family not in (None, args.prompt_family):
+                fail(
+                    f"{sidecar_path}: cannot bootstrap metadata because line {line_no} "
+                    f"prompt_family={row_prompt_family!r} != expected {args.prompt_family!r}"
+                )
+            seen_any = True
+
+    if not seen_any:
+        return
+
+    meta = {
+        "created_at_utc": None,
+        "backend": "codex_cli",
+        "model": args.model,
+        "prompt_family": args.prompt_family,
+        "dataset_path": args.dataset_path,
+        "dataset_name": maybe_str(args.dataset_name),
+        "split": args.split,
+        "data_files": maybe_str(args.data_files),
+        "question_key": args.question_key,
+        "answer_key": args.answer_key,
+        "answer_index": args.answer_index,
+        "num_alternates": int(args.num_alternates),
+        "batch_size": None,
+        "max_examples": None,
+        "candidate_bank": None,
+        "candidate_bank_limit": None,
+        "concurrent": None,
+        "reasoning_effort": None,
+        "timeout_seconds": None,
+        "sleep_seconds": None,
+        "max_attempts": None,
+        "resume": True,
+        "codex_login_status": None,
+        "bootstrap_from_existing_sidecar": True,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def load_valid_sidecar_indices(args: argparse.Namespace, dataset_index_set: set[int]) -> set[int]:
+    sidecar_path = Path(args.sidecar_path)
+    if not sidecar_path.exists():
+        return set()
+
+    meta_path = sidecar_path.with_name(sidecar_path.name + ".meta.json")
+    maybe_bootstrap_meta(args, sidecar_path, meta_path, dataset_index_set)
+    validate_meta(args, meta_path)
+
+    seen: set[int] = set()
+    with sidecar_path.open("r", encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            idx = int(row["index"])
+            if idx in seen:
+                fail(f"{sidecar_path}: duplicate index={idx} on line {line_no}")
+            if idx not in dataset_index_set:
+                fail(f"{sidecar_path}: index={idx} on line {line_no} is not in the dataset")
+
+            alternates = row.get("alternates")
+            if not isinstance(alternates, list) or not alternates:
+                fail(f"{sidecar_path}: line {line_no} has empty alternates")
+            for key in SIDECAR_ARRAY_KEYS:
+                value = row.get(key)
+                if not isinstance(value, list):
+                    fail(f"{sidecar_path}: line {line_no} {key} is not a list")
+                if len(value) != len(alternates):
+                    fail(
+                        f"{sidecar_path}: line {line_no} {key} len={len(value)} "
+                        f"!= alternates len={len(alternates)}"
+                    )
+            seen.add(idx)
+    return seen
+
+
+def emit_shell(payload: dict[str, Any]) -> None:
+    for key, value in payload.items():
+        print(f"{key}={value}")
+
+
+def run_resolve(args: argparse.Namespace) -> None:
+    requested = int(args.requested_max_examples)
+    if requested < 0:
+        fail("--requested-max-examples must be >= 0")
+
+    dataset_indices = load_dataset_indices(args)
+    dataset_rows = len(dataset_indices)
+    done_indices = load_valid_sidecar_indices(args, set(dataset_indices))
+    completed_rows = sum(1 for idx in dataset_indices if idx in done_indices)
+
+    if requested == 0:
+        effective = dataset_rows
+    elif completed_rows < requested:
+        effective = min(dataset_rows, requested)
+    else:
+        effective = min(dataset_rows, completed_rows + requested)
+
+    emit_shell(
+        {
+            "requested_max_examples": requested,
+            "dataset_rows": dataset_rows,
+            "completed_rows": completed_rows,
+            "effective_max_examples": effective,
+            "remaining_rows": max(0, effective - completed_rows),
+        }
+    )
+
+
+def run_verify(args: argparse.Namespace) -> None:
+    effective = int(args.effective_max_examples)
+    if effective < 0:
+        fail("--effective-max-examples must be >= 0")
+
+    dataset_indices = load_dataset_indices(args)
+    done_indices = load_valid_sidecar_indices(args, set(dataset_indices))
+    target_indices = dataset_indices[:effective] if effective > 0 else dataset_indices
+    missing = [idx for idx in target_indices if idx not in done_indices]
+    if missing:
+        preview = ", ".join(str(idx) for idx in missing[:10])
+        fail(
+            f"sidecar coverage incomplete for target={len(target_indices)} rows; "
+            f"missing indices: {preview}"
+        )
+
+    emit_shell(
+        {
+            "verified_target_rows": len(target_indices),
+            "verified_completed_rows": len(done_indices),
+            "missing_rows": 0,
+        }
+    )
+
+
+def main() -> None:
+    args = parse_args()
+    if args.command == "resolve":
+        run_resolve(args)
+        return
+    if args.command == "verify":
+        run_verify(args)
+        return
+    fail(f"unsupported command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="scripts/api_cf/generate_codex_cf_sidecar.py">
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+from tqdm.auto import tqdm
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from tools.dual_cf_artifact_utils import load_dataset_split, load_keyed_jsonish, resolve_answer
+
+
+class CandidateBundle(BaseModel):
+    alternates: list[str] = Field(default_factory=list)
+    scores: list[float] = Field(default_factory=list)
+    relation_scores: list[float] = Field(default_factory=list)
+    shared_fact_scores: list[float] = Field(default_factory=list)
+    candidate_sources: list[str] = Field(default_factory=list)
+    answer_type: str = "unknown"
+
+
+@dataclass
+class RunMeta:
+    created_at_utc: str
+    backend: str
+    model: str
+    prompt_family: str
+    dataset_path: str
+    dataset_name: Optional[str]
+    split: str
+    data_files: Optional[str]
+    question_key: str
+    answer_key: str
+    answer_index: Optional[int]
+    num_alternates: int
+    batch_size: int
+    max_examples: int
+    candidate_bank: Optional[str]
+    candidate_bank_limit: int
+    concurrent: int
+    reasoning_effort: Optional[str]
+    timeout_seconds: float
+    sleep_seconds: float
+    max_attempts: int
+    resume: bool
+    codex_login_status: Optional[str] = None
+
+
+def log(message: str) -> None:
+    print(f"[generate_codex_cf_sidecar] {message}", flush=True)
+
+
+def clean_text(text: Any) -> str:
+    value = str(text or "").strip().strip('"').strip("'")
+    if value:
+        value = value.splitlines()[0].strip()
+    value = " ".join(value.split())
+    return value[:128]
+
+
+def normalize_text(text: Any) -> str:
+    return " ".join(clean_text(text).lower().split())
+
+
+def maybe_str(value: Any) -> Optional[str]:
+    if value in (None, "", "null", "None"):
+        return None
+    return str(value)
+
+
+def build_run_meta(
+    args: argparse.Namespace,
+    *,
+    codex_status: Optional[str],
+) -> RunMeta:
+    return RunMeta(
+        created_at_utc=datetime.now(timezone.utc).isoformat(),
+        backend="codex_cli",
+        model=args.model,
+        prompt_family=args.prompt_family,
+        dataset_path=args.dataset_path,
+        dataset_name=maybe_str(args.dataset_name),
+        split=args.split,
+        data_files=maybe_str(args.data_files),
+        question_key=args.question_key,
+        answer_key=args.answer_key,
+        answer_index=args.answer_index,
+        num_alternates=args.num_alternates,
+        batch_size=args.batch_size,
+        max_examples=args.max_examples,
+        candidate_bank=maybe_str(args.candidate_bank),
+        candidate_bank_limit=args.candidate_bank_limit,
+        concurrent=args.concurrent,
+        reasoning_effort=args.reasoning_effort,
+        timeout_seconds=args.timeout_seconds,
+        sleep_seconds=args.sleep_seconds,
+        max_attempts=args.max_attempts,
+        resume=bool(args.resume),
+        codex_login_status=codex_status,
+    )
+
+
+def write_run_meta(
+    output_path: Path,
+    args: argparse.Namespace,
+    *,
+    codex_status: Optional[str],
+) -> None:
+    meta_path = output_path.with_name(output_path.name + ".meta.json")
+    meta_path.write_text(
+        json.dumps(asdict(build_run_meta(args, codex_status=codex_status)), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def model_validate(model_cls: type[BaseModel], payload: Any) -> BaseModel:
+    if hasattr(model_cls, "model_validate"):
+        return model_cls.model_validate(payload)  # type: ignore[attr-defined]
+    return model_cls.parse_obj(payload)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate a verified multi-candidate DualCF sidecar JSONL with Codex CLI."
+    )
+    parser.add_argument("--dataset-path", required=True)
+    parser.add_argument("--dataset-name", default=None)
+    parser.add_argument("--split", required=True)
+    parser.add_argument("--data-files", default=None)
+    parser.add_argument("--question-key", required=True)
+    parser.add_argument("--answer-key", required=True)
+    parser.add_argument("--answer-index", type=int, default=None)
+    parser.add_argument("--output-path", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--prompt-family",
+        choices=("default", "strict_short", "duet_relation_safe", "rwku_shared_fact_safe"),
+        required=True,
+    )
+    parser.add_argument("--num-alternates", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--candidate-bank", default=None)
+    parser.add_argument("--candidate-bank-limit", type=int, default=12)
+    parser.add_argument("--max-examples", type=int, default=0)
+    parser.add_argument("--concurrent", type=int, default=1)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("low", "medium", "high", "xhigh"),
+        default=None,
+    )
+    parser.add_argument("--timeout-seconds", type=float, default=180.0)
+    parser.add_argument("--sleep-seconds", type=float, default=0.0)
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--resume", action="store_true")
+    return parser.parse_args()
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be >= 1")
+    if args.concurrent <= 0:
+        raise ValueError("--concurrent must be >= 1")
+
+
+def load_rows(args: argparse.Namespace) -> list[dict[str, Any]]:
+    dataset = load_dataset_split(
+        path=args.dataset_path,
+        split=args.split,
+        name=maybe_str(args.dataset_name),
+        data_files=maybe_str(args.data_files),
+        max_examples=args.max_examples,
+    )
+    rows = [dict(row) for row in dataset]
+    for row_no, row in enumerate(rows, start=1):
+        if "index" not in row:
+            raise KeyError(f"Dataset row_no={row_no} is missing `index`.")
+    return rows
+
+
+def load_existing_indices(path: Path) -> set[int]:
+    if not path.exists():
+        return set()
+    done: set[int] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            done.add(int(row["index"]))
+    return done
+
+
+def load_candidate_bank(path: Optional[str]) -> dict[str, dict[str, Any]]:
+    if path in (None, "", "null", "None"):
+        return {}
+    return load_keyed_jsonish(path, key_field="index")
+
+
+def build_prompt_rules(prompt_family: str) -> list[str]:
+    rules = [
+        "Keep the same answer type as the gold answer.",
+        "Output only short answer spans, not explanations or full sentences.",
+        "Never repeat the gold answer.",
+        "Never output bullets, numbering, or commentary.",
+    ]
+    if prompt_family == "duet_relation_safe":
+        rules.extend(
+            [
+                "Preserve the same semantic relation as the gold answer.",
+                "Prefer candidate-bank-compatible alternatives when they fit.",
+                "Keep answers concise and relation-safe.",
+            ]
+        )
+    elif prompt_family == "rwku_shared_fact_safe":
+        rules.extend(
+            [
+                "Change only the target answer.",
+                "Avoid altering unrelated shared or public facts.",
+                "Be more conservative than DUET and avoid fabricated explanations.",
+            ]
+        )
+    elif prompt_family == "strict_short":
+        rules.extend(
+            [
+                "Prefer compact one-line spans.",
+                "Avoid unnecessary modifiers.",
+            ]
+        )
+    else:
+        rules.extend(
+            [
+                "Keep the answer plausible and concise.",
+                "Preserve the question's answer type and scope when possible.",
+            ]
+        )
+    return rules
+
+
+def build_codex_batch_schema() -> dict[str, Any]:
+    score_array = {
+        "type": "array",
+        "items": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+        },
+    }
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "index": {"type": "integer"},
+                        "alternates": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                            },
+                        },
+                        "scores": score_array,
+                        "relation_scores": score_array,
+                        "shared_fact_scores": score_array,
+                        "candidate_sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "answer_type": {"type": "string"},
+                    },
+                    "required": [
+                        "index",
+                        "alternates",
+                        "scores",
+                        "relation_scores",
+                        "shared_fact_scores",
+                        "candidate_sources",
+                        "answer_type",
+                    ],
+                },
+            }
+        },
+        "required": ["results"],
+    }
+
+
+def build_codex_batch_prompt(
+    *,
+    prompt_family: str,
+    num_alternates: int,
+    batch_rows: list[dict[str, Any]],
+) -> str:
+    policy_lines = "\n".join(f"- {rule}" for rule in build_prompt_rules(prompt_family))
+    batch_payload = []
+    for row in batch_rows:
+        payload = {
+            "index": int(row["index"]),
+            "question": str(row["question"]),
+            "answer": str(row["answer"]),
+        }
+        if row["candidate_answers"]:
+            payload["candidate_answers"] = list(row["candidate_answers"])
+        batch_payload.append(payload)
+
+    return (
+        "You are generating verified multi-alternate counterfactual sidecar rows for DualCF v3.\n\n"
+        "Return JSON only matching the provided schema.\n"
+        "The top-level object must be {\"results\": [...]}.\n"
+        "results must contain exactly one item per input example.\n"
+        "Preserve the input index exactly.\n"
+        f"Return exactly {num_alternates} short wrong alternatives when possible.\n"
+        "Never repeat the gold answer.\n"
+        "Never output explanations, labels, or full sentences.\n"
+        "For each result, align any metadata arrays with alternates.\n\n"
+        "Policy:\n"
+        f"{policy_lines}\n\n"
+        "Per result:\n"
+        "- alternates: short counterfactual answers\n"
+        "- scores: overall quality in [0,1]\n"
+        "- relation_scores: relation preservation in [0,1]\n"
+        "- shared_fact_scores: shared/public fact preservation in [0,1]\n"
+        "- candidate_sources: provenance strings aligned to alternates\n"
+        "- answer_type: short label like year/date/person/place/number/string/unknown\n\n"
+        "Batch:\n"
+        + json.dumps(batch_payload, ensure_ascii=False, indent=2)
+    )
+
+
+def _pick_list(values: list[Any], kept_indices: list[int], default_value: Any) -> list[Any]:
+    output: list[Any] = []
+    for idx in kept_indices:
+        if idx < len(values):
+            output.append(values[idx])
+        else:
+            output.append(default_value)
+    return output
+
+
+def _normalize_float_list(values: list[Any], expected_length: int, default_value: float) -> list[float]:
+    normalized: list[float] = []
+    for raw_value in values[:expected_length]:
+        try:
+            value = float(raw_value)
+        except Exception:
+            value = default_value
+        value = max(0.0, min(1.0, value))
+        normalized.append(value)
+    while len(normalized) < expected_length:
+        normalized.append(default_value)
+    return normalized
+
+
+def normalize_bundle(
+    *,
+    bundle: CandidateBundle,
+    answer: str,
+    num_alternates: int,
+    default_source: str,
+) -> dict[str, Any]:
+    answer_norm = normalize_text(answer)
+    raw_alts = [clean_text(item) for item in bundle.alternates]
+    deduped_alts: list[str] = []
+    seen: set[str] = set()
+    kept_indices: list[int] = []
+
+    for idx, alt in enumerate(raw_alts):
+        alt_norm = normalize_text(alt)
+        if not alt_norm:
+            continue
+        if alt_norm == answer_norm:
+            continue
+        if alt_norm in seen:
+            continue
+        seen.add(alt_norm)
+        deduped_alts.append(alt)
+        kept_indices.append(idx)
+        if len(deduped_alts) >= num_alternates:
+            break
+
+    if not deduped_alts:
+        raise ValueError("No usable alternates after normalization.")
+
+    scores = _normalize_float_list(
+        _pick_list(list(bundle.scores), kept_indices, 0.5),
+        len(deduped_alts),
+        0.5,
+    )
+    relation_scores = _normalize_float_list(
+        _pick_list(list(bundle.relation_scores), kept_indices, 1.0),
+        len(deduped_alts),
+        1.0,
+    )
+    shared_fact_scores = _normalize_float_list(
+        _pick_list(list(bundle.shared_fact_scores), kept_indices, 1.0),
+        len(deduped_alts),
+        1.0,
+    )
+
+    raw_sources = _pick_list(list(bundle.candidate_sources), kept_indices, default_source)
+    candidate_sources: list[str] = []
+    for source in raw_sources:
+        source_text = clean_text(source) or default_source
+        candidate_sources.append(source_text)
+    while len(candidate_sources) < len(deduped_alts):
+        candidate_sources.append(default_source)
+
+    answer_type = clean_text(bundle.answer_type) or "unknown"
+    return {
+        "alternates": deduped_alts,
+        "scores": scores,
+        "relation_scores": relation_scores,
+        "shared_fact_scores": shared_fact_scores,
+        "candidate_sources": candidate_sources[: len(deduped_alts)],
+        "answer_type": answer_type,
+        "candidate_count": len(deduped_alts),
+    }
+
+
+def build_sidecar_row(
+    *,
+    index: int,
+    normalized: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    prompt_version = f"codex_cli:{args.prompt_family}:v1"
+    return {
+        "index": index,
+        "alternates": normalized["alternates"],
+        "scores": normalized["scores"],
+        "relation_scores": normalized["relation_scores"],
+        "shared_fact_scores": normalized["shared_fact_scores"],
+        "candidate_sources": normalized["candidate_sources"],
+        "answer_type": normalized["answer_type"],
+        "candidate_count": normalized["candidate_count"],
+        "generator": "codex_cli",
+        "generator_backend": "codex_cli",
+        "generator_model": args.model,
+        "generator_reasoning_effort": args.reasoning_effort,
+        "model": args.model,
+        "prompt_family": args.prompt_family,
+        "prompt_version": prompt_version,
+        "structured_outputs": True,
+    }
+
+
+def codex_login_status() -> str:
+    if shutil.which("codex") is None:
+        raise RuntimeError("`codex` CLI is not installed or not on PATH.")
+
+    proc = subprocess.run(
+        ["codex", "login", "status"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    status_text = (proc.stdout or proc.stderr or "").strip()
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "Unable to read Codex CLI login status. "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+    return status_text
+
+
+def run_codex_batch(
+    *,
+    args: argparse.Namespace,
+    prompt: str,
+    schema_path: Path,
+    result_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+    workspace_dir: Path,
+) -> dict[str, Any]:
+    cmd = [
+        "codex",
+        "-s",
+        "read-only",
+        "-a",
+        "never",
+        "exec",
+        "-C",
+        str(workspace_dir),
+        "--skip-git-repo-check",
+        "--model",
+        args.model,
+        "--color",
+        "never",
+        "--output-schema",
+        str(schema_path),
+        "-o",
+        str(result_path),
+        "-",
+    ]
+    if args.reasoning_effort:
+        cmd[1:1] = ["-c", f'model_reasoning_effort="{args.reasoning_effort}"']
+    proc = subprocess.run(
+        cmd,
+        input=prompt,
+        text=True,
+        capture_output=True,
+        timeout=args.timeout_seconds,
+        check=False,
+    )
+    stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+    stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+
+    if proc.returncode != 0:
+        combined = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        if (
+            "refresh token was already used" in combined
+            or "Please log out and sign in again" in combined
+        ):
+            raise RuntimeError(
+                "Codex CLI authentication is stale. Run `codex logout` and "
+                "`codex login` again, then rerun with --resume."
+            )
+        if "not supported when using Codex with a ChatGPT account" in combined:
+            raise RuntimeError(
+                f"Model `{args.model}` is not supported for Codex ChatGPT-login auth on this machine. "
+                "Use a supported ChatGPT-login model or switch to API-key auth."
+            )
+        if '"code":"model_not_found"' in combined or "model_not_found" in combined:
+            raise RuntimeError(f"Codex model `{args.model}` was not found.")
+        raise RuntimeError(
+            f"codex exec failed with code {proc.returncode}; see {stdout_path} and {stderr_path}"
+        )
+
+    if not result_path.exists():
+        raise RuntimeError(f"Codex did not write {result_path}")
+
+    return json.loads(result_path.read_text(encoding="utf-8"))
+
+
+def generate_codex_sidecar(
+    *,
+    args: argparse.Namespace,
+    rows: list[dict[str, Any]],
+    candidate_bank: dict[str, dict[str, Any]],
+    output_path: Path,
+    done_indices: set[int],
+) -> tuple[int, str]:
+    status_text = codex_login_status()
+    pending_rows: list[dict[str, Any]] = []
+    for row in rows:
+        idx = int(row["index"])
+        if idx in done_indices:
+            continue
+        answer = resolve_answer(
+            row=row,
+            answer_key=args.answer_key,
+            answer_index=args.answer_index,
+        )
+        bank_row = candidate_bank.get(str(idx), {})
+        pending_rows.append(
+            {
+                "index": idx,
+                "question": clean_text(row.get(args.question_key, "")),
+                "answer": answer,
+                "candidate_answers": [
+                    clean_text(item)
+                    for item in bank_row.get("candidate_answers", [])[: args.candidate_bank_limit]
+                    if clean_text(item)
+                ],
+            }
+        )
+
+    debug_root = output_path.parent / "_codex_batches"
+    workspace_dir = output_path.parent / "_codex_workspace"
+    debug_root.mkdir(parents=True, exist_ok=True)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    schema_path = debug_root / "schema.json"
+    schema_path.write_text(
+        json.dumps(build_codex_batch_schema(), indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+
+    mode = "a" if args.resume and output_path.exists() else "w"
+    default_source = f"codex_cli:{args.model}"
+    written = 0
+    batch_starts = list(range(0, len(pending_rows), args.batch_size))
+    progress_desc = f"{args.split}:{args.model}"
+    if args.reasoning_effort:
+        progress_desc += f":{args.reasoning_effort}"
+
+    def run_one_batch(batch_id: int, start: int) -> tuple[int, list[str]]:
+        batch = pending_rows[start : start + args.batch_size]
+        prompt = build_codex_batch_prompt(
+            prompt_family=args.prompt_family,
+            num_alternates=args.num_alternates,
+            batch_rows=batch,
+        )
+        prompt_path = debug_root / f"batch_{batch_id:05d}.prompt.txt"
+        result_path = debug_root / f"batch_{batch_id:05d}.result.json"
+        stdout_path = debug_root / f"batch_{batch_id:05d}.stdout.log"
+        stderr_path = debug_root / f"batch_{batch_id:05d}.stderr.log"
+        batch_workspace_dir = workspace_dir / f"batch_{batch_id:05d}"
+        batch_workspace_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        last_error: Optional[Exception] = None
+        payload: Optional[dict[str, Any]] = None
+        for attempt in range(1, args.max_attempts + 1):
+            try:
+                payload = run_codex_batch(
+                    args=args,
+                    prompt=prompt,
+                    schema_path=schema_path,
+                    result_path=result_path,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                    workspace_dir=batch_workspace_dir,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                log(f"batch {batch_id} size={len(batch)} codex attempt={attempt} failed: {exc}")
+                time.sleep(min(2.0 * attempt, 10.0))
+
+        if payload is None:
+            raise RuntimeError(
+                f"Codex sidecar generation failed for batch={batch_id}: {last_error}"
+            ) from last_error
+
+        results = payload.get("results")
+        if not isinstance(results, list):
+            raise RuntimeError(f"Codex result for batch={batch_id} has no `results` list: {payload}")
+
+        by_index: dict[int, dict[str, Any]] = {}
+        for item in results:
+            if not isinstance(item, dict) or "index" not in item:
+                raise RuntimeError(f"Codex batch={batch_id} returned malformed item: {item!r}")
+            by_index[int(item["index"])] = item
+
+        expected_indices = {int(row["index"]) for row in batch}
+        returned_indices = set(by_index.keys())
+        if returned_indices != expected_indices:
+            raise RuntimeError(
+                f"Codex batch={batch_id} returned indices {sorted(returned_indices)} "
+                f"but expected {sorted(expected_indices)}"
+            )
+
+        row_lines: list[str] = []
+        for row in batch:
+            idx = int(row["index"])
+            bundle = model_validate(CandidateBundle, by_index[idx])
+            normalized = normalize_bundle(
+                bundle=bundle,
+                answer=row["answer"],
+                num_alternates=args.num_alternates,
+                default_source=default_source,
+            )
+            row_lines.append(
+                json.dumps(
+                    build_sidecar_row(index=idx, normalized=normalized, args=args),
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+        return batch_id, row_lines
+
+    progress = tqdm(
+        total=len(batch_starts),
+        desc=f"{progress_desc}:c{args.concurrent}",
+        unit="batch",
+        dynamic_ncols=True,
+        leave=True,
+        disable=not sys.stderr.isatty(),
+    )
+    try:
+        with output_path.open(mode, encoding="utf-8") as fout:
+            if args.concurrent == 1 or len(batch_starts) <= 1:
+                for batch_id, start in enumerate(batch_starts, start=1):
+                    _, row_lines = run_one_batch(batch_id, start)
+                    for line in row_lines:
+                        fout.write(line)
+                        written += 1
+                    fout.flush()
+                    progress.update(1)
+                    if args.sleep_seconds > 0:
+                        time.sleep(args.sleep_seconds)
+                    if written % 25 == 0:
+                        log(f"codex rows_written={written}")
+            else:
+                next_batch_to_write = 1
+                completed_batches: dict[int, list[str]] = {}
+                max_workers = min(args.concurrent, len(batch_starts))
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    future_to_batch_id = {
+                        executor.submit(run_one_batch, batch_id, start): batch_id
+                        for batch_id, start in enumerate(batch_starts, start=1)
+                    }
+                    for future in as_completed(future_to_batch_id):
+                        batch_id, row_lines = future.result()
+                        completed_batches[batch_id] = row_lines
+                        progress.update(1)
+                        while next_batch_to_write in completed_batches:
+                            lines = completed_batches.pop(next_batch_to_write)
+                            for line in lines:
+                                fout.write(line)
+                                written += 1
+                            fout.flush()
+                            if args.sleep_seconds > 0:
+                                time.sleep(args.sleep_seconds)
+                            if written % 25 == 0:
+                                log(f"codex rows_written={written}")
+                            next_batch_to_write += 1
+    finally:
+        progress.close()
+
+    return written, status_text
+
+
+def summarize_sidecar(path: Path) -> dict[str, Any]:
+    rows = []
+    seen: set[int] = set()
+    duplicates: list[int] = []
+    bad_rows = 0
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            rows.append(row)
+            idx = int(row["index"])
+            if idx in seen:
+                duplicates.append(idx)
+            seen.add(idx)
+            alternates = row.get("alternates")
+            if not isinstance(alternates, list) or not alternates:
+                bad_rows += 1
+                continue
+            for key in (
+                "scores",
+                "relation_scores",
+                "shared_fact_scores",
+                "candidate_sources",
+            ):
+                value = row.get(key)
+                if not isinstance(value, list) or len(value) != len(alternates):
+                    bad_rows += 1
+                    break
+    return {
+        "rows": len(rows),
+        "unique_indices": len(seen),
+        "duplicate_indices": duplicates,
+        "bad_rows": bad_rows,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    validate_args(args)
+    output_path = Path(args.output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows = load_rows(args)
+    candidate_bank = load_candidate_bank(args.candidate_bank)
+    done_indices = load_existing_indices(output_path) if args.resume else set()
+    log(f"backend=codex_cli rows={len(rows)} already_done={len(done_indices)} output={output_path}")
+
+    # Persist request metadata before generation so interrupted runs remain resumable.
+    write_run_meta(output_path, args, codex_status=None)
+
+    written, codex_status = generate_codex_sidecar(
+        args=args,
+        rows=rows,
+        candidate_bank=candidate_bank,
+        output_path=output_path,
+        done_indices=done_indices,
+    )
+
+    write_run_meta(output_path, args, codex_status=codex_status)
+
+    summary = summarize_sidecar(output_path)
+    summary_path = output_path.with_name(output_path.name + ".summary.json")
+    summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=True),
+        encoding="utf-8",
+    )
+
+    log(
+        f"done rows_written={written} total_rows={summary['rows']} "
+        f"unique_indices={summary['unique_indices']} bad_rows={summary['bad_rows']}"
+    )
+
+
+if __name__ == "__main__":
+    main()
 
 </content>
 
@@ -45449,6 +49857,8 @@ def main():
                 external_sources: list[Any] | None = None
                 primary_candidates: list[str] = []
                 cf_source = "hf_generator"
+                resolved_backend = args.generator_backend
+                resolved_model_name = (args.model_path or args.model_cfg) if args.model_cfg else None
                 default_relation_score = None
 
                 if args.alternate_column:
@@ -45489,6 +49899,14 @@ def main():
                         default_relation_score = 1.0 if bool(mapping_row.get("same_relation")) else 0.0
                     primary_candidates = []
                     cf_source = "alternate_jsonl_multi" if len(external_candidates) > 1 else "alternate_jsonl"
+                    mapping_backend = mapping_row.get("generator_backend")
+                    if mapping_backend not in (None, "", "null", "None"):
+                        resolved_backend = str(mapping_backend)
+                    else:
+                        resolved_backend = "alternate_jsonl"
+                    mapping_model = mapping_row.get("generator_model", mapping_row.get("model"))
+                    if mapping_model not in (None, "", "null", "None"):
+                        resolved_model_name = str(mapping_model)
                 else:
                     primary_candidates = generate_alternates(question, str(answer))
 
@@ -45524,7 +49942,7 @@ def main():
                 updated["external_alternate_sources"] = external_sources
                 updated["cf_pick_meta"] = best_meta
                 updated["cf_source"] = cf_source
-                updated["cf_generator_backend"] = args.generator_backend
+                updated["cf_generator_backend"] = resolved_backend
                 updated["cf_prompt_family"] = args.prompt_family
                 updated["cf_num_alternates"] = max(1, int(args.num_alternates))
                 updated["cf_invalid_reason"] = invalid_reason
@@ -45532,11 +49950,11 @@ def main():
                 updated["cf_provenance"] = build_cf_provenance(
                     args=args,
                     source_row=mapping_row,
-                    backend=args.generator_backend,
-                    model_name=(args.model_path or args.model_cfg) if args.model_cfg else None,
+                    backend=resolved_backend,
+                    model_name=resolved_model_name,
                 )
-                if args.model_cfg:
-                    updated["cf_generator_model"] = args.model_path or args.model_cfg
+                if resolved_model_name not in (None, "", "null", "None"):
+                    updated["cf_generator_model"] = resolved_model_name
                 if repaired:
                     repaired_count += 1
                 if invalid_reason is not None:
