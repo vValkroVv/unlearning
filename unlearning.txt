@@ -279,7 +279,8 @@ Directory Structure:
 │   ├── docs/hydra.md
 │   ├── docs/links.md
 │   └── docs/repro.md
-├── dual_cf_integration_diff.md
+├── dual_cf_v2_integration_diff.md
+├── dual_cf_v3_integration_diff.md
 ├── dual-test.md
 │   ├── experiments-speedup/duet_npo_sam_bs_sweep_results.tsv
 │   ├── experiments-speedup/eval_npo_sam_bs_sweep_results.tsv
@@ -526,7 +527,7 @@ Observed:
 
 Read and cross-checked:
 
-1. `dual_cf_integration_diff.md`
+1. `dual_cf_v3_integration_diff.md`
 2. `plan-test-dual.md`
 3. `npo_sam_integration_diff.md`
 4. `scripts/duet/dual_cf_duet.sh`
@@ -3956,7 +3957,7 @@ Your current repo dump is **substantially more mature than early v2**. The follo
 - `DualCFv3` and `DualCFSAM` configs exist,
 - localized negative masking exists,
 - launchers expose belief/local-neg/SAM knobs,
-- validation notes in `dual_cf_integration_diff.md` are much stronger than before.
+- validation notes in `dual_cf_v3_integration_diff.md` are much stronger than before.
 
 So this is **not** a broken prototype. It is a real v3 scaffold.
 
@@ -4070,9 +4071,9 @@ That is useful, but it is still weaker than the richer Idea2 sidecar we want, wh
 
 So the external sidecar is still underpowered for full Idea2.
 
-## 12.3 What is still correctly claimed in `dual_cf_integration_diff.md`
+## 12.3 What is still correctly claimed in `dual_cf_v3_integration_diff.md`
 
-Your updated `dual_cf_integration_diff.md` is mostly aligned with the repo dump on the major v3 facts:
+Your updated `dual_cf_v3_integration_diff.md` is mostly aligned with the repo dump on the major v3 facts:
 
 - trainer-side contract is unchanged,
 - multi-bank proxy maps exist,
@@ -4146,7 +4147,7 @@ That gives the cleanest scientific progression:
 - GUARD — Guided Unlearning and Retention via Data Attribution for Large Language Models
 - Which Retain Set Matters? — A Case Study on Entity Unlearning
 - your `difficulty_attribution_counterfactual_unlearning_idea1_extended.md`
-- your `dual_cf_integration_diff.md`
+- your `dual_cf_v3_integration_diff.md`
 
 </content>
 
@@ -15576,7 +15577,7 @@ four commands.
 
 </content>
 
-<content full_path="dual_cf_integration_diff.md">
+<content full_path="dual_cf_v3_integration_diff.md">
 # DualCF Integration Diff
 
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
@@ -18073,7 +18074,7 @@ description: Use first when you need fast discovery of docs, code paths, launche
 ## Read first
 - `AGENTS.md`
 - `README.md`
-- `dual_cf_integration_diff.md`
+- `dual_cf_v3_integration_diff.md`
 - `prod-run-dual-gpu.md`
 - the exact file family the task mentions
 
@@ -18181,7 +18182,7 @@ description: Use for robust code, config, and launcher work that must run on bot
 
 ## Read first
 - `AGENTS.md`
-- `dual_cf_integration_diff.md`
+- `dual_cf_v3_integration_diff.md`
 - `prod-run-dual-gpu.md`
 - `prod-run-dual-vast.md`
 - the exact launcher, config, and Python module being changed
@@ -19969,7 +19970,7 @@ Optimize for three things together:
 ## Read first before changing code
 For most DualCF work, read these in order:
 1. `README.md`
-2. `dual_cf_integration_diff.md`
+2. `dual_cf_v3_integration_diff.md`
 3. `prod-run-dual-gpu.md`
 4. `unlearning.txt`
 5. `docs/experiments.md`

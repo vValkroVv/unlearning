@@ -1,4 +1,4 @@
-# DualCF Integration Diff
+# DualCF v3 Integration Diff
 
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree

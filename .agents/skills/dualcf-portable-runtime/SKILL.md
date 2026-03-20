@@ -13,7 +13,7 @@ description: Use for robust code, config, and launcher work that must run on bot
 
 ## Read first
 - `AGENTS.md`
-- `dual_cf_integration_diff.md`
+- `dual_cf_v3_integration_diff.md`
 - `prod-run-dual-gpu.md`
 - `prod-run-dual-vast.md`
 - the exact launcher, config, and Python module being changed

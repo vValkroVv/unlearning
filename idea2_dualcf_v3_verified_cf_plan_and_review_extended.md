@@ -393,7 +393,7 @@ Your current repo dump is **substantially more mature than early v2**. The follo
 - `DualCFv3` and `DualCFSAM` configs exist,
 - localized negative masking exists,
 - launchers expose belief/local-neg/SAM knobs,
-- validation notes in `dual_cf_integration_diff.md` are much stronger than before.
+- validation notes in `dual_cf_v3_integration_diff.md` are much stronger than before.
 
 So this is **not** a broken prototype. It is a real v3 scaffold.
 
@@ -507,9 +507,9 @@ That is useful, but it is still weaker than the richer Idea2 sidecar we want, wh
 
 So the external sidecar is still underpowered for full Idea2.
 
-## 12.3 What is still correctly claimed in `dual_cf_integration_diff.md`
+## 12.3 What is still correctly claimed in `dual_cf_v3_integration_diff.md`
 
-Your updated `dual_cf_integration_diff.md` is mostly aligned with the repo dump on the major v3 facts:
+Your updated `dual_cf_v3_integration_diff.md` is mostly aligned with the repo dump on the major v3 facts:
 
 - trainer-side contract is unchanged,
 - multi-bank proxy maps exist,
@@ -583,4 +583,4 @@ That gives the cleanest scientific progression:
 - GUARD — Guided Unlearning and Retention via Data Attribution for Large Language Models
 - Which Retain Set Matters? — A Case Study on Entity Unlearning
 - your `difficulty_attribution_counterfactual_unlearning_idea1_extended.md`
-- your `dual_cf_integration_diff.md`
+- your `dual_cf_v3_integration_diff.md`

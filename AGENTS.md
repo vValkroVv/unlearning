@@ -11,12 +11,14 @@ Optimize for three things together:
 ## Read first before changing code
 For most DualCF work, read these in order:
 1. `README.md`
-2. `dual_cf_integration_diff.md`
+2. `dual_cf_v3_integration_diff.md`
 3. `prod-run-dual-gpu.md`
 4. `unlearning.txt`
 5. `docs/experiments.md`
 6. `docs/repro.md`
 7. the exact launcher or tool you are modifying
+
+Use `dual_cf_v2_integration_diff.md` only when you need the frozen pre-v3 DualCF baseline snapshot.
 
 ## Repository map for DualCF work
 Core trainer path:

@@ -37,7 +37,7 @@ Observed:
 
 Read and cross-checked:
 
-1. `dual_cf_integration_diff.md`
+1. `dual_cf_v3_integration_diff.md`
 2. `plan-test-dual.md`
 3. `npo_sam_integration_diff.md`
 4. `scripts/duet/dual_cf_duet.sh`
