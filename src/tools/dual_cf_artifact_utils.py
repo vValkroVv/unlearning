@@ -48,6 +48,15 @@ _MONTH_NAME_RE = re.compile(
     r"^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?$",
     re.I,
 )
+RWKU_RELATION_RESCUE_SELECTED_MAX = 0.70
+RWKU_RELATION_RESCUE_CANDIDATE_MIN = 0.85
+RWKU_LOW_RELATION_SOURCE_MIN = 0.85
+RWKU_LOW_RELATION_SOURCE_PENALTY = 0.50
+RWKU_LOW_RELATION_SOURCES = {
+    "forget_semantic_nn",
+    "retain_semantic_nn",
+    "same_subject_same_type",
+}
 
 
 def _normalize_optional_arg(value: Optional[str]):
@@ -531,6 +540,19 @@ def score_counterfactual_candidate(
     }
 
 
+def _rwku_source_penalty(
+    candidate_source: Any,
+    relation_score: float | None,
+) -> float:
+    source = str(candidate_source or "").strip()
+    relation = _coerce_optional_float(relation_score)
+    if source not in RWKU_LOW_RELATION_SOURCES or relation is None:
+        return 0.0
+    if relation >= RWKU_LOW_RELATION_SOURCE_MIN:
+        return 0.0
+    return RWKU_LOW_RELATION_SOURCE_PENALTY
+
+
 def counterfactual_invalid_reason(
     alternate: Any,
     answer: Any,
@@ -579,6 +601,7 @@ def pick_best_counterfactual_v3(
     candidate_sources: Sequence[Any] | None = None,
     default_relation_score: float | None = None,
     default_shared_fact_score: float | None = None,
+    prompt_family: str | None = None,
     reject_gold_substring: bool = True,
     max_overlap_ratio: Optional[float] = 0.85,
     require_short_answer: bool = True,
@@ -594,6 +617,7 @@ def pick_best_counterfactual_v3(
         "used_low_confidence_fallback": False,
     }
     best_score = float("-inf")
+    scored_candidates: list[tuple[int, float, str, Dict[str, Any]]] = []
 
     for idx, candidate in enumerate(candidates):
         if not str(candidate).strip():
@@ -621,9 +645,20 @@ def pick_best_counterfactual_v3(
             require_short_answer=require_short_answer,
             max_alt_length_chars=max_alt_length_chars,
         )
+        if prompt_family == "rwku_shared_fact_safe":
+            penalty = _rwku_source_penalty(
+                candidate_source=meta.get("candidate_source"),
+                relation_score=meta.get("relation_score"),
+            )
+            if penalty > 0.0 and math.isfinite(score):
+                score -= penalty
+                meta = dict(meta)
+                meta["rwku_source_penalty"] = penalty
+        candidate_text = clean_counterfactual_text(candidate)
+        scored_candidates.append((int(idx), float(score), candidate_text, dict(meta)))
         if score > best_score:
             best_score = score
-            best_text = clean_counterfactual_text(candidate)
+            best_text = candidate_text
             selected_source = candidate_source
             selected_pool = selected_source or "candidate_pool"
             best_meta = {
@@ -635,6 +670,40 @@ def pick_best_counterfactual_v3(
                 "used_low_confidence_fallback": selected_pool == "low_confidence_fallback",
                 **meta,
             }
+
+    if prompt_family == "rwku_shared_fact_safe":
+        best_relation = _coerce_optional_float(best_meta.get("relation_score"))
+        if (
+            best_relation is not None
+            and best_relation < RWKU_RELATION_RESCUE_SELECTED_MAX
+        ):
+            rescue_candidates: list[tuple[int, float, str, Dict[str, Any]]] = []
+            for idx, score, candidate_text, meta in scored_candidates:
+                relation = _coerce_optional_float(meta.get("relation_score"))
+                if meta.get("invalid_reason") is not None or relation is None:
+                    continue
+                if relation >= RWKU_RELATION_RESCUE_CANDIDATE_MIN:
+                    rescue_candidates.append((idx, score, candidate_text, meta))
+            if rescue_candidates:
+                rescue_idx, rescue_score, rescue_text, rescue_meta = max(
+                    rescue_candidates,
+                    key=lambda item: item[1],
+                )
+                best_text = rescue_text
+                best_meta = dict(rescue_meta)
+                best_meta["rank_score"] = float(rescue_score)
+                best_meta["selected_candidate_index"] = int(rescue_idx)
+                best_meta["selected_candidate_text"] = rescue_text
+                selected_source = best_meta.get("candidate_source")
+                best_meta["selected_source"] = selected_source
+                best_meta["selected_from_pool"] = selected_source or "candidate_pool"
+                best_meta["used_low_confidence_fallback"] = (
+                    best_meta["selected_from_pool"] == "low_confidence_fallback"
+                )
+                best_meta["rwku_relation_rescue_applied"] = True
+                best_meta["rwku_relation_rescue_threshold"] = (
+                    RWKU_RELATION_RESCUE_CANDIDATE_MIN
+                )
 
     return best_text, best_meta
 

@@ -26,6 +26,7 @@ class DualCFV3CounterfactualSelectionTest(unittest.TestCase):
             "max_overlap_ratio": 0.85,
             "require_short_answer": True,
             "max_alt_length_chars": 128,
+            "prompt_family": "default",
         }
         values.update(overrides)
         return SimpleNamespace(**values)
@@ -132,6 +133,81 @@ class DualCFV3CounterfactualSelectionTest(unittest.TestCase):
             build_low_confidence_fallback_candidates("Paris"),
             ["not Paris"],
         )
+
+    def test_rwku_relation_rescue_prefers_high_relation_candidate(self) -> None:
+        best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
+            args=self._args(
+                repair_invalid=False,
+                reject_gold_substring=False,
+                prompt_family="rwku_shared_fact_safe",
+            ),
+            question="What year was Stephen King awarded the Medal for Distinguished Contribution to American Letters?",
+            answer="2003",
+            seed=17,
+            primary_candidates=[],
+            row_candidates=[],
+            external_candidates=["2004", "1973"],
+            external_scores=[0.95, 0.0],
+            external_relation_scores=[0.05, 0.86],
+            external_shared_fact_scores=[0.20, 0.0],
+            external_sources=["filmography", "candidate_bank"],
+        )
+        self.assertEqual(best_alt, "1973")
+        self.assertIsNone(invalid_reason)
+        self.assertTrue(repaired)
+        self.assertTrue(best_meta["rwku_relation_rescue_applied"])
+        self.assertEqual(best_meta["selected_source"], "candidate_bank")
+
+    def test_non_rwku_prompt_keeps_original_argmax(self) -> None:
+        best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
+            args=self._args(
+                repair_invalid=False,
+                reject_gold_substring=False,
+                prompt_family="default",
+            ),
+            question="What year was Stephen King awarded the Medal for Distinguished Contribution to American Letters?",
+            answer="2003",
+            seed=17,
+            primary_candidates=[],
+            row_candidates=[],
+            external_candidates=["2004", "1973"],
+            external_scores=[0.95, 0.0],
+            external_relation_scores=[0.05, 0.86],
+            external_shared_fact_scores=[0.20, 0.0],
+            external_sources=["forget_semantic_nn", "candidate_bank"],
+        )
+        self.assertEqual(best_alt, "2004")
+        self.assertIsNone(invalid_reason)
+        self.assertFalse(repaired)
+        self.assertEqual(best_meta["selected_source"], "forget_semantic_nn")
+
+    def test_rwku_relation_rescue_respects_gold_substring_guard(self) -> None:
+        best_alt, invalid_reason, repaired, best_meta = select_best_alternate(
+            args=self._args(
+                repair_invalid=False,
+                reject_gold_substring=True,
+                prompt_family="rwku_shared_fact_safe",
+            ),
+            question="Which NCAA Division did John Cena play football in at college?",
+            answer="Division III",
+            seed=5,
+            primary_candidates=[],
+            row_candidates=[],
+            external_candidates=["Division I", "Division II", "University of Southern Mississippi"],
+            external_scores=[0.92, 0.89, 0.67],
+            external_relation_scores=[0.96, 0.94, 0.40],
+            external_shared_fact_scores=[0.91, 0.90, 0.86],
+            external_sources=[
+                "college_football_divisions",
+                "college_football_divisions",
+                "forget_semantic_nn",
+            ],
+        )
+        self.assertEqual(best_alt, "University of Southern Mississippi")
+        self.assertIsNone(invalid_reason)
+        self.assertTrue(repaired)
+        self.assertEqual(best_meta["selected_source"], "forget_semantic_nn")
+        self.assertNotIn("rwku_relation_rescue_applied", best_meta)
 
 
 if __name__ == "__main__":

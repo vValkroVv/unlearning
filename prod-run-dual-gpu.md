@@ -256,6 +256,15 @@ Leave `PROMPT_FAMILY` unset unless you need to override the script defaults:
 - DUET defaults to `duet_relation_safe`
 - RWKU defaults to `rwku_shared_fact_safe`
 
+For RWKU, `rwku_shared_fact_safe` now also:
+
+- subtracts a penalty from low-relation picks sourced from
+  `forget_semantic_nn`, `retain_semantic_nn`, and `same_subject_same_type`
+- if the selected relation score is below `0.7`, reselects from the best valid
+  candidates whose relation score is at least `0.85`
+- keeps the existing hard validity gates, so gold-substring candidates are not
+  used as rescue targets
+
 Optional external sidecar wiring for verified multi-alternate CFs:
 
 ```bash

@@ -273,6 +273,15 @@ Validation status for this follow-up:
     final checks passed for DUET `rare` (`482` rows), DUET `popular`
     (`482` rows), DUET `merged` (`964` rows), and RWKU `forget_level2`
     (`2879` rows), each with `valid_row_rate=1.0`
+  - RWKU `full_mix4` reranker repair and rebuild:
+    `rwku_shared_fact_safe` now penalizes low-relation selections from
+    `forget_semantic_nn`, `retain_semantic_nn`, and
+    `same_subject_same_type`, and rescues sub-`0.7` picks to the best valid
+    candidate with relation `>=0.85`; rerunning RWKU Phase A moved the mean
+    selected relation score from `0.8805` to `0.9098`, reduced selected
+    relation `<0.7` from `198` to `22`, reduced `<0.8` from `344` to `189`,
+    and eliminated all `<0.7` rows that still had another valid candidate at
+    `>=0.85`
 - results:
   - full non-GPU unittest suite passed with `OK (skipped=3)`
   - the three skips are the optional `lm_eval`-dependent tests

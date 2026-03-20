@@ -376,5 +376,14 @@ RWKU mixed outputs now also carry `8` alternates per row.
   sources under `SKIP_SIDECAR_GENERATION=1`; the validator accepts
   `model=multiple` if the requested `CODEX_MODEL` is one of the recorded
   `input_models`.
+- RWKU `rwku_shared_fact_safe` selection now adds a low-relation source
+  penalty for `forget_semantic_nn`, `retain_semantic_nn`, and
+  `same_subject_same_type`, then rescues sub-`0.7` picks to the best valid
+  candidate with relation `>=0.85`.
+- After rerunning only RWKU Phase A reuse on
+  `forget_level2_codex_v3__full_mix4`, the mean selected relation score moved
+  from `0.8805` to `0.9098`; selected relation `<0.7` rows fell from `198` to
+  `22`, `<0.8` rows fell from `344` to `189`, and there were no remaining
+  `<0.7` rows with another valid candidate at `>=0.85`.
 - Do not raw-`cat` the sidecars, including the imported ChatGPT Pro files. Keep using `merge_codex_sidecars.py`.
 - Do not compare merged DualCF artifacts against rare-only or popular-only baselines. Keep split matching intact.

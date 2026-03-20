@@ -107,6 +107,7 @@ def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
         default_relation_score=(
             1.0 if bool(response.get("same_relation", True)) else 0.0
         ),
+        prompt_family=args.prompt_family,
         reject_gold_substring=args.reject_gold_substring,
         max_overlap_ratio=args.max_overlap_ratio,
         require_short_answer=args.require_short_answer,

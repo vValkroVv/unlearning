@@ -3546,6 +3546,15 @@ RWKU mixed outputs now also carry `8` alternates per row.
   sources under `SKIP_SIDECAR_GENERATION=1`; the validator accepts
   `model=multiple` if the requested `CODEX_MODEL` is one of the recorded
   `input_models`.
+- RWKU `rwku_shared_fact_safe` selection now adds a low-relation source
+  penalty for `forget_semantic_nn`, `retain_semantic_nn`, and
+  `same_subject_same_type`, then rescues sub-`0.7` picks to the best valid
+  candidate with relation `>=0.85`.
+- After rerunning only RWKU Phase A reuse on
+  `forget_level2_codex_v3__full_mix4`, the mean selected relation score moved
+  from `0.8805` to `0.9098`; selected relation `<0.7` rows fell from `198` to
+  `22`, `<0.8` rows fell from `344` to `189`, and there were no remaining
+  `<0.7` rows with another valid candidate at `>=0.85`.
 - Do not raw-`cat` the sidecars, including the imported ChatGPT Pro files. Keep using `merge_codex_sidecars.py`.
 - Do not compare merged DualCF artifacts against rare-only or popular-only baselines. Keep split matching intact.
 
@@ -15173,6 +15182,15 @@ Leave `PROMPT_FAMILY` unset unless you need to override the script defaults:
 - DUET defaults to `duet_relation_safe`
 - RWKU defaults to `rwku_shared_fact_safe`
 
+For RWKU, `rwku_shared_fact_safe` now also:
+
+- subtracts a penalty from low-relation picks sourced from
+  `forget_semantic_nn`, `retain_semantic_nn`, and `same_subject_same_type`
+- if the selected relation score is below `0.7`, reselects from the best valid
+  candidates whose relation score is at least `0.85`
+- keeps the existing hard validity gates, so gold-substring candidates are not
+  used as rescue targets
+
 Optional external sidecar wiring for verified multi-alternate CFs:
 
 ```bash
@@ -15834,6 +15852,15 @@ Validation status for this follow-up:
     final checks passed for DUET `rare` (`482` rows), DUET `popular`
     (`482` rows), DUET `merged` (`964` rows), and RWKU `forget_level2`
     (`2879` rows), each with `valid_row_rate=1.0`
+  - RWKU `full_mix4` reranker repair and rebuild:
+    `rwku_shared_fact_safe` now penalizes low-relation selections from
+    `forget_semantic_nn`, `retain_semantic_nn`, and
+    `same_subject_same_type`, and rescues sub-`0.7` picks to the best valid
+    candidate with relation `>=0.85`; rerunning RWKU Phase A moved the mean
+    selected relation score from `0.8805` to `0.9098`, reduced selected
+    relation `<0.7` from `198` to `22`, reduced `<0.8` from `344` to `189`,
+    and eliminated all `<0.7` rows that still had another valid candidate at
+    `>=0.85`
 - results:
   - full non-GPU unittest suite passed with `OK (skipped=3)`
   - the three skips are the optional `lm_eval`-dependent tests
@@ -47601,6 +47628,7 @@ def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
         default_relation_score=(
             1.0 if bool(response.get("same_relation", True)) else 0.0
         ),
+        prompt_family=args.prompt_family,
         reject_gold_substring=args.reject_gold_substring,
         max_overlap_ratio=args.max_overlap_ratio,
         require_short_answer=args.require_short_answer,
@@ -49697,6 +49725,7 @@ def select_best_alternate(
         shared_fact_scores=shared_fact_score_pool,
         candidate_sources=source_pool,
         default_relation_score=default_relation_score,
+        prompt_family=getattr(args, "prompt_family", None),
         reject_gold_substring=args.reject_gold_substring,
         max_overlap_ratio=args.max_overlap_ratio,
         require_short_answer=args.require_short_answer,
@@ -49743,6 +49772,7 @@ def select_best_alternate(
             shared_fact_scores=shared_fact_score_pool,
             candidate_sources=source_pool,
             default_relation_score=default_relation_score,
+            prompt_family=getattr(args, "prompt_family", None),
             reject_gold_substring=args.reject_gold_substring,
             max_overlap_ratio=args.max_overlap_ratio,
             require_short_answer=args.require_short_answer,
@@ -50172,6 +50202,15 @@ _MONTH_NAME_RE = re.compile(
     r"^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,\s*\d{4})?$",
     re.I,
 )
+RWKU_RELATION_RESCUE_SELECTED_MAX = 0.70
+RWKU_RELATION_RESCUE_CANDIDATE_MIN = 0.85
+RWKU_LOW_RELATION_SOURCE_MIN = 0.85
+RWKU_LOW_RELATION_SOURCE_PENALTY = 0.50
+RWKU_LOW_RELATION_SOURCES = {
+    "forget_semantic_nn",
+    "retain_semantic_nn",
+    "same_subject_same_type",
+}
 
 
 def _normalize_optional_arg(value: Optional[str]):
@@ -50655,6 +50694,19 @@ def score_counterfactual_candidate(
     }
 
 
+def _rwku_source_penalty(
+    candidate_source: Any,
+    relation_score: float | None,
+) -> float:
+    source = str(candidate_source or "").strip()
+    relation = _coerce_optional_float(relation_score)
+    if source not in RWKU_LOW_RELATION_SOURCES or relation is None:
+        return 0.0
+    if relation >= RWKU_LOW_RELATION_SOURCE_MIN:
+        return 0.0
+    return RWKU_LOW_RELATION_SOURCE_PENALTY
+
+
 def counterfactual_invalid_reason(
     alternate: Any,
     answer: Any,
@@ -50703,6 +50755,7 @@ def pick_best_counterfactual_v3(
     candidate_sources: Sequence[Any] | None = None,
     default_relation_score: float | None = None,
     default_shared_fact_score: float | None = None,
+    prompt_family: str | None = None,
     reject_gold_substring: bool = True,
     max_overlap_ratio: Optional[float] = 0.85,
     require_short_answer: bool = True,
@@ -50718,6 +50771,7 @@ def pick_best_counterfactual_v3(
         "used_low_confidence_fallback": False,
     }
     best_score = float("-inf")
+    scored_candidates: list[tuple[int, float, str, Dict[str, Any]]] = []
 
     for idx, candidate in enumerate(candidates):
         if not str(candidate).strip():
@@ -50745,9 +50799,20 @@ def pick_best_counterfactual_v3(
             require_short_answer=require_short_answer,
             max_alt_length_chars=max_alt_length_chars,
         )
+        if prompt_family == "rwku_shared_fact_safe":
+            penalty = _rwku_source_penalty(
+                candidate_source=meta.get("candidate_source"),
+                relation_score=meta.get("relation_score"),
+            )
+            if penalty > 0.0 and math.isfinite(score):
+                score -= penalty
+                meta = dict(meta)
+                meta["rwku_source_penalty"] = penalty
+        candidate_text = clean_counterfactual_text(candidate)
+        scored_candidates.append((int(idx), float(score), candidate_text, dict(meta)))
         if score > best_score:
             best_score = score
-            best_text = clean_counterfactual_text(candidate)
+            best_text = candidate_text
             selected_source = candidate_source
             selected_pool = selected_source or "candidate_pool"
             best_meta = {
@@ -50759,6 +50824,40 @@ def pick_best_counterfactual_v3(
                 "used_low_confidence_fallback": selected_pool == "low_confidence_fallback",
                 **meta,
             }
+
+    if prompt_family == "rwku_shared_fact_safe":
+        best_relation = _coerce_optional_float(best_meta.get("relation_score"))
+        if (
+            best_relation is not None
+            and best_relation < RWKU_RELATION_RESCUE_SELECTED_MAX
+        ):
+            rescue_candidates: list[tuple[int, float, str, Dict[str, Any]]] = []
+            for idx, score, candidate_text, meta in scored_candidates:
+                relation = _coerce_optional_float(meta.get("relation_score"))
+                if meta.get("invalid_reason") is not None or relation is None:
+                    continue
+                if relation >= RWKU_RELATION_RESCUE_CANDIDATE_MIN:
+                    rescue_candidates.append((idx, score, candidate_text, meta))
+            if rescue_candidates:
+                rescue_idx, rescue_score, rescue_text, rescue_meta = max(
+                    rescue_candidates,
+                    key=lambda item: item[1],
+                )
+                best_text = rescue_text
+                best_meta = dict(rescue_meta)
+                best_meta["rank_score"] = float(rescue_score)
+                best_meta["selected_candidate_index"] = int(rescue_idx)
+                best_meta["selected_candidate_text"] = rescue_text
+                selected_source = best_meta.get("candidate_source")
+                best_meta["selected_source"] = selected_source
+                best_meta["selected_from_pool"] = selected_source or "candidate_pool"
+                best_meta["used_low_confidence_fallback"] = (
+                    best_meta["selected_from_pool"] == "low_confidence_fallback"
+                )
+                best_meta["rwku_relation_rescue_applied"] = True
+                best_meta["rwku_relation_rescue_threshold"] = (
+                    RWKU_RELATION_RESCUE_CANDIDATE_MIN
+                )
 
     return best_text, best_meta
 
@@ -53493,6 +53592,7 @@ def main():
                 shared_fact_scores=shared_fact_score_pool,
                 candidate_sources=source_pool,
                 default_relation_score=default_relation_score,
+                prompt_family=str(updated.get("cf_prompt_family") or "") or None,
                 reject_gold_substring=args.reject_gold_substring,
                 max_overlap_ratio=args.max_overlap_ratio,
                 require_short_answer=args.require_short_answer,
@@ -53531,6 +53631,7 @@ def main():
                     shared_fact_scores=shared_fact_score_pool,
                     candidate_sources=source_pool,
                     default_relation_score=default_relation_score,
+                    prompt_family=str(updated.get("cf_prompt_family") or "") or None,
                     reject_gold_substring=args.reject_gold_substring,
                     max_overlap_ratio=args.max_overlap_ratio,
                     require_short_answer=args.require_short_answer,
