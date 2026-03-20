@@ -1796,3 +1796,53 @@ python src/tools/build_structured_saves.py \
   --output-root metrics-ep5-all/structured-saves \
   --overwrite
 ```
+
+## 2026-03-21 Combined Old/New Table Helper
+
+Files:
+
+- `src/tools/build_results_combine_tables.py`
+
+Updates:
+
+- added a helper that reads two `structured-saves/` trees and emits one text
+  artifact with combined LaTeX tables
+- the helper now emits epoch-specific tables instead of mixing epoch 2 and
+  epoch 5 in the same table:
+  - `4` splits
+  - `2` LRs
+  - `2` epochs
+  - total: `16` tables / slides
+- the helper is meant for old-vs-new DualCF comparison runs where the new run
+  overlaps the old method keys (`full`, `d_only`, `a_only`, `dpo`)
+- overlapping methods are disambiguated in the output rows as:
+  - `Full-old`, `d-only-old`, `a-only-old`, `DPO-old`
+  - `Full-new`, `d-only-new`, `a-only-new`, `DPO-new`
+- the remaining old-only methods stay in the same table:
+  - `GA`
+  - `NPO`
+  - `NPO-SAM`
+  - `LoKU`
+- each generated table covers one split/LR pair and includes epoch-2 and
+  epoch-5 columns for:
+  - forget ROUGE
+  - holdout ROUGE
+  - forget cosine similarity
+  - holdout cosine similarity
+  - utility average
+  - MMLU-Pro
+  - TruthfulQA
+  - Winogrande
+  - ARC
+- the same helper can also emit a Beamer `.tex` deck with one slide per
+  split/LR/epoch table, using the same row ordering and metric columns
+
+Example command:
+
+```bash
+python src/tools/build_results_combine_tables.py \
+  --old-root metrics-ep5-all-v2/structured-saves \
+  --new-root metrics-ep5-dualfc-new_cf/structured-saves \
+  --output-file results-combine/combined_tables.txt \
+  --output-slides-tex results-combine/combined_tables_slides.tex
+```
