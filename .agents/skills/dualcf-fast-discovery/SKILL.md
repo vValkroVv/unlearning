@@ -15,7 +15,7 @@ description: Use first when you need fast discovery of docs, code paths, launche
 - `AGENTS.md`
 - `README.md`
 - `dual_cf_v3_integration_diff.md`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v3.md`
 - the exact file family the task mentions
 
 ## Workflow

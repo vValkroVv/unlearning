@@ -15,7 +15,7 @@ description: Use after code, config, or launcher changes to keep integration dif
 - `AGENTS.md`
 - `git diff`
 - the relevant `*_integration_diff.md`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v3.md`
 - `prod-run-dual-vast.md`
 - any README or docs page affected by the change
 

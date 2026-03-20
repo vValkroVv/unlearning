@@ -12,7 +12,7 @@ Optimize for three things together:
 For most DualCF work, read these in order:
 1. `README.md`
 2. `dual_cf_v3_integration_diff.md`
-3. `prod-run-dual-gpu.md`
+3. `prod-run-dual-gpu-v3.md`
 4. `unlearning.txt`
 5. `docs/experiments.md`
 6. `docs/repro.md`

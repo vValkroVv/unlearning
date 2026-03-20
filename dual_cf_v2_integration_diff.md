@@ -254,7 +254,7 @@ Operational update:
   while leaving the direct DUET/RWKU launcher defaults unchanged
 - the offline dataset symlink step
   `ln -sfn /data/home/vkropoti/unlearning/SwetieePawsss /home/vkropoti/diploma/open-unlearning/SwetieePawsss`
-  was moved into the common setup block of `prod-run-dual-gpu.md`
+  was moved into the common setup block of `prod-run-dual-gpu-v2.md`
 - the GPU validation playbook now lives in `plan-test-dual.md`, including:
   - explicit split-matched artifact preparation for DUET rare / popular / merged
   - stronger artifact validation and provenance requirements
@@ -397,7 +397,7 @@ Configs / scripts:
 - `configs/trainer/DualCF.yaml`
 - `scripts/duet/dual_cf_duet.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 ### Counterfactual generator v2
 
@@ -624,7 +624,7 @@ final run directory and then write `checkpoint_evals/summary.tsv` through
 
 ### Production runbook
 
-`prod-run-dual-gpu.md` now reflects the intended v2 campaign:
+`prod-run-dual-gpu-v2.md` now reflects the intended v2 campaign:
 
 - separate vLLM server
 - DUET rare/popular/merged preparation
@@ -740,7 +740,7 @@ Changed files:
 - `configs/experiment/unlearn/rwku/dual_cf_lora.yaml`
 - `scripts/duet/dual_cf_duet.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -750,7 +750,7 @@ Updates:
   the other active methods: `PER_DEVICE_TRAIN_BS=16`, `GRAD_ACCUM=2`,
   `NUM_EPOCHS=2`, `EVAL_BATCH_SIZE=64`, and
   `LRS="1e-6 5e-6 1e-5 5e-5 1e-4"`
-- Added `prod-run-dual-gpu.md` with merged-only `DUET` artifact generation,
+- Added `prod-run-dual-gpu-v2.md` with merged-only `DUET` artifact generation,
   `RWKU` artifact generation, mandatory `validate_dual_cf_artifact.py` before
   training, and six ready-to-run training launches
 - The new runbook keeps full attribution scoring explicit via
@@ -763,7 +763,7 @@ Changed files:
 - `src/tools/make_counterfactuals.py`
 - `src/tools/score_difficulty.py`
 - `src/tools/score_attribution.py`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -784,7 +784,7 @@ Changed files:
 
 - `src/tools/dual_cf_artifact_utils.py`
 - `src/tools/score_attribution.py`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -814,7 +814,7 @@ Updates:
   env vars:
   `bash .../run_llama_dual_cf_e2e.sh 4 2` or
   `CUDA_VISIBLE_DEVICES=4 NUM_EPOCHS=2 bash .../run_llama_dual_cf_e2e.sh`
-- wrappers reuse the same production defaults as `prod-run-dual-gpu.md` and
+- wrappers reuse the same production defaults as `prod-run-dual-gpu-v2.md` and
   keep artifact LoRA parity with training via `r=32`, `alpha=64`,
   `dropout=0.0`
 - wrappers now also support hardware-specific batch profiles:
@@ -898,7 +898,7 @@ Changed files:
 - `scripts/duet/eval_checkpoints_duet.sh`
 - `scripts/rwku/eval_checkpoints_rwku.sh`
 - `src/tools/summarize_checkpoint_metrics.py`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -931,7 +931,7 @@ Updates:
   successful trajectory evaluation unless
   `DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=0` is set
 - the workspace-tested small-model validation runbook now lives in
-  `prod-run-dual-vast.md`; `prod-run-dual-gpu.md` was restored to the original
+  `prod-run-dual-vast.md`; `prod-run-dual-gpu-v2.md` was restored to the original
   production-oriented version
 
 Validation results:
@@ -1129,7 +1129,7 @@ RWKU compatibility follow-up:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1160,7 +1160,7 @@ Updates:
 Changed files:
 
 - `scripts/duet/dual_cf_duet.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1169,7 +1169,7 @@ Updates:
   - it honors `RUN_CHECKPOINT_EVAL`
   - it falls back to `RUN_UTILITY_EVAL` when `RUN_CHECKPOINT_EVAL` is unset
   - it runs `eval_checkpoints_duet.sh` before any top-level safetensor cleanup
-- `prod-run-dual-gpu.md` now defaults the production path to:
+- `prod-run-dual-gpu-v2.md` now defaults the production path to:
   - `RUN_CHECKPOINT_EVAL=1`
   - `RUN_UTILITY_EVAL=1`
   - `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`
@@ -1187,7 +1187,7 @@ Updates:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1210,13 +1210,13 @@ Updates:
 Changed files:
 
 - `scripts/dualcf/run_campaign_one_lr.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
 - added `scripts/dualcf/run_campaign_one_lr.sh`, a production wrapper that:
   - takes `GPU_ID` and a single `LR`
-  - applies the offline Llama 8B defaults from `prod-run-dual-gpu.md`
+  - applies the offline Llama 8B defaults from `prod-run-dual-gpu-v2.md`
   - keeps the automatic per-run cadence
     `train -> eval -> Utility-1K -> cleanup`
   - expects artifacts to be prebuilt under `ARTIFACT_ROOT`
@@ -1228,7 +1228,7 @@ Updates:
   - `duet_all`
   - `rwku`
   - `all`
-- `prod-run-dual-gpu.md` now documents the balanced four-H100 usage pattern:
+- `prod-run-dual-gpu-v2.md` now documents the balanced four-H100 usage pattern:
   one GPU per LR, with the same phase on all four cards
 
 ## vLLM device-order guardrail (2026-03-15)
@@ -1314,7 +1314,7 @@ Updates:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1333,7 +1333,7 @@ Changed files:
 
 - `scripts/duet/prepare_dual_cf_duet_v2.sh`
 - `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1353,7 +1353,7 @@ Updates:
 Changed files:
 
 - `scripts/vllm/start_qwen3_cf_server.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1377,7 +1377,7 @@ Changed files:
 
 - `scripts/vllm/start_qwen3_cf_server.sh`
 - `src/tools/vllm_cf_client.py`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1402,7 +1402,7 @@ Changed files:
 
 - `src/tools/retry_invalid_counterfactuals.py`
 - `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1480,7 +1480,7 @@ Updates:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1499,7 +1499,7 @@ Updates:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1525,7 +1525,7 @@ Updates:
 Changed files:
 
 - `scripts/dualcf/run_campaign_one_lr.sh`
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
@@ -1592,7 +1592,7 @@ Updates:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 - `tmp_rwku_fix.txt`
 - `tmp_rwku_apply_manual_fixes.py`
 - `tmp_rwku_verify_clean.py`
@@ -1625,7 +1625,7 @@ Updates:
 
 Changed files:
 
-- `prod-run-dual-gpu.md`
+- `prod-run-dual-gpu-v2.md`
 
 Updates:
 
