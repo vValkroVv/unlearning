@@ -47,11 +47,17 @@ case "${METHOD_VARIANT}" in
     export RUN_LABEL=${RUN_LABEL:-DPO}
     exec bash "${script_dir}/dual_cf_duet.sh"
     ;;
+  simple_ce)
+    exec bash "${script_dir}/simple_ce_duet.sh"
+    ;;
   ga)
     exec bash "${script_dir}/ga_duet.sh"
     ;;
   npo)
     exec bash "${script_dir}/npo_duet.sh"
+    ;;
+  simnpo)
+    exec bash "${script_dir}/simnpo_duet.sh"
     ;;
   npo_sam)
     exec bash "${script_dir}/npo_sam_duet.sh"
