@@ -1,0 +1,7 @@
+interface:
+  display_name: "DualCF Portable Runtime"
+  short_description: "Write robust code and launchers for local GPU and VAST"
+  default_prompt: "Implement the smallest robust patch that works on both local GPU and VAST-style environments, then provide exact smoke commands and remaining runtime risks."
+
+policy:
+  allow_implicit_invocation: true

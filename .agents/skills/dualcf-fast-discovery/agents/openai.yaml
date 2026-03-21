@@ -1,0 +1,7 @@
+interface:
+  display_name: "DualCF Fast Discovery"
+  short_description: "Find the right docs, code paths, and recent diffs fast"
+  default_prompt: "Map the exact docs, scripts, configs, and recent changes for this task, then hand back the smallest safe file set and commands for implementation."
+
+policy:
+  allow_implicit_invocation: true
