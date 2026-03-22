@@ -72,6 +72,46 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 ```
 
+## Post-run sanity export
+
+Use `src/tools/export_unlearning_sanity_checks.py` to build readable `.txt`
+sanity-check reports from endpoint eval logs. The helper:
+
+- scans one or more run roots,
+- filters by exact LR values,
+- picks the same sampled forget / holdout examples across all matching methods,
+- prints the question, target answer, generated answer, per-sample
+  `rougeL_recall`, and per-sample cosine similarity,
+- prints the matched save path beside each algorithm entry so same-method runs
+  with different hyperparameters remain distinguishable in the text output,
+- writes `report_index.tsv`, `matched_runs.tsv`, and `missing_sample_logs.tsv`
+  beside the text reports.
+
+Example:
+
+```bash
+python src/tools/export_unlearning_sanity_checks.py \
+  --input-root saves-old \
+  --input-root saves-new-cf \
+  --lr 1e-4 \
+  --lr 5e-5 \
+  --sample-count 10 \
+  --output-root sanity-checks/lr_1e-4_5e-5 \
+  --overwrite
+```
+
+Notes:
+
+- The exporter reads endpoint `evals/DUET_EVAL.json` files. If a save root only
+  preserved `DUET_SUMMARY.json` (for example a summary-only `saves-clean`
+  copy), the script records that in `missing_sample_logs.tsv` and skips
+  per-sample text export for that run.
+- `COS_SIM_EVAL.json` is reused when present. If it is missing, the exporter
+  computes cosine similarity on demand with
+  `sentence-transformers/all-MiniLM-L6-v2` or `SBERT_MODEL_PATH`.
+- Run the exporter against the raw save tree before any cleanup step that drops
+  endpoint `DUET_EVAL.json`.
+
 ## Llama
 
 ### 1) GA - DUET (done)
