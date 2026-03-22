@@ -37,12 +37,15 @@ METHOD_ORDER = [
     "dpo",
     "ga",
     "npo",
+    "simnpo",
     "npo_sam",
     "loku",
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
-METHOD_RE = re.compile(r"_(dual_cf|dpo_cf|ga|loku|npo_sam|npo)_lora_.*?_lr[^_]+(.*)$")
+METHOD_RE = re.compile(
+    r"_(dual_cf|dpo_cf|ga|loku|npo_sam|npo|simnpo|simple_ce)_lora_.*?_lr[^_]+(.*)$"
+)
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 
 
@@ -182,8 +185,15 @@ def extract_method_key(run_name: str) -> str:
 
     if method_name == "dpo_cf":
         return "dpo"
+    if method_name == "simnpo":
+        return "simnpo"
     if method_name == "npo_sam":
         return "npo_sam"
+    if method_name == "simple_ce":
+        ablation_tokens = [token for token in suffix.split("_") if token.startswith(("cf", "ret", "gamma"))]
+        if ablation_tokens:
+            return "_".join([method_name] + ablation_tokens)
+        return method_name
     return method_name
 
 

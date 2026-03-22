@@ -32,6 +32,7 @@ ignore-tree-and-content:
   - "ep2"
   - "ep2_dual"
   - "ep5"
+  - "metrics-new"
 
 
 
