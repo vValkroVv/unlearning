@@ -412,3 +412,47 @@ This runs on each H100, in order:
 
 If you want only DUET and no RWKU yet, change `all` to `duet_all` in the same
 four commands.
+
+## Additional SimpleCE Runs
+
+Also ran these standalone `simple_ce` campaigns:
+
+```bash
+METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+
+METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-5 all
+
+METHOD_VARIANTS=simple_ce \
+CF_WEIGHTS="0.5 1 2" \
+RETAIN_WEIGHTS=1 \
+GAMMAS="0 1 2" \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 5e-5 all
+
+METHOD_VARIANTS=simple_ce \
+CF_WEIGHTS="0.5 1 2" \
+RETAIN_WEIGHTS=1 \
+GAMMAS="0 1 2" \
+bash scripts/dualcf/run_campaign_one_lr.sh 4 1e-4 all
+```
+
+## Post-run cosine-sim sweep
+
+After the campaign finishes, write cosine-sim artifacts alongside every saved
+`DUET_EVAL.json` under `${OUTPUT_ROOT}`:
+
+```bash
+python scripts/calc_cos_sim.py \
+  --path_to_saves "${OUTPUT_ROOT}" \
+  --gpu "${COS_SIM_CUDA_VISIBLE_DEVICES:-0}"
+```
+
+## Package clean saves
+
+Package the summary-only saves tree into a local clean directory plus zip:
+
+```bash
+bash package_saves.sh \
+  --path_to_saves "${OUTPUT_ROOT%/unlearn}" \
+  --out_path /home/vkropoti/diploma/open-unlearning/saves-clean \
+  --save_eval 0
+```
