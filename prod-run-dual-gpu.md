@@ -86,6 +86,13 @@ export UTILITY_APPLY_CHAT_TEMPLATE=true
 All DUET and RWKU launchers now write task directories directly under
 `${OUTPUT_ROOT}` and skip rerunning finished jobs unless `FORCE_RERUN=1`.
 
+`scripts/dualcf/run_campaign_one_lr.sh` now includes `ada_pop` in its default
+`METHOD_VARIANTS`, so the campaign path covers DualCF plus GA / AdaPop / NPO /
+SimNPO / NPO-SAM / LoKU / SimpleCE without a separate wrapper edit. The
+standalone AdaPop launchers also accept `BETA_A` and `BETA_B` overrides for the
+dynamic popularity curve while keeping the same checkpoint / cleanup cadence as
+the other baselines.
+
 ## Hardware profile
 
 Pick one profile for the current shell. Keep the H100-sized profile active by

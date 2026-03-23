@@ -53,6 +53,9 @@ case "${METHOD_VARIANT}" in
   ga)
     exec bash "${script_dir}/ga_duet.sh"
     ;;
+  ada_pop)
+    exec bash "${script_dir}/ada_pop_duet.sh"
+    ;;
   npo)
     exec bash "${script_dir}/npo_duet.sh"
     ;;

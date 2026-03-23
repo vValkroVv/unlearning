@@ -104,10 +104,12 @@ export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 
 - `scripts/duet/dual_cf_duet.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/duet/ada_pop_duet.sh`
 - `scripts/duet/ga_duet.sh`
 - `scripts/duet/npo_duet.sh`
 - `scripts/duet/npo_sam_duet.sh`
 - `scripts/duet/loku_duet.sh`
+- `scripts/rwku/ada_pop_rwku.sh`
 - `scripts/rwku/ga_rwku.sh`
 - `scripts/rwku/npo_rwku.sh`
 - `scripts/rwku/npo_sam_rwku.sh`
@@ -116,6 +118,12 @@ export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 So the run directories land under:
 
 - `${OUTPUT_ROOT}/<task_name>`
+
+The direct AdaPop launchers now use the same train -> endpoint eval ->
+checkpoint eval -> Utility-1K -> cleanup flow as the other DUET / RWKU
+baselines. If you need to override the dynamic popularity curve shape, export
+`BETA_A` and `BETA_B` before launching `scripts/duet/ada_pop_duet.sh` or
+`scripts/rwku/ada_pop_rwku.sh`.
 
 For `LoKU`, importance files also move out of the repo and default to:
 

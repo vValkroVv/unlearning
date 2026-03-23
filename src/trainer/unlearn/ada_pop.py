@@ -23,6 +23,8 @@ class AdaPop(GradDiff):
         alpha0: float = 0.5,
         alpha_const: Optional[float] = None,
         beta_const: Optional[float] = None,
+        beta_a: float = 58.7,
+        beta_b: float = 0.796,
         eps: float = 0.1,
         dual_lr: float = 0.1,
         lambda_max: float = 5.0,
@@ -44,6 +46,8 @@ class AdaPop(GradDiff):
         self.alpha0 = float(alpha0)
         self.alpha_const = float(alpha_const) if alpha_const is not None else None
         self.beta_const = float(beta_const) if beta_const is not None else None
+        self.beta_a = float(beta_a)
+        self.beta_b = float(beta_b)
 
         self.eps = float(eps)
         self.dual_lr = float(dual_lr)
@@ -114,6 +118,8 @@ class AdaPop(GradDiff):
             beta_from_pop_sum=True,
             rep_coeff=0.0,
             beta_const=self.beta_const,
+            beta_a=self.beta_a,
+            beta_b=self.beta_b,
         )
 
         rinputs_full = inputs["retain"]
@@ -129,7 +135,7 @@ class AdaPop(GradDiff):
         pop_beta_mean = None
         if "pop_sum" in finputs_full:
             pop_sum = finputs_full["pop_sum"].to(self.accelerator.device).float().view(-1)
-            beta_vec = beta_from_pop_sum_tensor(pop_sum)
+            beta_vec = beta_from_pop_sum_tensor(pop_sum, beta_a=self.beta_a, beta_b=self.beta_b)
             pop_beta_mean = float(beta_vec.mean().detach().item())
             if self._beta_mean_ema is None:
                 self._beta_mean_ema = pop_beta_mean

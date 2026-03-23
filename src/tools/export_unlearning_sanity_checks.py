@@ -22,7 +22,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 COS_SIM_EVAL_FILENAME = "COS_SIM_EVAL.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|loku|npo_sam|npo|simnpo|simple_ce|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -39,6 +39,7 @@ REPORT_METRICS = (
 )
 METHOD_DISPLAY = {
     "ga": "GA",
+    "ada_pop": "AdaPop",
     "npo": "NPO",
     "npo_sam": "NPO-SAM",
     "loku": "LoKU",
@@ -53,6 +54,7 @@ METHOD_DISPLAY = {
 }
 METHOD_ORDER = [
     "ga",
+    "ada_pop",
     "npo",
     "npo_sam",
     "loku",

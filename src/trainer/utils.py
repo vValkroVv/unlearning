@@ -210,17 +210,20 @@ def ihl_loss_from_logits(
     return measures.mean()
 
 
-def beta_from_pop_sum_tensor(pop_sum: torch.Tensor) -> torch.Tensor:
-    """Compute dynamic beta from a tensor of pop_sum using the clipped power-law.
+def beta_from_pop_sum_tensor(
+    pop_sum: torch.Tensor,
+    beta_a: float = 58.7,
+    beta_b: float = 0.796,
+    beta_min: float = 0.05,
+    beta_max: float = 2.0,
+) -> torch.Tensor:
+    """Compute dynamic beta from popularity using the clipped power-law.
 
-    beta(p) = clip(58.7 * p^(-0.796), 0.05, 2.0)
-
-    Expects a float tensor; clamps p to avoid zero.
-    Returns a tensor on the same device/dtype as input.
+    beta(p) = clip(beta_a * p^(-beta_b), beta_min, beta_max)
     """
-    p = pop_sum.clamp(min=1e-8)
-    beta_raw = 58.7 * torch.pow(p, -0.796)
-    return beta_raw.clamp(min=0.05, max=2.0)
+    p = pop_sum.float().clamp_min(1e-6)
+    beta_raw = float(beta_a) * torch.pow(p, -float(beta_b))
+    return beta_raw.clamp(min=float(beta_min), max=float(beta_max))
 
 
 def _repetition_penalty_from_logits(shift_logits, shift_labels):
@@ -274,13 +277,15 @@ def compute_wga_loss_dynamic_beta(
     beta_from_pop_sum: bool = True,
     rep_coeff: float = 0.0,
     beta_const: float | None = None,
+    beta_a: float = 58.7,
+    beta_b: float = 0.796,
 ):
     """Compute WGA loss with per-sample dynamic beta and optional anti-repetition penalty.
 
     If `beta_from_pop_sum` and `inputs` contains a vector `pop_sum` of length B,
     per-sample beta is computed as:
 
-        beta_i = clip(58.7 * (pop_sum[i]) ** (-0.796), beta_min, beta_max)
+        beta_i = clip(beta_a * (pop_sum[i]) ** (-beta_b), beta_min, beta_max)
 
     where beta_min = 0.05 and beta_max = 2.0.
     The repetition penalty discourages repeating the previous token by penalizing
@@ -304,7 +309,7 @@ def compute_wga_loss_dynamic_beta(
         beta_vec = torch.full((B,), float(beta_const), device=shift_logits.device, dtype=shift_logits.dtype)
     elif beta_from_pop_sum and ("pop_sum" in inputs):
         pop_sum = inputs["pop_sum"].to(shift_logits.device).float().view(B)
-        beta_vec = beta_from_pop_sum_tensor(pop_sum)
+        beta_vec = beta_from_pop_sum_tensor(pop_sum, beta_a=beta_a, beta_b=beta_b)
     else:
         beta_vec = torch.ones(B, device=shift_logits.device, dtype=shift_logits.dtype)
 

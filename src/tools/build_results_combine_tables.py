@@ -40,6 +40,7 @@ COMBINED_ROW_SPECS = [
     ("old", "a_only", "a-only-old", "green!10"),
     ("old", "dpo", "DPO-old", "gray!8"),
     ("old", "ga", "GA", "gray!8"),
+    ("old", "ada_pop", "AdaPop", "gray!8"),
     ("old", "npo", "NPO", "gray!8"),
     ("old", "npo_sam", "NPO-SAM", "gray!8"),
     ("old", "loku", "LoKU", "gray!8"),

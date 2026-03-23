@@ -42,18 +42,22 @@ with:
 ### Experiment configs
 
 - `configs/experiment/unlearn/duet/dual_cf_lora.yaml`
+- `configs/experiment/unlearn/duet/ada_pop_lora.yaml`
 - `configs/experiment/unlearn/popqa/dual_cf_lora.yaml`
 - `configs/experiment/unlearn/rwku/dual_cf_lora.yaml`
+- `configs/experiment/unlearn/rwku/ada_pop_lora.yaml`
 
 ### Launch scripts
 
 - `scripts/duet/dual_cf_duet.sh`
+- `scripts/duet/ada_pop_duet.sh`
 - `scripts/popqa/dual_cf_popqa.sh`
 - `scripts/rwku/dual_cf_rwku.sh`
 - `scripts/duet/ga_duet.sh`
 - `scripts/duet/npo_duet.sh`
 - `scripts/duet/npo_sam_duet.sh`
 - `scripts/duet/loku_duet.sh`
+- `scripts/rwku/ada_pop_rwku.sh`
 - `scripts/rwku/ga_rwku.sh`
 - `scripts/rwku/npo_rwku.sh`
 - `scripts/rwku/npo_sam_rwku.sh`
@@ -297,6 +301,59 @@ The checkpoint/eval flow is still two-stage for every method:
 2. run `scripts/duet/eval_checkpoints_duet.sh` or
    `scripts/rwku/eval_checkpoints_rwku.sh` on the saved run directory to score
    all half-epoch checkpoints and produce `checkpoint_evals/summary.tsv`
+
+## AdaPop production-parity uplift (2026-03-23)
+
+AdaPop was already registered in the repo, but it was still wired through the
+older WGA-era DUET / RWKU launchers. The current uplift keeps the same method
+family while aligning AdaPop with the production baseline stack.
+
+Changed files:
+
+- `src/trainer/utils.py`
+- `src/trainer/unlearn/ada_pop.py`
+- `configs/trainer/AdaPop.yaml`
+- `configs/experiment/unlearn/duet/ada_pop_lora.yaml`
+- `configs/experiment/unlearn/rwku/ada_pop_lora.yaml`
+- `scripts/duet/ada_pop_duet.sh`
+- `scripts/rwku/ada_pop_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/build_results_combine_tables.py`
+
+Updates:
+
+- `beta_from_pop_sum_tensor()` and AdaPop now expose configurable
+  `beta_a=58.7` and `beta_b=0.796`, instead of hard-wiring the clipped
+  popularity law shape
+- AdaPop now has dedicated DUET / RWKU experiment configs instead of reusing
+  `wga_lora.yaml`
+- `scripts/duet/ada_pop_duet.sh` now matches the newer DUET baseline launchers:
+  - respects shared `OUTPUT_ROOT`
+  - supports tokenizer path / subfolder overrides for DUET SFT bases
+  - supports `EVAL_BATCH_SIZE`, `MAX_STEPS`, `CHECKPOINT_EVERY_HALF_EPOCH`, and
+    `SAVE_TOTAL_LIMIT`
+  - runs endpoint eval, optional checkpoint eval, and optional top-level
+    safetensors cleanup in the same lifecycle as GA / NPO / SimNPO
+- `scripts/rwku/ada_pop_rwku.sh` now matches the newer RWKU baseline launchers:
+  - respects shared `OUTPUT_ROOT`
+  - supports `TOKENIZER_MODEL_PATH`, `EVAL_BATCH_SIZE`, `MAX_STEPS`,
+    `CHECKPOINT_EVERY_HALF_EPOCH`, and `SAVE_TOTAL_LIMIT`
+  - propagates `HF_TOKEN` into `HUGGINGFACE_HUB_TOKEN` when needed for gated
+    environments
+  - keeps the existing `eval.duet.batch_size=...` RWKU override style used by
+    the other RWKU direct launchers
+- the campaign and wrapper path now includes AdaPop by default:
+  - `scripts/duet/run_dualcf_ablation_v2.sh`
+  - `scripts/rwku/run_dualcf_ablation_v2.sh`
+  - `scripts/dualcf/run_campaign_one_lr.sh`
+- save checking and downstream summary tooling now recognize `ada_pop` run
+  names, so AdaPop no longer disappears from structured saves, sanity exports,
+  or combined table generation
 
 ## Verification-driven fixes (2026-03-09)
 
@@ -613,7 +670,7 @@ to support:
 - difficulty-only
 - attribution-only
 - DPO on the same artifact
-- GA / NPO / NPO-SAM / LoKU baseline dispatch
+- GA / AdaPop / NPO / NPO-SAM / LoKU baseline dispatch
 
 ### Checkpoint evaluation
 

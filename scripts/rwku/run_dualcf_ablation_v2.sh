@@ -30,6 +30,9 @@ case "${METHOD_VARIANT}" in
   ga)
     exec bash "${script_dir}/ga_rwku.sh"
     ;;
+  ada_pop)
+    exec bash "${script_dir}/ada_pop_rwku.sh"
+    ;;
   npo)
     exec bash "${script_dir}/npo_rwku.sh"
     ;;

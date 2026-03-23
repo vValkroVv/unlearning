@@ -8,6 +8,8 @@ method_args:
   alpha0: 0.5
   alpha_const: null
   beta_const: null
+  beta_a: 58.7
+  beta_b: 0.796
   eps: 0.1
   dual_lr: 0.1
   lambda_max: 5.0
