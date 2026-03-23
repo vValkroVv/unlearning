@@ -200,3 +200,6 @@ scripts/recalc_duet_rouge_recall.py
 .hf_home/
 .hf_datasets_cache/
 .triton/
+
+# macOS Finder metadata
+.DS_Store

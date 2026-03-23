@@ -1836,6 +1836,10 @@ Updates:
   - ARC
 - the same helper can also emit a Beamer `.tex` deck with one slide per
   split/LR/epoch table, using the same row ordering and metric columns
+- when both `--simnpo-root` and `--simplece-old-root` are provided, the helper
+  keeps the `SimNPO` row and labels the two SimpleCE sources separately as
+  `SimpleCE_new` and `SimpleCE_old` in both the combined tables and the
+  SimpleCE-only tables
 
 Example command:
 
@@ -1843,6 +1847,10 @@ Example command:
 python src/tools/build_results_combine_tables.py \
   --old-root metrics-ep5-all-v2/structured-saves \
   --new-root metrics-ep5-dualfc-new_cf/structured-saves \
+  --simnpo-root metrics-ep5-simnpo_simplece/structured-saves \
+  --simplece-old-root metrics-ep5-simplece-oldcf/structured-saves \
   --output-file results-combine/combined_tables.txt \
-  --output-slides-tex results-combine/combined_tables_slides.tex
+  --output-slides-tex results-combine/combined_tables_slides.tex \
+  --output-simplece-file results-combine/simplece_tables.txt \
+  --output-simplece-slides-tex results-combine/simplece_tables_slides.tex
 ```

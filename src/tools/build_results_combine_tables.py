@@ -39,10 +39,8 @@ COMBINED_ROW_SPECS = [
     ("old", "d_only", "d-only-old", "orange!10"),
     ("old", "a_only", "a-only-old", "green!10"),
     ("old", "dpo", "DPO-old", "gray!8"),
-    ("old", "simple_ce", "Simple-CE", "gray!8"),
     ("old", "ga", "GA", "gray!8"),
     ("old", "npo", "NPO", "gray!8"),
-    ("old", "simnpo", "SimNPO", "gray!8"),
     ("old", "npo_sam", "NPO-SAM", "gray!8"),
     ("old", "loku", "LoKU", "gray!8"),
     ("new", "full", "Full-new", "blue!20"),
@@ -51,7 +49,7 @@ COMBINED_ROW_SPECS = [
     ("new", "dpo", "DPO-new", "gray!15"),
 ]
 SIMNPO_ROW_SPEC = ("simnpo", "simnpo", "SimNPO", "red!12")
-COMBINED_SIMPLECE_SLIDE_METHODS = [
+COMBINED_SIMPLECE_METHODS = [
     "simple_ce_cf1_ret1_gamma0",
     "simple_ce_cf0p5_ret1_gamma0",
 ]
@@ -94,7 +92,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--simnpo-root",
         type=Path,
-        help="Optional path to a structured-saves directory that contains simnpo/simple_ce rows.",
+        help="Optional path to a structured-saves directory that contains simnpo rows and the newer simple_ce rows.",
+    )
+    parser.add_argument(
+        "--simplece-old-root",
+        type=Path,
+        help="Optional path to a structured-saves directory that contains the older simple_ce rows to compare against --simnpo-root.",
     )
     parser.add_argument(
         "--output-simplece-file",
@@ -205,9 +208,22 @@ def build_slide_frame(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    compact: bool = False,
 ) -> str:
     header_cells = build_header_cells()
     row_lines = build_row_cells(epoch_column, bundles, row_specs)
+
+    table_font = r"\scriptsize"
+    tabcolsep = "3.6pt"
+    arraystretch = "1.05"
+    max_totalheight = "0.78\\textheight"
+    top_vspace = "0.35em"
+    if compact:
+        table_font = r"\fontsize{6.7}{7.4}\selectfont"
+        tabcolsep = "3.3pt"
+        arraystretch = "1.00"
+        max_totalheight = "0.75\\textheight"
+        top_vspace = "0.20em"
 
     lines = [
         r"\begin{frame}[t]",
@@ -216,12 +232,12 @@ def build_slide_frame(
         r"",
         r"{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}",
         r"",
-        r"\vspace{0.35em}",
+        rf"\vspace{{{top_vspace}}}",
         r"\centering",
-        r"\scriptsize",
-        r"\setlength{\tabcolsep}{3.6pt}",
-        r"\renewcommand{\arraystretch}{1.05}",
-        r"\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}",
+        table_font,
+        rf"\setlength{{\tabcolsep}}{{{tabcolsep}}}",
+        rf"\renewcommand{{\arraystretch}}{{{arraystretch}}}",
+        rf"\begin{{adjustbox}}{{max width=\textwidth,max totalheight={max_totalheight},center}}",
         r"\begin{tabular}{l*{9}{r}}",
         r"\toprule",
         " & ".join(header_cells) + r" \\",
@@ -357,50 +373,68 @@ def simple_ce_sort_key(method_name: str) -> tuple[float, float, float, str]:
     return (cf_value, ret_value, gamma_value, method_name)
 
 
-def simple_ce_display_name(method_name: str) -> str:
+def simple_ce_display_name(method_name: str, variant_tag: str | None = None) -> str:
     match = SIMPLE_CE_RE.fullmatch(method_name)
     if match is None:
         return method_name
+    prefix = "SimpleCE" if variant_tag is None else f"SimpleCE_{variant_tag}"
     cf_value = (match.group("cf") or "--").replace("p", ".")
     ret_value = (match.group("ret") or "--").replace("p", ".")
     gamma_value = (match.group("gamma") or "--").replace("p", ".")
-    return f"SimpleCE cf={cf_value} ret={ret_value} gamma={gamma_value}"
+    return f"{prefix} cf={cf_value} ret={ret_value} gamma={gamma_value}"
 
 
 def build_bundles(root_map: dict[str, Path], split: str, lr: str) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
     return {source_name: load_table_bundle(root, split, lr) for source_name, root in root_map.items()}
 
 
-def build_combined_row_specs(simnpo_root: Path | None) -> list[tuple[str, str, str, str]]:
+def build_combined_row_specs(
+    simnpo_root: Path | None,
+    simplece_old_root: Path | None,
+) -> list[tuple[str, str, str, str]]:
     row_specs = list(COMBINED_ROW_SPECS)
     if simnpo_root is not None:
         row_specs.append(SIMNPO_ROW_SPEC)
+        variant_tag = "new" if simplece_old_root is not None else None
+        for method_name in COMBINED_SIMPLECE_METHODS:
+            row_specs.append(
+                ("simplece_new", method_name, simple_ce_display_name(method_name, variant_tag), "")
+            )
+            if simplece_old_root is not None:
+                row_specs.append(
+                    ("simplece_old", method_name, simple_ce_display_name(method_name, "old"), "")
+                )
     return row_specs
 
 
-def build_combined_slide_row_specs(simnpo_root: Path | None) -> list[tuple[str, str, str, str]]:
-    row_specs = build_combined_row_specs(simnpo_root)
-    if simnpo_root is not None:
-        for method_name in COMBINED_SIMPLECE_SLIDE_METHODS:
-            row_specs.append(("simnpo", method_name, simple_ce_display_name(method_name), ""))
-    return row_specs
+def build_combined_slide_row_specs(
+    simnpo_root: Path | None,
+    simplece_old_root: Path | None,
+) -> list[tuple[str, str, str, str]]:
+    return build_combined_row_specs(simnpo_root, simplece_old_root)
 
 
 def load_simplece_row_specs(
-    simplece_root: Path,
+    source_specs: list[tuple[str, Path, str | None, str]],
     split: str,
     lr: str,
-    *,
-    with_colors: bool = True,
 ) -> list[tuple[str, str, str, str]]:
     first_metric = METRICS[0][0]
-    rows = load_metric_rows(simplece_root / split / lr / f"{first_metric}.tsv")
-    methods = sorted(
-        (method_name for method_name in rows if method_name.startswith("simple_ce")),
-        key=simple_ce_sort_key,
-    )
-    color = "blue!12" if with_colors else ""
-    return [("simplece", method_name, simple_ce_display_name(method_name), color) for method_name in methods]
+    methods_by_source: dict[str, set[str]] = {}
+    all_methods: set[str] = set()
+    for source_name, root, _variant_tag, _color in source_specs:
+        rows = load_metric_rows(root / split / lr / f"{first_metric}.tsv")
+        methods = {method_name for method_name in rows if method_name.startswith("simple_ce")}
+        methods_by_source[source_name] = methods
+        all_methods.update(methods)
+
+    row_specs: list[tuple[str, str, str, str]] = []
+    for source_name, _root, variant_tag, color in source_specs:
+        for method_name in sorted(methods_by_source[source_name], key=simple_ce_sort_key):
+            row_specs.append(
+                (source_name, method_name, simple_ce_display_name(method_name, variant_tag), color)
+            )
+    return row_specs
 
 
 def build_output_text(
@@ -450,6 +484,7 @@ def build_frames(
     row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
     bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
     title_prefix: str,
+    compact: bool = False,
 ) -> list[str]:
     frames: list[str] = []
     for split in SPLITS:
@@ -463,6 +498,7 @@ def build_frames(
                         epoch_column=epoch_column,
                         bundles=bundles,
                         row_specs=row_specs,
+                        compact=compact,
                     )
                 )
     return frames
@@ -477,6 +513,9 @@ def main() -> None:
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
+    simplece_old_root = (
+        None if args.simplece_old_root is None else args.simplece_old_root.expanduser().resolve()
+    )
     output_simplece_file = (
         None if args.output_simplece_file is None else args.output_simplece_file.expanduser().resolve()
     )
@@ -489,12 +528,19 @@ def main() -> None:
     combined_roots = {"old": old_root, "new": new_root}
     if simnpo_root is not None:
         combined_roots["simnpo"] = simnpo_root
+        combined_roots["simplece_new"] = simnpo_root
+    if simplece_old_root is not None:
+        combined_roots["simplece_old"] = simplece_old_root
 
     combined_row_specs_by_split_lr = {
-        (split, lr): build_combined_row_specs(simnpo_root) for split in SPLITS for lr in LRS
+        (split, lr): build_combined_row_specs(simnpo_root, simplece_old_root)
+        for split in SPLITS
+        for lr in LRS
     }
     combined_slide_row_specs_by_split_lr = {
-        (split, lr): build_combined_slide_row_specs(simnpo_root) for split in SPLITS for lr in LRS
+        (split, lr): build_combined_slide_row_specs(simnpo_root, simplece_old_root)
+        for split in SPLITS
+        for lr in LRS
     }
     combined_bundles_by_split_lr = {
         (split, lr): build_bundles(combined_roots, split, lr) for split in SPLITS for lr in LRS
@@ -516,6 +562,7 @@ def main() -> None:
             row_specs_by_split_lr=combined_slide_row_specs_by_split_lr,
             bundles_by_split_lr=combined_bundles_by_split_lr,
             title_prefix="Combined Tables",
+            compact=True,
         )
         slides_tex = build_slides_tex(
             title="Combined DualCF Tables",
@@ -528,16 +575,35 @@ def main() -> None:
         if simnpo_root is None:
             raise ValueError("--simnpo-root is required when writing SimpleCE-only outputs")
         output_simplece_file.parent.mkdir(parents=True, exist_ok=True)
+        if simplece_old_root is None:
+            simplece_source_specs = [("simplece", simnpo_root, None, "blue!12")]
+            simplece_slide_source_specs = [("simplece", simnpo_root, None, "")]
+            simplece_root_map = {"simplece": simnpo_root}
+        else:
+            simplece_source_specs = [
+                ("simplece_old", simplece_old_root, "old", "orange!12"),
+                ("simplece_new", simnpo_root, "new", "blue!12"),
+            ]
+            simplece_slide_source_specs = [
+                ("simplece_old", simplece_old_root, "old", ""),
+                ("simplece_new", simnpo_root, "new", ""),
+            ]
+            simplece_root_map = {
+                "simplece_old": simplece_old_root,
+                "simplece_new": simnpo_root,
+            }
         simplece_row_specs_by_split_lr = {
-            (split, lr): load_simplece_row_specs(simnpo_root, split, lr) for split in SPLITS for lr in LRS
+            (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr)
+            for split in SPLITS
+            for lr in LRS
         }
         simplece_slide_row_specs_by_split_lr = {
-            (split, lr): load_simplece_row_specs(simnpo_root, split, lr, with_colors=False)
+            (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr)
             for split in SPLITS
             for lr in LRS
         }
         simplece_bundles_by_split_lr = {
-            (split, lr): build_bundles({"simplece": simnpo_root}, split, lr) for split in SPLITS for lr in LRS
+            (split, lr): build_bundles(simplece_root_map, split, lr) for split in SPLITS for lr in LRS
         }
         simplece_output_text = build_output_text(
             header_comment="% SimpleCE-only tables generated by src/tools/build_results_combine_tables.py",

@@ -294,7 +294,6 @@ Directory Structure:
 ├── loku_integration_diff.md
 ├── Makefile
 ├── MU.yml
-├── new-scripts.md
 ├── npo_integration_diff.md
 ├── npo_sam_integration_diff.md
 ├── npo_sam.md
@@ -308,8 +307,6 @@ Directory Structure:
 ├── prod-runs.md
 ├── r2d_integration_diff.md
 ├── README.md
-│   ├── results-combine/combined_tables_slides.pdf
-│   ├── results-combine/combined_tables_slides.tex
 ├── results-run.md
 ├── run-bert-cos-sim.md
 │   ├── scripts/calc_cos_sim.py
@@ -422,6 +419,7 @@ Directory Structure:
 │   │   ├── src/tools/checkpoint_summary_utils.py
 │   │   ├── src/tools/clean_counterfactuals.py
 │   │   ├── src/tools/dual_cf_artifact_utils.py
+│   │   ├── src/tools/export_unlearning_sanity_checks.py
 │   │   ├── src/tools/falcon_mi_select.py
 │   │   ├── src/tools/fix_numeric_empty_counterfactuals.py
 │   │   ├── src/tools/loku_measure_importance.py
@@ -465,6 +463,7 @@ Directory Structure:
 │       │   └── src/trainer/unlearn/wga.py
 │       └── src/trainer/utils.py
 │   ├── tests/test_duet_split_overrides.py
+│   ├── tests/test_export_unlearning_sanity_checks.py
 │   ├── tests/test_lm_eval_wrapper.py
 │   └── tests/test_utility_pipeline.py
 ├── tmp_rwku_apply_manual_fixes.py
@@ -4765,6 +4764,46 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 ```
+
+## Post-run sanity export
+
+Use `src/tools/export_unlearning_sanity_checks.py` to build readable `.txt`
+sanity-check reports from endpoint eval logs. The helper:
+
+- scans one or more run roots,
+- filters by exact LR values,
+- picks the same sampled forget / holdout examples across all matching methods,
+- prints the question, target answer, generated answer, per-sample
+  `rougeL_recall`, and per-sample cosine similarity,
+- prints the matched save path beside each algorithm entry so same-method runs
+  with different hyperparameters remain distinguishable in the text output,
+- writes `report_index.tsv`, `matched_runs.tsv`, and `missing_sample_logs.tsv`
+  beside the text reports.
+
+Example:
+
+```bash
+python src/tools/export_unlearning_sanity_checks.py \
+  --input-root saves-old \
+  --input-root saves-new-cf \
+  --lr 1e-4 \
+  --lr 5e-5 \
+  --sample-count 10 \
+  --output-root sanity-checks/lr_1e-4_5e-5 \
+  --overwrite
+```
+
+Notes:
+
+- The exporter reads endpoint `evals/DUET_EVAL.json` files. If a save root only
+  preserved `DUET_SUMMARY.json` (for example a summary-only `saves-clean`
+  copy), the script records that in `missing_sample_logs.tsv` and skips
+  per-sample text export for that run.
+- `COS_SIM_EVAL.json` is reused when present. If it is missing, the exporter
+  computes cosine similarity on demand with
+  `sentence-transformers/all-MiniLM-L6-v2` or `SBERT_MODEL_PATH`.
+- Run the exporter against the raw save tree before any cleanup step that drops
+  endpoint `DUET_EVAL.json`.
 
 ## Llama
 
@@ -12793,10 +12832,6 @@ setup(
 
 </content>
 
-<content full_path="new-scripts.md">
-
-</content>
-
 <content full_path="check_saves.py">
 #!/usr/bin/env python3
 """Check DualCF campaign saves created by run_campaign_one_lr.sh."""
@@ -14037,6 +14072,50 @@ This runs on each H100, in order:
 
 If you want only DUET and no RWKU yet, change `all` to `duet_all` in the same
 four commands.
+
+## Additional SimpleCE Runs
+
+Also ran these standalone `simple_ce` campaigns:
+
+```bash
+METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+
+METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-5 all
+
+METHOD_VARIANTS=simple_ce \
+CF_WEIGHTS="0.5 1 2" \
+RETAIN_WEIGHTS=1 \
+GAMMAS="0 1 2" \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 5e-5 all
+
+METHOD_VARIANTS=simple_ce \
+CF_WEIGHTS="0.5 1 2" \
+RETAIN_WEIGHTS=1 \
+GAMMAS="0 1 2" \
+bash scripts/dualcf/run_campaign_one_lr.sh 4 1e-4 all
+```
+
+## Post-run cosine-sim sweep
+
+After the campaign finishes, write cosine-sim artifacts alongside every saved
+`DUET_EVAL.json` under `${OUTPUT_ROOT}`:
+
+```bash
+python scripts/calc_cos_sim.py \
+  --path_to_saves "${OUTPUT_ROOT}" \
+  --gpu "${COS_SIM_CUDA_VISIBLE_DEVICES:-0}"
+```
+
+## Package clean saves
+
+Package the summary-only saves tree into a local clean directory plus zip:
+
+```bash
+bash package_saves.sh \
+  --path_to_saves "${OUTPUT_ROOT%/unlearn}" \
+  --out_path /home/vkropoti/diploma/open-unlearning/saves-clean \
+  --save_eval 0
+```
 
 </content>
 
@@ -37177,1267 +37256,6 @@ popqa	32	success	17355	189.8022	1664	8.7670	1.30x
 
 </content>
 
-<content full_path="results-combine/combined_tables_slides.tex">
-\PassOptionsToPackage{table}{xcolor}
-\documentclass[aspectratio=169,11pt]{beamer}
-
-\usetheme{Madrid}
-\useinnertheme{rounded}
-\setbeamertemplate{blocks}[rounded][shadow=false]
-\setbeamertemplate{navigation symbols}{}
-\setbeamertemplate{footline}[frame number]
-\setbeamersize{text margin left=6mm, text margin right=6mm}
-
-\usepackage{iftex}
-\ifPDFTeX
-  \usepackage[utf8]{inputenc}
-  \usepackage[T2A]{fontenc}
-  \usepackage[english]{babel}
-  \usepackage{paratype}
-\else
-  \usepackage{fontspec}
-  \usepackage[english]{babel}
-  \defaultfontfeatures{Ligatures=TeX}
-  \IfFontExistsTF{PT Serif}{
-    \setmainfont{PT Serif}
-    \setsansfont{PT Sans}
-    \setmonofont{PT Mono}
-  }{
-    \setmainfont{DejaVu Serif}
-    \setsansfont{DejaVu Sans}
-    \setmonofont{DejaVu Sans Mono}
-  }
-\fi
-\usepackage{amsmath,amssymb}
-\usepackage{xcolor}
-\usepackage{booktabs,array,adjustbox,tabularx,multirow}
-\usepackage{hyperref}
-\hypersetup{colorlinks=true,urlcolor=blue,linkcolor=black,citecolor=black}
-\ifPDFTeX
-  \pdfsuppresswarningpagegroup=1
-\fi
-
-\ifPDFTeX
-  \DeclareUnicodeCharacter{202F}{\,}
-  \DeclareUnicodeCharacter{2013}{-}
-  \DeclareUnicodeCharacter{2014}{-}
-  \DeclareUnicodeCharacter{2011}{-}
-  \DeclareUnicodeCharacter{2212}{-}
-  \DeclareUnicodeCharacter{2026}{...}
-\fi
-
-\definecolor{Primary}{HTML}{143B63}
-\definecolor{Accent}{HTML}{0F766E}
-\definecolor{Warm}{HTML}{B45309}
-\definecolor{SoftBlue}{HTML}{EFF6FF}
-\definecolor{SoftTeal}{HTML}{ECFDF5}
-\definecolor{SoftGray}{HTML}{F3F4F6}
-\definecolor{SoftRed}{HTML}{FEE2E2}
-
-\setbeamercolor{structure}{fg=Primary}
-\setbeamercolor{title}{fg=Primary}
-\setbeamercolor{frametitle}{fg=Primary,bg=white}
-\setbeamercolor{block title}{fg=white,bg=Primary}
-\setbeamercolor{block body}{fg=black,bg=SoftGray}
-\setbeamercolor{alertblock title}{fg=white,bg=Accent}
-\setbeamercolor{alertblock body}{fg=black,bg=SoftTeal}
-
-\title{Combined Old/New DualCF Tables}
-\subtitle{16 split/LR/epoch slides}
-\author{Generated from open-unlearning metrics}
-\date{}
-
-\begin{document}
-
-\begin{frame}[t]
-\frametitle{DUET Rare | LR = 1e-4 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 45.8 & 97.7 & 58.1 & 98.3 & 59.4 & 36.8 & 70.0 & 68.0 & 85.5 \\
-\rowcolor{orange!10}
-d-only-old & 41.7 & 94.5 & 55.8 & 96.3 & 59.1 & 36.2 & 69.0 & 69.5 & 84.5 \\
-\rowcolor{green!10}
-a-only-old & 64.2 & 98.8 & 72.8 & 99.2 & 60.1 & 37.2 & 70.5 & 69.5 & 86.0 \\
-\rowcolor{gray!8}
-DPO-old & 66.5 & 97.7 & 71.0 & 98.4 & 60.2 & 37.5 & 70.5 & 69.5 & 86.0 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.7 & 9.3 & 52.5 & 27.3 & 73.0 & 61.0 & 74.0 \\
-\rowcolor{gray!8}
-NPO & 82.2 & 97.3 & 70.7 & 96.7 & 60.6 & 38.2 & 70.5 & 70.5 & 85.5 \\
-\rowcolor{gray!8}
-NPO-SAM & 38.4 & 95.9 & 56.9 & 96.5 & 60.9 & 39.0 & 72.5 & 68.0 & 86.0 \\
-\rowcolor{gray!8}
-LoKU & 2.7 & 90.4 & 39.1 & 94.2 & 45.6 & 23.5 & 54.5 & 56.0 & 70.5 \\
-\rowcolor{blue!20}
-Full-new & 13.9 & 95.8 & 35.9 & 97.1 & 59.2 & 36.5 & 67.0 & 71.0 & 85.0 \\
-\rowcolor{orange!20}
-d-only-new & 4.9 & 91.3 & 31.5 & 94.1 & 58.9 & 36.0 & 68.0 & 70.0 & 84.5 \\
-\rowcolor{green!20}
-a-only-new & 51.1 & 96.5 & 66.5 & 97.6 & 59.0 & 36.0 & 67.0 & 71.0 & 85.0 \\
-\rowcolor{gray!15}
-DPO-new & 80.7 & 99.0 & 79.5 & 99.1 & 59.7 & 37.8 & 68.0 & 69.5 & 85.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Rare | LR = 1e-4 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 39.3 & 99.1 & 53.1 & 99.3 & 58.8 & 36.5 & 69.0 & 68.5 & 83.5 \\
-\rowcolor{orange!10}
-d-only-old & 36.3 & 98.3 & 51.6 & 98.8 & 59.3 & 37.8 & 69.0 & 68.5 & 83.5 \\
-\rowcolor{green!10}
-a-only-old & 44.9 & 99.6 & 57.0 & 99.7 & 59.8 & 36.2 & 71.5 & 70.0 & 85.0 \\
-\rowcolor{gray!8}
-DPO-old & 56.5 & 99.5 & 67.8 & 99.7 & 60.0 & 36.5 & 70.5 & 69.5 & 87.0 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.7 & 9.3 & 41.7 & 19.5 & 65.0 & 59.0 & 45.5 \\
-\rowcolor{gray!8}
-NPO & 79.5 & 99.3 & 69.5 & 99.3 & 60.1 & 36.0 & 70.5 & 72.0 & 86.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 15.1 & 98.3 & 45.5 & 98.5 & 60.6 & 38.5 & 72.0 & 69.5 & 84.5 \\
-\rowcolor{gray!8}
-LoKU & 1.0 & 97.6 & 28.0 & 98.2 & 46.0 & 26.5 & 55.0 & 54.0 & 68.0 \\
-\rowcolor{blue!20}
-Full-new & 5.6 & 98.6 & 29.4 & 99.0 & 59.2 & 37.2 & 66.5 & 70.0 & 85.0 \\
-\rowcolor{orange!20}
-d-only-new & 1.4 & 96.5 & 26.8 & 97.6 & 57.3 & 33.8 & 65.0 & 69.5 & 84.5 \\
-\rowcolor{green!20}
-a-only-new & 7.1 & 98.6 & 28.4 & 99.1 & 59.4 & 37.2 & 66.5 & 70.5 & 85.5 \\
-\rowcolor{gray!15}
-DPO-new & 64.1 & 99.8 & 76.7 & 99.8 & 58.9 & 36.5 & 68.0 & 68.5 & 85.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Rare | LR = 5e-5 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 56.5 & 97.2 & 67.0 & 97.8 & 59.6 & 37.0 & 69.0 & 68.5 & 86.5 \\
-\rowcolor{orange!10}
-d-only-old & 48.7 & 94.0 & 60.2 & 95.8 & 59.6 & 37.0 & 70.0 & 68.0 & 86.0 \\
-\rowcolor{green!10}
-a-only-old & 61.9 & 97.3 & 71.1 & 98.0 & 59.6 & 36.8 & 68.5 & 69.5 & 86.5 \\
-\rowcolor{gray!8}
-DPO-old & 68.5 & 96.5 & 74.8 & 97.5 & 60.5 & 38.0 & 70.5 & 69.5 & 86.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.7 & 9.3 & 59.1 & 34.0 & 74.5 & 68.0 & 85.0 \\
-\rowcolor{gray!8}
-NPO & 81.1 & 95.5 & 69.4 & 95.6 & 60.5 & 38.5 & 71.0 & 69.0 & 85.5 \\
-\rowcolor{gray!8}
-NPO-SAM & 62.4 & 92.0 & 67.0 & 93.4 & 60.9 & 38.0 & 71.5 & 71.0 & 86.0 \\
-\rowcolor{gray!8}
-LoKU & 2.2 & 93.0 & 40.4 & 95.8 & 52.9 & 32.2 & 60.0 & 61.0 & 79.0 \\
-\rowcolor{blue!20}
-Full-new & 28.3 & 96.1 & 48.1 & 97.2 & 59.6 & 36.8 & 69.0 & 69.5 & 86.0 \\
-\rowcolor{orange!20}
-d-only-new & 10.3 & 89.2 & 36.8 & 92.7 & 58.6 & 35.0 & 68.0 & 69.0 & 86.0 \\
-\rowcolor{green!20}
-a-only-new & 60.8 & 96.9 & 72.1 & 97.9 & 59.8 & 37.2 & 68.5 & 70.5 & 85.5 \\
-\rowcolor{gray!15}
-DPO-new & 79.9 & 98.6 & 83.0 & 98.9 & 60.6 & 37.5 & 70.0 & 72.5 & 85.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Rare | LR = 5e-5 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 41.7 & 98.8 & 54.6 & 99.2 & 59.4 & 37.2 & 70.0 & 67.5 & 85.0 \\
-\rowcolor{orange!10}
-d-only-old & 36.6 & 97.5 & 51.9 & 98.4 & 59.4 & 37.2 & 71.0 & 67.5 & 84.0 \\
-\rowcolor{green!10}
-a-only-old & 48.3 & 99.1 & 59.8 & 99.5 & 59.9 & 36.8 & 71.5 & 68.5 & 86.0 \\
-\rowcolor{gray!8}
-DPO-old & 49.8 & 99.6 & 60.7 & 99.6 & 59.8 & 37.0 & 70.5 & 69.0 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.7 & 9.3 & 58.0 & 33.8 & 74.0 & 63.5 & 85.0 \\
-\rowcolor{gray!8}
-NPO & 79.1 & 99.6 & 71.0 & 99.4 & 60.6 & 38.5 & 71.0 & 69.0 & 86.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 65.7 & 97.2 & 68.5 & 98.1 & 60.4 & 38.2 & 71.5 & 69.0 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 1.3 & 98.1 & 37.2 & 98.8 & 52.7 & 32.8 & 58.5 & 61.5 & 78.0 \\
-\rowcolor{blue!20}
-Full-new & 16.8 & 98.5 & 38.7 & 98.8 & 59.0 & 36.8 & 67.0 & 70.0 & 84.5 \\
-\rowcolor{orange!20}
-d-only-new & 6.1 & 95.5 & 32.4 & 96.9 & 58.1 & 35.5 & 66.5 & 68.5 & 84.5 \\
-\rowcolor{green!20}
-a-only-new & 14.0 & 97.4 & 37.5 & 98.4 & 58.7 & 35.8 & 67.0 & 70.5 & 84.5 \\
-\rowcolor{gray!15}
-DPO-new & 69.5 & 99.6 & 80.1 & 99.7 & 60.3 & 37.2 & 69.5 & 72.0 & 85.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Popular | LR = 1e-4 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 9.0 & 97.3 & 72.0 & 98.7 & 58.9 & 36.5 & 68.5 & 68.5 & 84.5 \\
-\rowcolor{orange!10}
-d-only-old & 6.6 & 93.8 & 71.2 & 97.0 & 59.0 & 36.0 & 69.0 & 69.0 & 85.0 \\
-\rowcolor{green!10}
-a-only-old & 10.6 & 98.1 & 73.1 & 98.9 & 59.5 & 37.8 & 68.5 & 69.0 & 84.5 \\
-\rowcolor{gray!8}
-DPO-old & 19.3 & 98.0 & 69.7 & 98.8 & 60.4 & 37.8 & 70.0 & 71.0 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.0 & 9.3 & 59.3 & 36.5 & 71.0 & 67.0 & 85.5 \\
-\rowcolor{gray!8}
-NPO & 82.6 & 98.4 & 72.4 & 98.3 & 60.8 & 37.8 & 71.5 & 71.0 & 86.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 50.4 & 97.6 & 65.4 & 97.8 & 60.4 & 37.0 & 70.0 & 73.0 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 9.1 & 90.4 & 60.2 & 94.6 & 54.3 & 34.2 & 66.0 & 58.0 & 79.0 \\
-\rowcolor{blue!20}
-Full-new & 17.2 & 97.4 & 68.4 & 98.7 & 60.3 & 37.2 & 71.0 & 70.0 & 86.0 \\
-\rowcolor{orange!20}
-d-only-new & 5.6 & 90.5 & 63.2 & 95.5 & 61.0 & 38.8 & 70.0 & 71.5 & 86.0 \\
-\rowcolor{green!20}
-a-only-new & 20.0 & 97.7 & 71.6 & 98.7 & 60.6 & 37.2 & 71.0 & 71.5 & 86.0 \\
-\rowcolor{gray!15}
-DPO-new & 25.6 & 98.6 & 70.7 & 99.2 & 60.7 & 38.5 & 69.5 & 72.0 & 85.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Popular | LR = 1e-4 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 2.0 & 98.9 & 67.4 & 99.4 & 59.0 & 36.0 & 69.5 & 69.0 & 84.5 \\
-\rowcolor{orange!10}
-d-only-old & 1.0 & 97.5 & 66.6 & 98.9 & 59.6 & 37.5 & 71.0 & 67.5 & 84.5 \\
-\rowcolor{green!10}
-a-only-old & 3.9 & 98.9 & 68.5 & 99.5 & 59.6 & 36.8 & 70.0 & 68.5 & 86.0 \\
-\rowcolor{gray!8}
-DPO-old & 10.1 & 99.6 & 65.8 & 99.8 & 59.6 & 37.8 & 70.0 & 67.0 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.0 & 9.3 & 58.2 & 34.8 & 71.5 & 65.0 & 85.0 \\
-\rowcolor{gray!8}
-NPO & 84.3 & 99.6 & 59.7 & 99.5 & 59.5 & 36.5 & 69.5 & 70.5 & 84.5 \\
-\rowcolor{gray!8}
-NPO-SAM & 18.7 & 98.8 & 38.6 & 97.9 & 60.2 & 37.8 & 70.0 & 70.5 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 3.9 & 98.3 & 59.0 & 99.0 & 52.0 & 30.5 & 64.0 & 57.5 & 77.5 \\
-\rowcolor{blue!20}
-Full-new & 4.4 & 98.4 & 62.1 & 99.2 & 60.4 & 37.8 & 70.5 & 71.0 & 85.0 \\
-\rowcolor{orange!20}
-d-only-new & 1.5 & 94.4 & 60.9 & 97.4 & 61.0 & 38.0 & 71.0 & 72.0 & 86.0 \\
-\rowcolor{green!20}
-a-only-new & 8.1 & 99.4 & 66.0 & 99.7 & 59.7 & 36.2 & 70.5 & 70.5 & 85.0 \\
-\rowcolor{gray!15}
-DPO-new & 16.0 & 99.2 & 67.4 & 99.7 & 60.5 & 37.8 & 70.0 & 71.0 & 86.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Popular | LR = 5e-5 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 11.1 & 96.9 & 73.0 & 98.4 & 60.4 & 37.5 & 69.5 & 70.5 & 87.0 \\
-\rowcolor{orange!10}
-d-only-old & 9.2 & 91.3 & 72.6 & 95.9 & 59.8 & 36.5 & 69.5 & 69.0 & 87.5 \\
-\rowcolor{green!10}
-a-only-old & 12.7 & 98.0 & 73.8 & 98.9 & 59.8 & 37.0 & 69.0 & 69.5 & 86.5 \\
-\rowcolor{gray!8}
-DPO-old & 20.7 & 98.0 & 71.8 & 98.8 & 60.6 & 37.8 & 71.0 & 71.0 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 14.3 & 7.8 & 59.3 & 36.5 & 71.0 & 68.0 & 84.5 \\
-\rowcolor{gray!8}
-NPO & 88.8 & 98.7 & 66.6 & 97.7 & 60.1 & 37.2 & 70.5 & 70.5 & 85.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 89.4 & 96.7 & 63.6 & 94.2 & 60.6 & 37.5 & 71.5 & 71.5 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 7.7 & 93.4 & 59.7 & 96.3 & 58.2 & 37.5 & 66.5 & 64.0 & 85.5 \\
-\rowcolor{blue!20}
-Full-new & 27.1 & 96.7 & 75.0 & 98.3 & 59.9 & 38.0 & 69.0 & 69.5 & 85.0 \\
-\rowcolor{orange!20}
-d-only-new & 9.8 & 91.6 & 65.0 & 95.9 & 60.0 & 37.5 & 71.0 & 69.5 & 84.5 \\
-\rowcolor{green!20}
-a-only-new & 29.8 & 97.4 & 77.0 & 98.7 & 60.5 & 38.5 & 69.5 & 71.0 & 85.0 \\
-\rowcolor{gray!15}
-DPO-new & 38.6 & 98.2 & 76.8 & 99.0 & 60.6 & 38.0 & 70.0 & 71.5 & 85.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Popular | LR = 5e-5 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 6.8 & 99.2 & 70.7 & 99.6 & 60.0 & 36.8 & 70.5 & 69.5 & 86.5 \\
-\rowcolor{orange!10}
-d-only-old & 3.0 & 97.6 & 68.2 & 98.9 & 59.9 & 36.5 & 70.0 & 69.5 & 87.0 \\
-\rowcolor{green!10}
-a-only-old & 6.7 & 99.2 & 70.6 & 99.6 & 59.4 & 37.2 & 69.5 & 66.5 & 86.5 \\
-\rowcolor{gray!8}
-DPO-old & 10.9 & 99.6 & 67.4 & 99.8 & 60.4 & 37.2 & 71.0 & 71.0 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 14.3 & 7.8 & 58.5 & 35.8 & 71.0 & 65.5 & 84.5 \\
-\rowcolor{gray!8}
-NPO & 85.5 & 100.0 & 57.1 & 99.1 & 60.0 & 36.2 & 70.0 & 72.0 & 85.5 \\
-\rowcolor{gray!8}
-NPO-SAM & 88.3 & 99.2 & 62.9 & 98.3 & 60.4 & 37.5 & 71.0 & 71.0 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 5.7 & 99.6 & 60.5 & 99.7 & 57.1 & 34.5 & 67.5 & 66.5 & 82.5 \\
-\rowcolor{blue!20}
-Full-new & 10.0 & 99.4 & 64.0 & 99.7 & 60.1 & 36.5 & 70.0 & 71.0 & 86.5 \\
-\rowcolor{orange!20}
-d-only-new & 5.8 & 95.7 & 62.0 & 98.1 & 60.4 & 37.5 & 71.5 & 70.0 & 85.5 \\
-\rowcolor{green!20}
-a-only-new & 9.8 & 99.4 & 65.5 & 99.7 & 59.8 & 36.0 & 69.0 & 71.5 & 86.5 \\
-\rowcolor{gray!15}
-DPO-new & 19.6 & 99.4 & 69.6 & 99.8 & 60.8 & 38.8 & 69.5 & 72.0 & 85.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Merged | LR = 1e-4 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 30.7 & 99.0 & 67.5 & 99.3 & 59.0 & 36.5 & 69.0 & 68.0 & 85.0 \\
-\rowcolor{orange!10}
-d-only-old & 23.8 & 96.5 & 62.6 & 98.0 & 58.7 & 35.2 & 69.5 & 69.0 & 84.5 \\
-\rowcolor{green!10}
-a-only-old & 38.4 & 99.4 & 74.3 & 99.7 & 58.4 & 35.8 & 67.5 & 67.0 & 86.0 \\
-\rowcolor{gray!8}
-DPO-old & 27.1 & 98.3 & 62.9 & 98.7 & 60.5 & 37.8 & 71.0 & 70.5 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.3 & 9.3 & 49.3 & 22.8 & 69.5 & 60.0 & 71.5 \\
-\rowcolor{gray!8}
-NPO & 81.4 & 98.3 & 63.5 & 98.4 & 60.4 & 38.0 & 71.0 & 70.0 & 85.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 57.2 & 96.9 & 61.7 & 97.4 & 60.8 & 37.5 & 71.0 & 71.5 & 86.5 \\
-\rowcolor{gray!8}
-LoKU & 6.5 & 91.1 & 50.4 & 94.1 & 44.3 & 24.5 & 46.0 & 57.0 & 69.5 \\
-\rowcolor{blue!20}
-Full-new & 28.4 & 99.3 & 62.7 & 99.6 & 59.9 & 37.0 & 69.0 & 70.5 & 86.0 \\
-\rowcolor{orange!20}
-d-only-new & 22.9 & 97.3 & 59.4 & 98.3 & 59.8 & 37.0 & 69.0 & 69.0 & 87.0 \\
-\rowcolor{green!20}
-a-only-new & 41.5 & 99.8 & 71.0 & 99.9 & 59.7 & 37.8 & 68.0 & 70.0 & 85.0 \\
-\rowcolor{gray!15}
-DPO-new & 63.6 & 100.0 & 77.0 & 100.0 & 59.8 & 37.2 & 70.5 & 68.5 & 85.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Merged | LR = 1e-4 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 22.1 & 99.7 & 61.3 & 99.8 & 57.8 & 34.2 & 69.0 & 68.0 & 83.5 \\
-\rowcolor{orange!10}
-d-only-old & 18.4 & 98.7 & 58.6 & 99.2 & 57.8 & 34.8 & 68.0 & 68.5 & 83.0 \\
-\rowcolor{green!10}
-a-only-old & 24.0 & 99.8 & 62.3 & 99.9 & 58.2 & 35.8 & 69.5 & 66.5 & 83.5 \\
-\rowcolor{gray!8}
-DPO-old & 24.9 & 100.0 & 61.4 & 100.0 & 60.3 & 38.0 & 70.5 & 70.0 & 85.0 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.3 & 9.3 & 45.6 & 21.0 & 71.5 & 56.0 & 58.5 \\
-\rowcolor{gray!8}
-NPO & 79.2 & 99.8 & 62.6 & 99.4 & 60.2 & 37.5 & 72.0 & 70.0 & 84.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 47.7 & 99.0 & 50.4 & 96.9 & 60.7 & 37.8 & 71.0 & 72.0 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 4.4 & 99.8 & 46.8 & 99.7 & 46.2 & 25.8 & 55.5 & 55.0 & 69.0 \\
-\rowcolor{blue!20}
-Full-new & 6.9 & 99.6 & 47.3 & 99.8 & 59.2 & 37.2 & 68.5 & 66.0 & 87.0 \\
-\rowcolor{orange!20}
-d-only-new & 9.7 & 99.5 & 46.6 & 99.6 & 59.5 & 37.0 & 70.0 & 68.0 & 85.5 \\
-\rowcolor{green!20}
-a-only-new & 17.6 & 100.0 & 53.3 & 100.0 & 60.7 & 37.0 & 70.0 & 73.0 & 86.5 \\
-\rowcolor{gray!15}
-DPO-new & 44.8 & 100.0 & 69.6 & 100.0 & 60.3 & 38.5 & 71.0 & 67.5 & 86.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Merged | LR = 5e-5 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 31.6 & 99.2 & 69.3 & 99.6 & 59.2 & 36.0 & 68.5 & 69.0 & 86.5 \\
-\rowcolor{orange!10}
-d-only-old & 26.3 & 95.0 & 65.4 & 97.4 & 58.6 & 35.2 & 70.0 & 67.5 & 85.0 \\
-\rowcolor{green!10}
-a-only-old & 35.0 & 99.0 & 71.3 & 99.3 & 59.5 & 36.8 & 68.5 & 70.0 & 85.5 \\
-\rowcolor{gray!8}
-DPO-old & 41.4 & 97.9 & 70.8 & 98.5 & 59.7 & 37.2 & 69.0 & 69.0 & 86.0 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.3 & 9.3 & 57.8 & 33.8 & 71.5 & 65.0 & 85.0 \\
-\rowcolor{gray!8}
-NPO & 87.0 & 97.9 & 61.9 & 96.6 & 60.6 & 37.2 & 71.5 & 71.0 & 86.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 83.4 & 97.0 & 64.2 & 95.8 & 60.6 & 37.5 & 73.0 & 70.0 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 7.2 & 94.8 & 50.9 & 96.9 & 55.0 & 33.8 & 63.0 & 64.5 & 80.0 \\
-\rowcolor{blue!20}
-Full-new & 43.1 & 98.7 & 73.1 & 99.3 & 59.0 & 35.8 & 70.0 & 67.5 & 86.0 \\
-\rowcolor{orange!20}
-d-only-new & 24.8 & 96.1 & 58.1 & 97.5 & 59.0 & 36.5 & 69.5 & 68.5 & 84.0 \\
-\rowcolor{green!20}
-a-only-new & 58.6 & 99.4 & 83.2 & 99.7 & 59.7 & 37.5 & 69.0 & 69.5 & 85.0 \\
-\rowcolor{gray!15}
-DPO-new & 47.8 & 98.6 & 70.9 & 99.2 & 60.1 & 37.2 & 70.5 & 69.0 & 86.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{DUET Merged | LR = 5e-5 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 26.1 & 99.5 & 64.3 & 99.8 & 58.4 & 34.5 & 67.5 & 71.5 & 84.0 \\
-\rowcolor{orange!10}
-d-only-old & 21.9 & 99.2 & 61.0 & 99.5 & 57.8 & 35.5 & 68.0 & 67.5 & 82.5 \\
-\rowcolor{green!10}
-a-only-old & 27.1 & 100.0 & 65.5 & 100.0 & 57.9 & 34.8 & 67.5 & 67.0 & 85.5 \\
-\rowcolor{gray!8}
-DPO-old & 27.3 & 99.7 & 62.8 & 99.9 & 60.0 & 37.8 & 69.5 & 70.0 & 85.0 \\
-\rowcolor{gray!8}
-GA & 0.0 & 0.0 & 9.3 & 9.3 & 55.2 & 33.0 & 69.0 & 59.0 & 82.0 \\
-\rowcolor{gray!8}
-NPO & 79.7 & 99.9 & 59.5 & 99.6 & 60.6 & 37.8 & 72.0 & 70.0 & 85.5 \\
-\rowcolor{gray!8}
-NPO-SAM & 72.5 & 98.4 & 62.2 & 98.5 & 61.3 & 39.0 & 72.5 & 70.5 & 85.5 \\
-\rowcolor{gray!8}
-LoKU & 4.5 & 99.5 & 45.5 & 99.7 & 55.4 & 31.2 & 66.0 & 67.5 & 81.0 \\
-\rowcolor{blue!20}
-Full-new & 19.9 & 99.1 & 57.5 & 99.6 & 58.4 & 36.0 & 68.5 & 67.5 & 84.0 \\
-\rowcolor{orange!20}
-d-only-new & 14.5 & 99.1 & 49.0 & 99.3 & 59.4 & 37.0 & 70.0 & 68.0 & 85.0 \\
-\rowcolor{green!20}
-a-only-new & 28.8 & 99.8 & 64.2 & 99.9 & 59.5 & 36.2 & 70.5 & 67.5 & 87.0 \\
-\rowcolor{gray!15}
-DPO-new & 39.1 & 100.0 & 66.9 & 100.0 & 59.7 & 36.5 & 69.5 & 69.5 & 86.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{RWKU | LR = 1e-4 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 35.8 & 94.0 & 59.5 & 96.4 & 59.5 & 39.2 & 67.0 & 67.0 & 85.0 \\
-\rowcolor{orange!10}
-d-only-old & 21.7 & 90.0 & 51.0 & 94.0 & 58.8 & 38.5 & 67.5 & 64.0 & 85.5 \\
-\rowcolor{green!10}
-a-only-old & 45.6 & 95.3 & 65.3 & 97.1 & 60.8 & 39.0 & 69.5 & 70.5 & 86.0 \\
-\rowcolor{gray!8}
-DPO-old & 34.5 & 89.2 & 55.9 & 93.2 & 59.8 & 38.8 & 69.0 & 67.5 & 85.0 \\
-\rowcolor{gray!8}
-GA & 0.2 & 0.1 & 6.3 & 6.7 & 34.0 & 19.2 & 50.0 & 53.5 & 28.0 \\
-\rowcolor{gray!8}
-NPO & 63.5 & 91.0 & 55.4 & 92.0 & 59.8 & 39.5 & 71.5 & 63.5 & 85.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 53.0 & 88.6 & 29.9 & 88.3 & 59.6 & 39.2 & 67.5 & 67.0 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 2.8 & 87.6 & 12.8 & 91.2 & 48.9 & 27.0 & 63.0 & 59.0 & 68.5 \\
-\rowcolor{blue!20}
-Full-new & 33.0 & 94.6 & 58.8 & 96.9 & 60.0 & 38.8 & 70.0 & 67.0 & 85.5 \\
-\rowcolor{orange!20}
-d-only-new & 19.6 & 89.7 & 50.4 & 94.3 & 59.8 & 39.8 & 73.5 & 60.5 & 85.5 \\
-\rowcolor{green!20}
-a-only-new & 41.6 & 95.5 & 63.6 & 97.3 & 59.6 & 38.8 & 69.5 & 67.0 & 84.0 \\
-\rowcolor{gray!15}
-DPO-new & 34.2 & 89.6 & 56.3 & 93.2 & 60.4 & 38.8 & 71.0 & 67.5 & 86.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{RWKU | LR = 1e-4 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 17.2 & 97.8 & 48.9 & 98.7 & 58.9 & 37.8 & 65.0 & 69.5 & 84.5 \\
-\rowcolor{orange!10}
-d-only-old & 13.4 & 95.7 & 46.6 & 97.4 & 57.5 & 38.5 & 64.0 & 63.5 & 83.0 \\
-\rowcolor{green!10}
-a-only-old & 19.2 & 97.9 & 50.3 & 98.9 & 60.6 & 39.8 & 69.0 & 70.5 & 84.0 \\
-\rowcolor{gray!8}
-DPO-old & 15.7 & 94.1 & 43.4 & 96.4 & 59.8 & 37.8 & 73.0 & 65.0 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.2 & 0.1 & 6.3 & 6.7 & 31.2 & 15.8 & 48.0 & 54.0 & 22.5 \\
-\rowcolor{gray!8}
-NPO & 59.2 & 96.4 & 47.5 & 97.0 & 60.2 & 38.8 & 71.5 & 65.5 & 86.5 \\
-\rowcolor{gray!8}
-NPO-SAM & 9.2 & 93.3 & 19.0 & 92.3 & 59.8 & 39.0 & 66.5 & 68.5 & 86.0 \\
-\rowcolor{gray!8}
-LoKU & 1.8 & 97.1 & 11.3 & 98.1 & 47.8 & 25.8 & 56.5 & 63.5 & 67.5 \\
-\rowcolor{blue!20}
-Full-new & 10.1 & 97.8 & 44.9 & 98.7 & 59.0 & 37.5 & 68.5 & 68.0 & 83.5 \\
-\rowcolor{orange!20}
-d-only-new & 7.1 & 94.9 & 42.5 & 96.8 & 57.6 & 36.2 & 69.5 & 64.0 & 82.0 \\
-\rowcolor{green!20}
-a-only-new & 10.4 & 97.8 & 45.6 & 98.7 & 59.4 & 37.2 & 70.5 & 70.0 & 82.0 \\
-\rowcolor{gray!15}
-DPO-new & 11.8 & 94.9 & 42.4 & 96.9 & 58.4 & 36.0 & 72.0 & 63.5 & 84.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{RWKU | LR = 5e-5 | Epoch = 2}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 43.7 & 93.1 & 63.8 & 95.8 & 59.8 & 39.2 & 69.5 & 65.5 & 85.5 \\
-\rowcolor{orange!10}
-d-only-old & 30.9 & 87.7 & 56.2 & 92.6 & 59.4 & 39.0 & 70.0 & 63.5 & 85.5 \\
-\rowcolor{green!10}
-a-only-old & 54.2 & 94.0 & 70.5 & 96.4 & 60.0 & 40.5 & 68.5 & 63.5 & 87.0 \\
-\rowcolor{gray!8}
-DPO-old & 34.9 & 85.1 & 56.4 & 90.4 & 59.0 & 37.8 & 70.5 & 63.5 & 85.5 \\
-\rowcolor{gray!8}
-GA & 0.3 & 0.1 & 8.3 & 8.4 & 53.5 & 32.0 & 67.0 & 57.0 & 79.5 \\
-\rowcolor{gray!8}
-NPO & 68.5 & 89.5 & 66.1 & 90.1 & 59.5 & 40.2 & 69.0 & 62.0 & 86.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 68.1 & 87.0 & 33.4 & 80.2 & 59.2 & 38.2 & 68.0 & 66.0 & 85.5 \\
-\rowcolor{gray!8}
-LoKU & 5.5 & 90.2 & 19.4 & 93.0 & 57.7 & 36.0 & 70.5 & 64.0 & 82.0 \\
-\rowcolor{blue!20}
-Full-new & 46.0 & 92.7 & 66.1 & 95.8 & 60.4 & 40.5 & 70.5 & 64.5 & 86.0 \\
-\rowcolor{orange!20}
-d-only-new & 29.7 & 87.2 & 56.8 & 92.7 & 58.0 & 37.8 & 69.5 & 60.0 & 85.0 \\
-\rowcolor{green!20}
-a-only-new & 55.9 & 94.0 & 72.1 & 96.4 & 60.9 & 41.8 & 70.5 & 64.5 & 86.0 \\
-\rowcolor{gray!15}
-DPO-new & 34.9 & 84.4 & 56.8 & 90.3 & 60.4 & 40.2 & 73.0 & 63.0 & 85.5 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\begin{frame}[t]
-\frametitle{RWKU | LR = 5e-5 | Epoch = 5}
-{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}
-
-{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}
-
-\vspace{0.35em}
-\centering
-\scriptsize
-\setlength{\tabcolsep}{3.6pt}
-\renewcommand{\arraystretch}{1.05}
-\begin{adjustbox}{max width=\textwidth,max totalheight=0.78\textheight,center}
-\begin{tabular}{l*{9}{r}}
-\toprule
-Method & F$\downarrow$ & H$\uparrow$ & FC$\downarrow$ & HC$\uparrow$ & U$\uparrow$ & M$\uparrow$ & T$\uparrow$ & W$\uparrow$ & A$\uparrow$ \\
-\midrule
-\rowcolor{blue!10}
-Full-old & 22.7 & 97.2 & 51.4 & 98.3 & 56.7 & 37.8 & 62.0 & 62.0 & 84.0 \\
-\rowcolor{orange!10}
-d-only-old & 15.1 & 93.8 & 47.2 & 96.3 & 56.4 & 36.2 & 63.0 & 62.5 & 84.0 \\
-\rowcolor{green!10}
-a-only-old & 28.4 & 97.7 & 55.2 & 98.6 & 58.1 & 38.8 & 65.0 & 64.0 & 84.0 \\
-\rowcolor{gray!8}
-DPO-old & 18.3 & 93.1 & 46.4 & 95.9 & 58.8 & 37.5 & 72.0 & 62.0 & 85.0 \\
-\rowcolor{gray!8}
-GA & 0.3 & 0.1 & 8.3 & 8.4 & 50.5 & 28.2 & 60.5 & 56.5 & 79.0 \\
-\rowcolor{gray!8}
-NPO & 61.8 & 95.0 & 55.4 & 95.1 & 60.0 & 38.8 & 71.5 & 64.0 & 87.0 \\
-\rowcolor{gray!8}
-NPO-SAM & 28.3 & 92.6 & 20.4 & 92.9 & 59.8 & 39.0 & 68.5 & 67.5 & 85.0 \\
-\rowcolor{gray!8}
-LoKU & 3.2 & 97.2 & 16.3 & 98.1 & 57.4 & 34.0 & 71.5 & 64.0 & 83.5 \\
-\rowcolor{blue!20}
-Full-new & 15.3 & 96.7 & 47.9 & 98.1 & 59.0 & 39.0 & 69.5 & 63.5 & 84.0 \\
-\rowcolor{orange!20}
-d-only-new & 8.9 & 93.2 & 43.8 & 96.1 & 57.7 & 39.2 & 64.5 & 61.5 & 84.0 \\
-\rowcolor{green!20}
-a-only-new & 20.0 & 97.3 & 51.1 & 98.4 & 59.8 & 40.8 & 70.0 & 63.0 & 84.5 \\
-\rowcolor{gray!15}
-DPO-new & 14.4 & 93.5 & 43.9 & 96.2 & 59.5 & 38.5 & 73.0 & 63.5 & 84.0 \\
-\bottomrule
-\end{tabular}
-\end{adjustbox}
-\end{frame}
-
-\end{document}
-
-</content>
-
-<content full_path="results-combine/combined_tables_slides.pdf">
-%PDF-1.5
-%äðíø
-8 0 obj
-<</Filter/FlateDecode/Length 2720>>
-stream
-xÚÍKã¸ïùBrIÍåû4| ·ÝÌ-ÈÁV¦÷²{¹ìßOQXå%ÓSAhÜÖØÔ§bñSf{ú:IÃ_3%;ì1ÙiþöýÛ§uûe÷hàÑÀã×é-UêémkÁN>8¼³e²!¬­~û2}L?¶8ü¨tÊð¯uÀ®\ÎÓÏ:;¿ý?aÒþqi&ÿ¦îGà;%çð?òv½ðQiHÇ|P%y·th!úð+ÿúyúáG3¯¦ÄéóÇôò%<«ÎNÿýÏw­mÒÚexÍ¥Ë	öºp)ðà½Ö!Àc®ÿaOøØ^b?mÏôöñõõð¨ak÷Áÿ×EØn6Âå_ÿ>ýíówtÈ÷§ñ·ÚS)d¿-xèSkÜd=4QrZÃæÊÅoòïgâ©ÇØ-1pëkêÞx±ö}}¡
-imëºµQ07BLi±-Z¶¸=Ûm¡²£ë¯cÞñèµoü¼¥þÖÿKuc¯ý²½u(n÷»ÜÙ§;ûRgßµsr¦·ûÙ,±»¥ngyõgwÍ:F¯Ã¶´!R*	=ÌTÞÕG»£ë=ÃõGÚÒO[4ZØÊuLTÚÚ<»mïzNµw[$æõæKª=ÇÆ^Àc5­önøÙ®­5:×Ötçüõ}[l°zç.Î¿ßÙjÚG¦Ôi¥öF{ËX»²¬C«6ï/6´Thm>fióq\\s]£å×Ø¦{ïc+cØõØÇ6¶©fzr)ù:©lr~ú}rP ý16Äé·É¦¨\11·}¿NÿÃ*¡Ù*!ÁØÙ@¥UWÍAó¹k9Ë´ðä½?@²åð²ÿíCÓ^AZÂ%wyÙÿôûko¢
-ÁmÝºm²Asoëý¶(8»L¸Ñk/«ÏçlVÕ8ÂvØ^QEÇÎù ÔÆ9<WAýsëjxr®AÅÛûðé5i ½çM%åsô+t§·ÎgXÎè!ÁÓç
-påÏ¸¬OÏP+F¹`Á	>ÀÑ!ò}êbíx:Hpï}hUÍÜ¯îÛouÜaS6BÕÎRE$KPõ³ªütÔYhÏEM/êV·½6üÂå0e¡H -Ôº@$Æ3r¹@T9 êb 3· £pØleDFRÔû±"D÷ë:ÄÍh&rÁÊº=WÓmEòCH*Bg"ù¬)G¡ÚâR*ÃÀ/B¤¤AQý(Í+ÒPáVÎÚ D*0êkµ¾#ªâòJ[£«ÈÂMaÅ=Æ­DnÈY-Fª¢2!»G*$ÆàvÇg#õYÁ¥ÖuúíFÔ7¤zOiWA~þD1»jñ LçÐN.ù©ÖÂºðã^÷µ~bo¨"±3ÔEìô¨]Âå¹^½W°ºx]^çP¹w	|fA¡Ù{*ÜìO Ðí"(t{/R3¿>B» Ý9µ{cB¿Kß9S!qrLhxþjpìÇ ÐñêÖÂý*³2áfxêt[62Ã{ 2ÆosuõÜðg è÷*ò;]º3ñ¼?"v»s$ZÞÐí"$t;GªVx		Í.BB³÷¢4¿Ôqèuz½K®wgsV!§¬©~ì"¿	
-]EÌÞË'÷¯×EHèõ^çÍ/!¡ÕEHhut#×dz3§O÷G pÈäÁªâüD>¬r×÷C?@¡µÈÚjJétÖ1µL±pÓ)GT´ÍY®äFå0YE¨å^HnyGT±UÜK×QÞ#êWúå;ý&+*WBÛË÷5+Â@Íö:f~ja Z9ÆjAå­pV;ZsÄ9¯möþT¡íàß£Ð¤sÕìàÝ³#}J ùöNçïA@k\½³Åïæ§âFc s´ù ÈRD²äT÷y@"%Ç\ñ¹,%(Dåººû4;,E(KQF®éD"e/i\	(t]÷$eëã6Åá­CK³AêN±\6ÂÓ²Å)¡ u'ÇG
-1¨ëNÎBë0°îì¤<Å@0P¥Öe@¥"6Ë)")ÂÃsJ DÏ2c¤âa D¿%*Â@öÔa DsPÉ»$­&®D×¥cq]r¥KµA¤Ê ²5HUBA¦]9ÆL:hð©}Ê12Ù<àSú´ç3,èSúcPÎ>a4ö2t~Z5J O9Åu¤L'>a O{]r{¡(a O9Æwð%¨NB@!¬ÛäèÇ%äu±ýÒ.:´îæHËë?%Äa&C5øSþä±÷áú?EèÏ^4ÒÓ;ô§ýÉ1èºÄzTÑüÙËÎ8>* þäùàCò#0Ð=ò?EèOqPçe[WªmOØzgM1ÂéP£­.es¶Ê÷þ+Û¯Ô`¢iST®rÌeF&îkc$â^ïjî/@>BË PÅ;¨Ø/©O ÐË2(_+!H=Lø!2Tµ]½#Ëý%'P(nT3w·Ë+@¬	Ê@"ô
-ïA7f¡ÚwdÂ@¡çeP(úyx\F·lÖ'ÜôÐ!Ä,Ëú wKßpEÅ5ÇmUÃ<Cm/á¡¶ç@3É³8El/"¶çP@å!(b{áÝH¥îZÛ#("z=¢¿3SDô"(}¯÷Ê+ ¢ }ÇÔj8e"AÇs¨îoBÇ ã9ÔÁà¼°äíÂcº·Aùâ£pªÙX@7Ç%ÀUý.q|ÃUõw¾W!QÏK¨ç9Ô|T}BÏ ç9Tyx^Eªú^¤jÂ2DFd/"#²ï%ÖÜ«	¡ìEP({ÎûsÇLDö$ZÕ÷Òê¸ª?#Æãs²Ãªþ_EÏ¡ºU½®ßVpGGæy$Pß
-§Àá}Ê]N¯~7ÌïX½ÁÉ¬Îà(õV'0êr		u9G>Dâ(Äà"bpr=XÉQ·E(¤>??A!¢¡Qs|°£=Pp%Üe·nøvÌCÔ,Á¡u8Ç9úÈP{(©K,B!î¹e·¢£û4ð^h&hØ7l´ÝëWlü¾S­óµZ.çájßd­lÎ)´	íËY¾(¨~ùi_)FJ¨Áãþôÿ æÔ²
-endstream
-endobj
-12 0 obj
-<</Filter/FlateDecode/Length 2688>>
-stream
-xÚÍ;ã6óû¬»ÄÆûQ5¥àªì©rfßdW$Ý;ØMü÷¯AèV¤ én·88ø±|lM_'3iøo¦d'2&3]ÿm¿Ãò¶,¿oÖÖÖ_§dT©ÿ¦µ;ùàTðÎÉ°úíËô1ý²[âðZéá§uÀ®\ÎÓ¯oßþ°Fi{8)ÛøFÉ9ÏmeïÕ´JCÅÞ×³*Éû¸Vs;õñ`ïùÏ÷éÌd¼r>§÷é%:åK(y
-V%ÞÿóïW­mÒÚeXÃâÒéÅÆ[]8Xy¯u°Îõ¶uû1ï¶¾Óë+ãëþ°Ö°´ÉçàwÁÁba¿Ë¥SF>ýöþóôãû'*äóÍs[­©²Ã<Ô©5n²(9-asåä×yDÈ·³qÔ}ìæ¸eº5¬}]ÞC¨BZÊ:¯å@ÌéÅP#SZdlV%®ï¶G©ìÉèzäóÉW<z­]R_åw©.lß/ëÙKâB)p»Ëmº³-u¶;Çñgz¹Í»ËøYêv§X_C¼k«Ó`êÚmKë"¥ÐóÇ
-=À»º¶K7:ßZ¸þhQëi-FKY[Cív¦6wýnÝºS­ÝërN×Sª5ÇÆZÀc%­öixmRËó]iºsþú¶Ì6Xz½s'ç_olµÚ{¦Ô)¥ÖFûÈ
-X«²,]«ïO6´¦ÐÊ¼o1¤Ì3ÆqvÍy_bnµ¥`ÃR¬Ç:¶±µj¦¯ÊÉ&ç§¿&þ`¢@"Æ8ý9Ù+&æ¶íé_paX$@Bp0[%ä";È ¢*°§Y¤±=×`Ígf>¼wðHÖ6<oÿá'{W´WÐ,áR:ïöÝ?¾¿ísxU®x,ëÒ-+(t[Yïå@ÁÙeÂ5÷^yYÅd|>f³ªÆÁ¶Ýò*:æpÌ¡6Îá¹º¼s®p]Î5¨Øb{ë>½¢ hïâqQIù=ÁJ;Õé­óæ3:bÈ óô¹\ùÂ#.ëÃs.ÔçÑ{.èBÐEpf´¼@ºX+vÜzë&Zy1·«ûúæ[íwX\C¶3gdÁ@ÒÀ%ÈæY¶}Øë,ç¢¦ÕIu©Ê»ÞGë~sâ²²PL$rG] ã¹\ ªÐTO]««êë £pØleDàpHÏaï-Ò ù!$(A[°	>u±nH#yHNä³
->u¥±QeèóE4S?Jé23ÜYH:|MÔ»­»,DyÈ]ýcd@î§,¸*n
-©67Dä¬
-ÉH`ÁQ&ä`ûH§w:>©lÈ
-®²®SoÒßR½fWA~}£ïÉ]xÐEfr(O'üTSÀÕÞsJøqKûF?FE§7TÓê]«cHÄê&buu%­l
-½.B¯s¨|¡Ê ]f?Ôe
-Ý.B·÷"u}²úÐî"¨7¦uúnËësáBËKÀå9X×òÐó"(ô|êòTéEPhzÕ5ýíZ³0áæyêx[62Ï{ 2Æ¯uõÜóG hù*²<5iYjä®#@Äñ"âxDsÒ2!ÙzÓª·8RæpC\(yJþ(Tç!$T¼	ßÕµ¾ï"¡àEH-}çD4	#D(v	;':aHWDë"$ÔzÉ=Ó¸ÔEH(utYZGÓÛmu/ò NCg<XU|Wäa;¸¸ï
-ü
-¥Ý DÒfPsTz7¤wDÔ
-"jAí³ra 9FÙÍß6,(d
-ù($ç]°%Ü{ÔuxEM¼"4S­ÈSP³íS `E(Ø^<ì,Dª"jñ¡×@/GÌYcP9f+ÔVåñç¹Þ´ü3MÊ8WoÙÙÁ:ÚSB VÚ;?æ!¸z7fß"<6
-S ­0G÷	â+EèJH2vp¥£¹Sø!=4WJ +9EI¹+EèJw·÷\)ÂÀ´×2ò£:AM& ÐuÂH	 ¬ëÐ34}¬Ë!J8Ä|½>pJ(HÂÉ1®CÆ@m0p¼c]Ê:Ek~.èOú³×yª¹çOFó'§ ¹¦{ìO	ñg¯<k0Ð=ð?EèOq©ôg*y#±UbbÓõç2],.Ó¬ôc6(OÔ|µÏûúTBA|Ê1ºOÓ|*Â@r¡ë,ñ©}z<àSúcP0O9E	úTA|Ê)ÆD>a O{UòÌ½»}Ê1.äYÍ@>ZÙxá(´8¦n¢§ÃöK®xèÐ"ºg ímä^B`tæõ6s¸L)± D9K ÖHTíäÒyØ²'QJc¤ÔHTÑ$Ú«'@%D¢"?yS/Â@ö0ÒI©%Ê1J¿äyYæ©­oØTjhmUt)£é½·¿ÅXÿf u"ßrÌÖÊ¯d¯ ê1(´°
-5¼
-$WHCPèdJ¹©ë3Zî¶§ëöRq ¾Aá\°Ôf2Ø:\F$¾+ýkÉ]Jß@íÌ8B¿Ë Pð¨î¼³L?ÎmÚüÞ@®báÂ}CÓ~»¦?Â%¦o¸2Ó3ÜZ§jz	5=ºöÿ!1½CÑìî2EL/òE¹²ÙTÿäè^Dr:Ìãd9tq8_DÖôX$GêØ^DmÏÊ³£¶AÛ÷ ®ÏôBj{±=ÚÉ3K^/A¦k{/>
-G$øpü»×ïáÛ7ÜÏØ"¨Kñ[ÜûNéG¨ò%PTùj7¹ß"ÊAås(:È òEP$¹ïEêúTõÛ HrÏ¡òÞmÐ.½$÷ê8¹ß##ºQÝs°Ýä~è^Et¿ñBÿaæÑ½èC]vA»y[ÖLòH ÍÃçTQw81x»arçpDéNôxÃÍm)u/2êq		õ8G¹îü= G!ö¡{s3éeÕC-B!ÎþlT©E(ÄÔþ½õõ øY8'Ù/ÌH% ÔÇ½þÓ{ÂIE(ÄÂG(GA!î¡÷rîÀJ÷[gà³PLÐ>±ïÔh/Õø}Zç´\4
-ÎÃÕºÉZÙShiÜéÅÌ_T¿îÉ´/#yæàqùÛ5Ê°
-endstream
-endobj
-15 0 obj
-<</Filter/FlateDecode/Length 2680>>
-stream
-xÚÍ;ä4s~V§÷£jkª¸­";Ø"·$Ü%ü}Z[Ýe[³MÀ]y=özäÏ-éS[ãáË 	ÿÕô ¢JE¥Ûß°ïOX^æåÏÍZÁZÁúËðHùßð´ ëpÖè4hçæR¿~ÞO»%v¯~jìÂÄ8üòÒØùõÿp%JÛ3ø©üÎÝÏPïä\ûÚöVM[/$TìºE
-Öú¥Ë¥÷³ûÈ_Õ ¬0Ö«ä×·áÉaKqpZã^ÿøíYJ¤4Ö°pyÒ>À^ã.	VÖJé¬cþ=îm9D¿M-[ry¥b>Ö2¿^ö÷ÁïEÃq±Q»üþúóðÓë;*äýÍs[®©à¢Âæ,Ô©VfÐH1Ìa3ébY¯Úù%RëØM10ó1y¯¿hý<oC¨\Ëº.å@ÔåÉ8#JdtVÅ/[Û³MTú¢d>óõ¢Ô3=×½ÍgÉ¯Ýü»êØÏËé±A1R
-Üobclì}×ÆyìÁ÷«b7ö_¥,Wyñù5Ä;·:	¦ÎÝ6.2	½~l©Ð¬Ék=w£ë½Ë·µ©h´°¥5ä>i'jµêwËÞùríHÜækº]B®9<7ÖËÍ(¥wÃk=æè\W¥ÉÆõËû2Ù`îõÆ\}¾³å¨×L¡QJ®ò0We»V.Þ^´+M¡¹n1¤Ì+ÆqrÍucîµ¥`ÃR´Å:Ö¾´l¦¡äË bÐÁØáÁÀÀï·HDiç¿¼0IùXöý5ü
-Ã,¡ é,!ãÁØQAáE#Õâ í9kºÊ0ñä­@²´áiÿzU´Ð,a(ûþ»îÇ¬O¯¼pÎ$eÍ² YA§¹õm»,
-&®©G´ÊÂeã19°íD>ºc>µ2¯zPûZa\u'×ê/±½wVQÐ¤5þ¸¨ lô`ê´ÚXueô2è<m.#;ãÒ6¼FèBm.ïµ[sA.â¬+£]ä	êÔø\ñ´àÞ{7"MºîËÆ×Üï°(í!¹lgÊÈ¤	ÍWÙöa¯ÓPñò7u½·Òý¦Äe0$¡¡O 5ä2A$ú#$r1ATkÀ©<f©)ë RRG¤¤.x¹+HBdz¹\#5É¥sÿqÉm¹RÍeº¸,¤F;Ãä²	·ª#^c÷"+HIlÅ+Îl)u!Å7kZ;&RCå{ªWj%³KÃMùvËº=Dd4ôÅÕq)[ÊHã#^Ðpûc£âzA»(`èa4¶TïÑ ñe_^èV¥w­îdâéÊÁ;#å¼pQú'¾Ýsã¶æQQô%ú
-UR¡×>$¢z¤ëÂ'8zuÁVÿ
-=ÏF
-£6[¨ÜÆL=ô@¡äYP6
-çOíHÅÚï'Phx¾jþ
-ÏBÇ×Pû?&CËsÀåk°+iW½Lèyz¾ÕØÇ¡Ðô,(4}EM¿ÕÂç­Ëp&±<oH)»Ìàåy~Ï¢å(Ëòè5;GîÖDÏ!"é|´IO}jÅ¯¹®$T¶	%ÏBBÉ·B5>ÒîâYH¨øi7ßEBÁ³ÜÄçÉ÷'r{Pì "öV§kæÊ»D¨uj½t{	¥ÎBB©×HãÎL^î«µÈP	%r§E²	^O°ÌEùy~Wà+(vbI»Úm?+"jIÆk[O/³0ÐË5ÆÜ»èbÎª´¢±¶öCf± [Äb xYE¼5ßV([m«yÆmUÉí¥ÊÂ@©ÖJÕ;}ÔÌIn¯E?ó¼ÉüCy¿GA(c².ªoï¨ÄÉ! iïA@i²L¾ÓÉnnõÌÎ0YÐ £×qÀwhE¬h®j;4ÉÂ(¬)|kNk_¢É¢=da &kÔ5f &Y¨Éc$³gæ\(d~ ¥É ÚúeVÃ({ë²@°rÍ
-b=í#¨LÉ5k:Ùk²00×¬1è(:ÔÉÂÀûþ£h¤²0Ð­h<f²0?k
-ßs7þä@ÖtvÈtøþ<j =þda ?[Öýift"X°YbbÓôçüø»ç>-P,VPS¹S O9Ä§5Æ`ô¤¡,|D¢ÝÏ×÷¤ÊbA©¶BâOk¥ÊÂ@©¶Bb3ò{Rea©ÖÞ»s Tk
-*Õ¤R=Âè*¥Zcì}Êµ#ÕäÊ2'D¡Àm,¢oç§õçòã¡Hë>¾)öråÖÔ=ea`RZcb¤þlE#ÎÃ¢?YèÏ#¶ÑãOFñgMá{Z(úAüYS¤É&âOú³ñ?YèÏãÚÎã´Ì¨-ÕSùãj¯bN*©7!ª£Ç}ï±ümM&1Y9k9µäq;_·DÜËb"òÝ@Ñl*Þ@Ñ§æú ÐË<(üdª©½¤ÈPÕ<2tõlçi(7ª{Ã´ó¼À>jD<¾aJªHV?]P¨x:~ÕLÕüðq,§MµäÎùÈÆzçºúmÊþÈ¾àòd_áN#µ©eDeÏa¢²¯¡FÒÖ\=È¾jâÈYøÎìtµ(êyñ|É°º çYPèùVíÅGLA<ÏA¢¯ö®Ýc"gAÏ· nAÏ³ ç[BH­Q-P¸Q{^;aõÌéf¥	Þì{úÝMê÷pç.ÏóîêæpìA¢ç0QÏ×P4©¿uAÏ³ çk¨+Qªí"gA¤¾©URß."{}MFú¾EdÏÂ?òØ@ùÃ{ =2¢|U~«­,z(Eßjñæ!(¢|Q~µ÷¡"´y]Þ Ñ9ïÖÉtøPð,xU	¾#Z/p<­Wp«Y®Û>9Ê¼F¹µ²¾
-Q8(¼Fw¦êk"n
-IÐ¢rTAÄÔ,bê¦ GDüÌB!~®QüÑãÓ±2Z¹ÕÌy{¡.f¡·P\GPY(ÄÀ­^´1póËhà½P6T_µQvÏßµñ}¹ZãûµW®ÃäºRè+­íò¤¦oÊß¥îßeW ó¼¾ù&Ï
-endstream
-endobj
-18 0 obj
-<</Filter/FlateDecode/Length 2699>>
-stream
-xÚÍ;ã6óû¬»ÄÆûQ5¥àªì©rfßdW$Ý;ØMü÷¯AèBÐô·[J
-üØ >6A¯Z$üWKÐF(Z®Â¶ßay+Ëï»µµõ×å%(ò¿åe+A/Öá¬ÑiÑÎR¿}Y>_K^"üÔØqùõ­³ñÛÿÃ¶(íà×b|2ð38w;B»sìsÛØ{5m½P±÷õ,R°ÖoÕ\O}>Ó{þó}ùá'µ(+õ*ùåýcyñFØäR\Áx£÷ÿüûUJ¤4Ö°pzÑ>ÀVãN	VÖJé¬cþ-îcÛE¬»mïäöJÅ¼?¬e~½m%ß9ý<,^§ßÞ^~|ÿD|¾y¸å
-.Ú5lÎBjem¡C	I'»EÈB$\9kç·HÝÇn)ûä­þ¤õky¡r¡uÞÊ(¨Óq.G&ÕÈè­ßÞí¶RéùÈçR¯xô\7öZ_»ò»fß/ÛéKâB)p»m²³-t¶;Ç±3½ÜÎfÝeþ,e=ËÏ¯!Þ¹ÕI0uî¶©vIèùcK`M^ëÒÎ·.?jÔÖzÚJ ÑÂR¶ÖûD¦]©Õ]¿Û¶sÊµ[#q-çt=\sxl¬<+¨¥ÔOÃk]JM%:ç»ÒdçüåmYmPz½1'c_ol¹ê{¦Ð)%×FýÈ«2®·'íjS¨eÞ·Ræã¸ºæ\¢eKlÃ­ö±lcX¶XÇÚ×6ÍôàRòu1è`ìò×bàÂï·HDiç?¼0IùX·ý±ü.EB$ÓYBÆ±£Â{ªÍAÛsÖzaåÉ[ÿdkÃëö~ÒwE[Í.¥ënßýãûÛ>÷W^8gÅ².Ý² YA§¹õ÷~YM$\kèÊÆ19°D>º1ZçjâÁ¹ÂuÕ=8W'|í­ûôf ­ñã¢°Ñ[ªÓjcÕ#,£¤ÇAçés9¸ò¹G\Úç]¨Ïå½v÷\Ð 8ëàÌhy:5>W<í$¸õÖM¤Hë¢nW÷íÍ·Üï°(í!¹lgÍÈ¤	Í7Ùö°×i(ÏxI/ò·v½ÚýÖÄå0$¡¡O 5ä2A$æ#$r1AT[@>P6»
-ó
-8tÔ<"p8¤ç°÷	D¬.é2%Hf"Á½LÚìbTFJSHA£a"Ù(Oõ£t-Hn
-É{¡Ï'&R`hLý(mHS[ÅwgZ;&RKÊ7Q;$¿6k%Óë3¡ÒJf)»*Æò{,È/)DfÈháâz@  GÑvÚHÅ).¸é±Qqm ]pÁýëRÖ]¨ò´Àòë}×HÝd;xRòd0Á¤n"_³Ã[FÜûõ^QYzoP×öZqà9LJ:h±^îã·:¢ßÔ¡çYdèù,«áu
-MÏBÓ÷Âuiµú 
-]ÏB×÷"u}
-mÏBÛ÷Z{ßöc2ô=ø¾;v5)1b|¿JìÄù,2t~Kv!éÖÝåQmLø¦1¾uy.*ñ- )e·¼<0oü(ú¾²|ß®QÛ\ágí9D$oh¢j§Pó,$Ô|DåuBBÉ³Pò£(Å)$T<	?Òu
-	ÏBJpÿÇÝwD4ª7;½%¢bª6¢u¸J¹/-R"
-CB³Ðç-ÒÔõ¹_Þn«{; 0:ËáNd¼"¯ÌIù2èî;(ôubùºZ}Ý3Ñq48ºÅ öIèez¹ÅHä¶ø|.fa ?ô/ýÛbÄ©¶Îea`RÝbìêÃ¶å Û¶(tØ$R aYhØ^3½>ZVm1èÈH|lUïDôQ3¸½1z|Þy®ùC{ÖÆA(c²/wÐÌÉ!Æ/¤52~­ÉB0ù&L'»G¸>aL4Àèu<&ð²d ,[H²3!KFMP[
-_¡²Q¢Éâ|pû|¤Ij²ÅH$qB,ÔdÑ@>Öd 
-'?±4 B[¿hEÏÇº¬¬d³XÛEïNüH
-l¶Ï&,L6{Ñ°êda`²9Fð'ýÙbÐÔ;MøQýÙRø{×r ??Õ2?YèÏ^<f²0Ð-Æ7ïÑ`M`ÀfyM×eê/S®äcV(O¨5*ñaò>åPÇi-ÆuôûHª,j/$;0*¥ÚÉåá¥ÊÂ@©ö¢aº¥ÊÂ¨Rm)¨TÝc©r T[£Ò#©²0Pª½*yFª,jñdRðQYæ(´¸-uDôãäbI¬¿ÔùCVÖ}|RÛ($¥-Â1Ð,çhºlÃÏ»%ÊbABr(%Úbänâ^eQ¢,*Ñ^Å¸ù;{h/'$ÊÂ@¶iÊå(QJ´Å8÷Ç|âºÙjÛf@N§¼J9ª¤Þ¨Fó}o±ýqÍ&ê1Yk¹V^çAê10xuí7îêùì&OSG¼ÌB1#5W}hijzûÕ 
-ÍªÒîÖÞSíÎBÒÊ	m ÇÏÓ`(uZ}Gv0+y çA¡ãwPt.Øýµd¶¾i%µàÌ±\Ø ¡wnjþoWö#\"ûËJ®[ÜÚì=¾ºö\¡èYPDô-MðÂ=¾©Ô|EDÏ"¢o¡bïViEDÏBÑ÷jï©&EDÏA"¹z·ß¥§ãYPÄñ=¨ËSPÄñ,(âøªëøÛu¦@áÖñÚ	¬g7+Hða?3ã÷0¡?Â%¯¸¼¾Á]úÐ»t!QÏsÈ¸ôj70¦ÈìYd8Ê²#ó?vã³Èñ{1»<.b|1~n¡ñYPhü^Æ^jÄDÏA¢©}Ë4NíÁöYdDû-ÙÁÌ¹Ñ>h¿:Ð~þKò·²ndo\æ88|NX'Ópjp¼j$ßÂµW8Ú¸»'(Q¡sHhâÞ¢ÍÜhQÁY($]oQ.¤AÛ
-Q6({AK¡¢f¡Q÷Úé<LiQY(8kx2|Ñð5sph2þÉ^D]ÌB!.nQÎäNÓPY(ÄÀ½^´»mê~|qÒæ»6êæòeÿ£oWë|ÁñJÀy\7Q
-cpõï(N/jýÊ ü5PêöPöÎRÇýåoÿ«~Ñ¤
-endstream
-endobj
-21 0 obj
-<</Filter/FlateDecode/Length 2675>>
-stream
-xÚÍ;ã¸sÿ
-øÁáý¨RpU¾©ºìÎ¹HòÎ%¾`7ñß¿E¢[M¦7ðnq(q(ðCøØ9¾NfÒðßLÉN&;eL6fºþÛ~åmY~ß¬¬¬¿N/É¨RÿM/k	vòÁ©à-a)õÛécúu·ÄáµÒ)ÃOë]¹§ßÞ:¿ý?aÒöq.&?S·#ð:ë¶²÷ZÚG¥¡aïÛYä}\¹U}<Ã{þô>ýø³WÎGSâôþ1½D§|	%OÁªä¢³ÓûþõªµMZ»kX\:½Ø`«s'`,,ø­ÿÅÃëP÷õ·ëþ~çB{§×Wö÷ðY£ai¥Ïå¥|8°\:eÓ¿ßþñþÖù|_]X-ìçl¬"JNK]9ùòzNÒ­Z³¸Fê·ºµÅÀ-ûÔ­ñdíëòBÒRÖy-¢`N/.Ô6±¥EÆ¶hXâún{´Ê®G>yÅ£×¶ñ×å(õuX~êÂöý²ÖÈ^:JÛ]îlÓm©³íÜ9?¨éåV9vñZêVËS¬¯!Þµ×iÐvÃ¥RIhý±§Âð®®í2¦Î·®?ZÔævZK ÑÂRÖÞ0½¸Pµó¸[·.uÂ¹l¯uºRm9<6¶+,h¥´OÃk»ZèïJÓúëÛ2Û`õÕ$þõÆV{ ½gJRjk´¬µ)Èù­+´2ï{)óq]s^¢åØ¦[ëc)ØÇ°ë±ml}¤éÁyåë¤r²Éùé, è'±!NL6Eå¹mûïôO8K,J !8­rô¤QØÓ¬ÒØk°æZ¦ïüµÏÛüÙÞítK8¯Î»ýýo?Üö¹?¼*W<uéÈ
-Í­¬¿öËr àì2áGD¯¼¬b2>³YUã`ÛnyEs8æPç°®0úulxP× bímøôn ½ÇE%åsô+í4§·ÎGXÎè!ÁÓç
-pæ¸¬OëC¨Ï£÷\0` ft¼@ºXÜz&Zy1·³ûúæ[wXiCê3§gÁ@À%HíYê}8ê,ç¢¦§}Ü7½6üæÄe0e¡H -$º@$Æs,gÝÐ\«§`q#0F`°ÙÊh*¤¨K]^®8ÄÅhrÁª¦sM4
-lÐÙàH>«`Ê^¨.Òy)FaÐ!RÒ \Â)¤ëRÎp­fm"ñ5SßÕÓpYò5º
-ÈÈ,\]YUÜ£1"ga´©,HÊì÷@KÔ6d§Y×i·8R½nWA~{£ïÊ]5xÐE¦r(O'üTsÀUßsNøqËûJ?FE©7TÔjëñeh]Âi¹öÞ]¡X¡.Pèt:Co3TB« |\%dÓÔÝ	Ð¡ÜEd(wN{ÙÂ(Ô»ªé3Q½2¡à%HDð½Á÷dâEP¨øïA¡ä9ÔeéU¤Ê¬Lø)Þ:×H¤x@Æøu¢®^î+þß@?#x«E³µå¸äâ%DDñ¦£~	/BBÁs¤39ë!¡ÞEH´Eé:^!¡×9õzBB«SÖÔû ¤ÈO.4»cíæÉ»Dèuz½t}F¡Äê"$´:Gê¦îpü8½ÝV÷&@á49ÉUÅxEn[¹Ëtû®Áï ÐÚJdm5[ûÚ×¸ ¦PSsê ·va 9íºç]4²|Ë.ZXîEc=£ïvPb^c÷m+A!¶å(gÝnJ+Â@Ãö0üC´ª­Ê1h®<`ÕTÙ
-g³£U9G¼¹yn³öölMj°?îÄèüJ{§ógÐ"W/Ålñ[ëC4¦:`6ïÄYP!a ,EmòSìÍ-ïhRA4É)Æüa¸¤´¶Ó/Ëî¼Õ+E,èJÎò¤+PèúìÈ	 ¬ëä34}ìÌ!Ê8ÄÐ'Øó¦dæXiÀ"Ì89½ü)ÂÀó(#a D9Í8/a`ÆÉ1>qJPJ{ýÃ?:ªTçÆEEhÑ;Ê#´h*y3²UebÓµèòÈX\µÒ­Ú DVePó¹åñµZUBAà[Ee@­"T+g)ä;¢VÞ={+zúµg®èEèWÇ³æW	
-ñ+Gyö^~íaÄ'ü*Â@¿r½»_;~-AÅl¼p.f8´Í~B^&¶_Ú#Nm ¢«{Ò.çüO%$Kí!¸'²TªcPo00KíE#=<± EEhQ	ÆÈ¥¾£]êsH(ÂcJ ?{=£<áOú³×$'ü)Â@rs6,ÏËòÔÚú==PªhNmUt)£§}o±þiÍ &1?£Z1VÁpÌùââ.%#\DÀ"0ÑnÈ6ù["C'ËÈPÊ²ÒÂ8BCË PÑÝpu>B_Ë PØÝH¹­± ÐÞ2(L7PñS].#Jßí\ì0¡ßeP(ø.{
-
-m/BÝo .»ÏúÍ$ëlóî{Ê	1§xa>¡G»Þ?Â%Þo¸¢ã¶«2Cu/á!	÷fÜy^ELÏ¡
-¹<CPÄô"(bú^¤òS"¦AÓ÷"åÔô"¨¨obïq#&âx	u<gêêô8^EßòÏô(êxq<ÚsÎ3K^O<¦ëx/>
-' $øpy&x7·ßÃ%o¸¢©i;ßßrÏDz^ÂDÓzµIëEe/"#²çdt!("{}/\§"Ed/"²çP¥ÿÈù½¤õê8­ß##ÊQåõ«¡aH/"Ê?ÊCPDù"(¢|µwúÍÛ²f¢w@	®p&>§|ÐåðáEð	Ã­78ÖÜ¬õÜe Tæ´sj§#bo
-±7G¡ÕAóPgP³{Q¹vf9
-1µ£Á¨?P0ç$qç&	ñ±ú¸ë 	±°X¸×iÃcáQ÷P{9J÷d÷Ëhà³PLÐ>±¯ÚhïÚøNß´Öù~-z¸Ú6Y+s
-mfãôbæoªßeÚw?÷×¿ü	÷xÒA
-endstream
-endobj
-24 0 obj
-<</Filter/FlateDecode/Length 2666>>
-stream
-xÚÍ»ë6@óý
-Önbãý¨R°UöT9³w²-ö;¸7ñïo"Ñ­&HAÓ¬]¼8xÐ ¥éëd&ÿ)ÙÉd§ÉÆL×?aßï°½-ÛïG¿N/É¨Rÿ^ÖìäSÁ;[&ÂRê·/ÓÇôËnÃJ§ÿZìÊå<ýúÖÙùíÿák¶gs1±8ø7p;ß)©¸n+{¯¥}Tö¾UIÞÇµ[ÕÇ9|ä?ß§~2ñÊùhJÞ?¦è/¡ä)X\tvzÿÏ¿_µ¶Iká6N/6&ØëÜÉx6üÕÀæáy¨GÅú×õxs¡½Òë3Ç{x¯Ñ°µÒÉûòR>ÇGØ.2òé·÷§ß?Ñ:ï«Kk³¥ýÃà¡­qõPDÉi¡+'_^oÑ©Q£Uk×HÝâV÷¶¸åº7¬}]^C¨BZÊ:¯å@ÌéÅÚ&¶´ÈØ­[\_mÏ6SÙÑõÌç1¯xöÚ6þº¥>ËßRÝØ±_ÖÙKâB)p¿Ë}º³/uö;çñ5½Üj3Çî2^KÝjyõ9Ä»ö:Ú®c¸´ñR*	­?öTÞÕG»©ó­ëµ¹Öh´°µ7Ìc/.Ôf­ã<îÖ½Kpd.ûk®§T[Ï­ç
-KZ)íÝðÜ.¥%:ç»Òt§þú¶Í6XF}5½±ÕhïR§Úí-+`mÊ"rþdCë
-­ÌûCÊ<cg×hù%¶éÖúX
-ö1,Åzlc[©fz0¯|TN69?ý59È~âôçdST®Û¾?¦Á,±H(àd¶JÈEÐw6NDUàH³:Hc®Ákf>0¾wð¬}xÞÿÃOö®h¯ [Â¼:öÝ?¾¿szU®x,ëÒ-+([Yïå@ÁÙeÂ5^yYÅd|>f³ªÆÁ¶Ýò*:æpÌ¡6Îa]]Þ©+L²áA]-¶·áÓ+
-ºö.ÏÑ¬´ÓÞ:oa9£#O+ÀÌqYÖP+Fî¹`Á	>@Íèy6u±6<$¸÷6L´*ófn³ûúâ[wXiCê3§gÁ@À%HíYê}8ê,ç¢¦ÓAK>nÊÞG~sâ²²PL$I] ã9³nhêÜTÆÀmÁf+£CGoq@Âæ² ] mAÀB$[M(aTgtÈty]¸ÚÍxÈNÈå³
-Pú¡º>£Ê0è)iPGî*¤±3\«YHF|ÍÔ7DqiÀa"ktY¸º² «ØïNkò³*$#UI=F\êøl¤°!+f]§ÝªR½nWA~}£¯Ê]5xÐE¦r(O'üTsÀUßsNøqËûJ?FE©7TÔj½¬¾oÌc¢u	Ñ:jÔÛØÍ½ëÎ¡mJì."^
-\½P"2jA¡Ú{áÚÌ Pî"(;¢rê]UàRÀÔ³TüdÇBÍKÀæ9ØùùaHD/rIÁu¨õýÎþ©h¡ïEdè{NÖõýmÆYð³½uÙ-í= ã×5»zå?nû#Pt}¹Î#`-ïÁÓKhHÏqvø]$T¼	Ï
-Aê[Dð"$|/J×§Pï"$Ô;Gêêý	å.Bj¹{¯g¯Sóe¥."RçDUê®(ï¡ÒEH»;7q¹	]Î.;×\qz»=Üû; Ó0ØDþV_àùÜÊL\ÖÛw½}®nPqµU	Ù@Í	ÁÚüq´8c\wú=zY^æe±ß÷èbºø(ûè_úcä¡FAç00¡æz7$h[	
-±-GÙ³í=VIs¯ÞEdÕ*bAµr2ù±ZcP9f+\ÓVåñ#Îs[»?Th;¹(Ýe'Ü!>%ÐÞJ{§ógP"W¯Âlñ[ëCÔ¦:`6ïÄcÐ!Ô'SÑ²TNÉë+%Ä.7äW00åtJÑ¤5É1.#¨ÉºÞü$Òdëãº¤áÍ@ë²A2Nq·®)¡ 'Çx6ãa`ÆÉ1huP§3Î£hä0ÐGÑÈþa4r
-zûSAüÉ)ÊH,?EèOASÞ<àOúóÈif*y+°UbbÓõçr·X\î²Ò}Ú D>ePó{yhô©øcÐUÖËOEèS	Fð©ÃåJÈ¦»+´ëTE,(UÎRÈIJExßkg/ã%(D­åÙËxªõcD­"T+Çx25-AÅl¼pq&_Ð¹n£§[ívãâ¡Nèjt?¼ÚS©¨#PÆ0P¥#?yU/ÂÀÔ´ÇhQZ´ð-*Âh©i¯wºñÔTAüÉ)
-IÆFü)ÂÀeÐ^ôï8¨$Z|èõÒóK·å®µõ»e Þ©M1ÂQ£­.est·ïí«ëWk0Ñ¹).Çl½)àx7@ÔÁcPèc
-yUüÚYzîFêºM/ ÐÕ2(u7Rî©æCsË 0Þ@eÀûdhsÑùl'=`B·Ë 09îBùí$s Aaª¼êæÊf¹9·ÕæÜð&¨b®éÂ}C7wMKLßpe¦g¸Ûp¨é%<ÔôèÚ~¡éEPÄôúë:EL/Â5n¤ú_;9$#ºÝ÷ÂåT÷"¨©oèJÔ½3½¾"¢AÑs¨;ÆòÌ×ÙÇtEoòÅGáâ³±o#÷ÿî¦ô{¸DôW&zÛú¾Á¡¢ðPÑs o§@Ñ è9Ty¶QÑ HJ©¡ÞD/"çPùi(âx:3ÑO
-Ãq¼:3í&ó»LÄñ"(âx9q¼8¾g¨ÞÂ7ô·åÝ	ØN¸öïSuéðÎàÅèÃ78ÑÇnÎÊã(QKH¨Á9ÊÎRÃx[ßÀÞ ~óex²BsÐ]¨¨E(DÔ½ÐôÖ¨9
-Ñ³¬¸pÃÏQ³ªãì}îÈIE(DÈ=?B4,B!æ(ÝT»ûû3ð^(&hØ¯k´ÝËÏkü~\­óZ.õpµm²V6çZÇ?½ùGê?ösbä>Áóþò·ÿªÐµ
-endstream
-endobj
-27 0 obj
-<</Filter/FlateDecode/Length 2705>>
-stream
-xÚÍ;ã6óû¬»ÄÆûQ5¥àªì©rfßdWDÝÊì&þû× @t)H}ÁíGG?4M£éë¤&	ÿÕô¤¢JE¥¦Ë°ïwØ>ÊöûæQÁ£Ç¯Ó[P"åÓÛZ¬3ÂY£Ó¤+¥~û2]§_vK~2Dø©°ãôëGgç·ÿ#¬QÚÁ/Åødàgpîvv'§ìº­ì½¶^HhØûv)Xë×f®Uæð;ÿù9ýðÆzüôyÞ¼6¹'§E0Þèéó?ÿ~R)MGØL8½i`¯1'ãàÑiØlð[{ÍÂsßåóo¯ëû5üÎ¸úJ®ÏTþlJæçë^ò¹XÊãXÛÜ)Ã~ûüyúñóÖy½¯ æf.Ú%ÎBke&m¡C¡I'ÞoÑÉQr¥ÖÎ¯ºÅ-ï­10å=y¯?iý^^C¨\(e×r 
-êôf\njdtVÍ¯¯¶G[¨ôIÉ|äóI©w<zn{)GÉÏ]ù]È[óÞ/kôÜ¡)î7±³OvöÎ¾sç8ö ¦ó­6KìæñZÊZËÏÏ!Þ¹×IÐvÃ©Ihý±§Â°&?ê2¦Î·.¯5jK;­%Ðha)koXÆ/Ôj­ã2îÖ½¥N82Ëþ\§Ë)äÃcc+à±\@-¥~ëRj*Ñ9ß&;õ·m±AõÙ$öýÆ{ ¾g
-RrkÔ¬¹)ÈØvµ+Ô2ï{)óq\\s.Ñ²%¶áÖúX
-ö1,E[lcíkÉfzp^ù:t0vúk28åíQÚùéÏI/LR>Ö}Lÿ³DP 	ÁÁtñ ï¨ ð"Á;Õê ý9k©eXøÀøÖÀ? Yûð²ÿô]ÑV@·óêò¶ïþñýí=÷W^8gÅ²ænYN¬`ÐÜÊú{¿,
-&®eDôÊÂeã19°íD>ºc>µ2ë
-#¨_W8ÉºuuÂ×ØÞO¯(èÒ\T6zK°ÂNsZm¬zeô2<}.g>÷KÛ`°0ú\ÞkwÏC³jFÈ´©ñ¹áé Á½·a"EZ6u;»¯/¾åqEi6¤>Kzæd@Ð	LÔ¾I½GòôtP£ëMyËÐ»Öá·$.û!	Åx¨!	"1!«	¢Ú*[6GTÀ¡£æÃ!Wwo@Ä*¤Ë 5Hö2i³EóòÉ!YHvd£pÔÒ\zò^Dó$:Ó)7y
-)F¸TÓÚ1*T¾¢Ú åFV¦÷ÂG¸´ÙB¥áK±|?R§.(®4J¹ØÔ4Þ\ïØ¨¸"Ð.év§ÏmãÕ¡¯Ì f_?è«Fê&»<Í:'	¶pålpù^oq_îÇ¨¨÷úÞÎdq5¨µ¹1"w{h=ßøA(Ô;
-õÞBå¾ï
-TBÁ³ Pð½HÅö4ø 
-ÏBÅ·Pô©y
-%ÏJÕåÙ'ùBcBÁsà[¦®à0¡âYP¨ø#¨AÉ³ Pò-Ô|xV+¾ho]u§xTJÙuÊ._ø+þ_AYù{º¸tU×y(CDß"ÑÌÔ!¡àYH(øæïóêz?Òe	åÎBB¹·H]¹"¡ÚYH¿·H~7<âB½s°Þ[¬®IPî,$ûÒBÚYH véó<Ýiîáø~ú¸=ÜÜ0äX&wÎ4	Xæ¤|xß5øZ»B±¬Ý@-Æ6kßASs(©[=Sßc YhçãL®	æ]42|}´0-ÜbÐY´æea y[ywC¶å ÛõÝnJËÂ@Ã¾Vea U[\XÕ;}ÔÌym¯Eosëüý¡=ëÁYÍÁëè0æä@çÒ_A@k²Ð-Bî¡I9°&Ãè	)cÌD,ÔfËAW? MFh)üHÊÂä@anÚäIa²0P-FI/0Y(Ìc&e@(d^
-Åf mý:ÍaMC³B°ÒÎbÄãåÉ¡ igA­ó@Y(Ð#±ÊÂ°I?£êGãN¢ç²XP¢½ÎÝà=²00÷l16¹§{¬R
-Qi²w[lO¥,Ték¨Rª´'øÈè¨ÒèD°&0çf³Ï<Ä¦«Ò²ÌåWò±Z+K­ÔKçÞ÷Z9D­-];1¢VªµÅHd¾uD­,¼¢ïE#<R±*­ÚÆ3Wô,´jq¸bÇªbÕ&¨#Vea U_Ã@«²0Ðª=w<aÕäÊ2çIá¬ó¤×eY±þR3´¼bRLÉn@Fs!T)¨´å¸²0P¥-½®=¨*íE#=¼¼F²0P¥½hÌ*ea J[WTÊA!*mQÒÐª*ía'®õY¨Òcgr4.[YÅ¶¾h(	H*)æL©Zx¢:Z|û{õïm0QºùutF5Ób.·¤îº´á"foÈvrÚ(2
-­¼:÷ÏÙP¨h:º©y+é(6
-½¢'°ËêUgi7L¾?3¹Ïg!ovÖ0¡ÔyPhõC¨!Åó Ðñ¨n¾¬ÊúäX±-/ZÉ+'ó9»; ôÎ-	îÊþÈ¾â²n µ¸;K8wp¨ã9<Ôñ= Û]»EÏ"o¡Ò³ý:EßTYðq<8¾)óT¤ãYP£o öô#2bz5}Ö½=wÈDLÏ"¦ï5áå©@Ó³ é[¨[wqaëéGuM¯°Ézæä³Òö#+wÓú=\búËnq´¾³¦sÚÃÏþ.xÙáöW"#Êgéü'²nYKv>Xoz@F¼Ï"#ÞïÅlî]íBï³ ÷[¨Ô¿-u E¼ÏÂÜ¾e¢¹ý1>¿§ËSLÄø,(bü^_·Ïtsj|1~µ7=æ£<67@Y.s:>'ò¨®.~Wß[8bõ
-Ç³zw×ÇÓ>u9fî-ÊegF¶E!òf¡|½E9¢ù ØBlÝÊåq7¦f¡G·({w[bf
-ù¨×øB}Üë)fXB,ÜCéÝlQ{Y(Ä½-Jwò¼ûÝ4ðY(ÆIoÞ¨»ËWoü¾x­óu[Æ+õ0¹m¢:ÆàðâZ¾@()º}=½ëþÇýåoÿ{×Î
-endstream
-endobj
-30 0 obj
-<</Filter/FlateDecode/Length 2690>>
-stream
-xÚÍ;ã6óû¬»ÄÆûQ5¥àªì©rfßdW$ÝÊì&þû× Hv³R úÛ-®F	üØh|hB\_3høkd2&3\ÿ}¿Ãö1m¿?<x4ðøuxKFúgx[°NïllS«ß¾·áÍ»NþµØËyøõ£±óÛÿÃæ(=!ÍÄâàßÂý|§äÄç6³·zÚG¥¡c×ý¬Jò>ÎÝ¼z0»_ùÏÏáÌ`¼r>ÏÛðò%<«Îÿù÷»Ö6ií2<ÂæÒéÍÆ{;¹ ÁÂæ`ßúl~õU±þö6¿ÞÂï\Xéù'SßÑõçy/y_ÚãøÛ¥ÕÆé·Ï?_è×su
-bí¶²c<t°5n°(9M1tåäËû=:5Ja:ëçHÝãV÷.1pÓkêÞx²ö}z¡
-ijë<·Q0§7jØ²DÆ.Ñ*°ÅùÙãÑF*{2ºù|2æ^ûÆ_§£ÔÃô»T7öÚ/óÙKâB)p¿Ë}º±/5öÇñ;gz¹Í»KÿYêå,O±þñ®Y§AÛue¼JBÏ3FwõÑNcê|Ïp}[¢6öÓÜ¶2gÃ8öâDmæsÇÝ¼w:'ÓþzN×Sª=ÇÆ^Àc)K+Ë»ág;µZ¦èW­éÆùëû6Ú`õÕ$þýÎV3Ð®R£ÚË[fÀÚEäüÉ%6×CÚ<cG×§hù)¶éÞûØ
-æ¶b=ö±KT3=W¾*'þ§Àß$blÃMYè_öý1üfIB	Þ ³UBÎÃ+#4ôUWÙAó¹k<Ë4òñ½?@2çð¸ÿìªi¯ -a^_öÝ?¾¿¿f}x«U.)lëÒl+({[o¶Ëºì2áGD«½¬b2>ï²«jaÛl¯¨¢cû|Q%ã Ôs{.o+L²áÉ¹ØÞO«©¨ö.î7ÏÑ¬´ÑÞ:oa9£#O+ÀÌqYI¿Á£k.B0Dpft¼AºX;Ü{&ðêq3÷Ù}~ò­;lÊF¨´¡ôË³` $p	J{Vzï:5¼NKqt»+oz·eøË6`JJ; h¡Ô"Ñ¡4Æ4u¾*sé)Y¯K¢0QÙàB: º3ö1\æ:m(ôaxùÚëøUÊFG$
-Î]H>)¡\"z1£KØRéB&o)YÐÎ¦Fs\R'ÖKú^ÁÓ#R<Ý¼[§÷q$G`üÝ\Ê]H`äa"¹¬Ó[ãÿz)DYá
-Ëë.¤ã¤z-c¡üúA1»jï LãÎÁK~Bªõß¬î±¼Ýkà¶Î÷QQèªHèuLûÕ(ÜÇA¥#Î+JO§©Êó\GoZß¹±öÁÙ%"fçdeÊµÕdó
-Ý.B··Â5C];¡Ðî"(´;ÊD½Pèwú½è5A/"çPçÖ<ø
-/BÇ·ýz0RhyT40EÄ¡.Ü«²ÁÌ`øÞºÚÙ*½*£z½?"ú=PÔü*Ò<]2ÿÜGQÝÎi6ëö-"bwI|Ý9¥	Ý.BB·ïE©	Í.BB³s$jö®¼&^! \N­Ì\]	EÔ.á"jo¸f¥¼b!¡Ø[Håj]Å;Gºl Åáãþ°¶x 
-§Y<Xð[1~håN&Níö^A¡±¨W£ß¤Z¯0(ã®[hjSl9hEAì,±²-UïpÂùf·-XPË{!¹lb E¨âVHÜÓh ~E¨_±«ßQ®(³§aÃËÃ5jV}Õ*Â@µrË4_wª5c¶Âí}#~¾y^îwº\Tô²7W7ô /èÓe¯®8L@Ô))l9BÍÄ4aÄk0j*f_¬Ñ£Mjsd²`;´)ÂÀÕÉà¼tSAùÐ+)Â@crÒ£*bLc\ÈPé0f
-]oR5[çgh1úÜ¨ød}sÚ!^)>­
-6Õìäs	|Ä¢x£d®0ß¡R  ¾Ã¤"4)Ç(]=&a I9]×í©=%Ä¤ãÜbR´Ô"4éKþ@æPÃ³Ùª­MN÷Åé¾+ýÜ¬È¬jÌåY9fEÑe=§ØZÝ²ª$¤6ådëµC¨"j+OûUBmEãÈ½¯è9ÆÃ}î°ªX³­OEhÕ×0Ðª"´jËùZº8fã¥ ÀËbéíòt?±ý²ÜÅ¸kÒDtuÏ@H[DåGG%q åeã6¡-0Ð¢{Ñ8wXTò)×NÎJU*bÁÚ³ÄJbQ	­wÌÔÊÓÒotT©UÚb).õE¨Rq!ÁÈã6ÝÇ6?awH¦áJi½î®^lîÜû{ÿó´éÀDé"¦¨~å«Ï¥\j <üÀtm,½ÍD¤,±òT!¿+PDÑ2(tôn¤º[uo3RîÑÖ;Phnªû*¶EµE<."åðÔùèà#BA¡ÑPþê]~Ú¾+x$ïapÁ BY¸°;TH!tÝÜý.ý+*¯9îãÇ{8Dò#<ç¹¶jþ=&*yI¨ä9Ti­·íBÉ ä[ºpîBÉ ä[zXÝØ"AáRÇÔöZÇ5½Q©öAÓ é[PîH¶SÓ é9ÔÆZsYò<ý¦éÁ¾ø(\x6àÍ±ç¶àÍ~~Áá¶îfÚÆ!¦Gé[<Ír~^#jzU¦5½~/R]ÉDM/"¦çPùhJQÓ H9Ï¡h9ïz ¨ä%PTò­º"AÉs¨æÌ³E$/"çP[÷	C"LLíHuÂÕoxòAÝ{'¥¦tGD¾ÀÉÖfÜØm­iB 2ss*nIL¨¸9Jé
-Õµèz/*"i
-t+*®¨YBÔÌQ"¹\ÙA¡B P!ïåÊf¨E(DÃeëNBä+B!òå(ÍÏ_BïÍ`[íûe÷ôÿ£oXk|¯FEÈX¿"Î)ç9½ñê·?û÷@ù:ûËßþjÑ
-endstream
-endobj
-33 0 obj
-<</Filter/FlateDecode/Length 2734>>
-stream
-xÚÍ=ë¶ûü
-NÒØÅÂøþÙQ{gÜÙÙ.ãBRîº±{ÿýP$ÎÐ¹w¸¸øðð$±Z¾.jð_-A/*¡TTj¹þ	ë~åm[~xTð¨àñëòHùßò² ëpÖè´hç¶R¿}Y>_º%N?
-"üÔØqùõ­±òÛÿÃö·à×b|2ð38wÛB½³ì}ÛÙ[5m½P±÷õ,R°ÖïÕ\v}>Ìéwþó}ùá'µ(+õ*ùåýcyñFØäR\Áx£÷ÿüûUJ¤4a1áô¢}µFJiasðx¾=·å·îc¦?à½®¼û3eoQPj}.qÞça¹4Êp§ßÞ^~|ÿD­|¾náåê
-.Ú5;g¡bµ2¶PDaËÎ¤MðhóÞB.n©ù¼~ûÍa,¬?iýº½¨\ØÊ:ïå@
-êôbËÉ¤.i%Xüþêqk+>)·|>)õ[Ïuc¯ÛVòs·ý.ä¥zï}ô¥Aq¡¸ÞÄÆ:ÙXëÎíØÁ^n{³fwßKYöòäósÈ;·:	ºÎ}7~2	Ýl©Ð¬ÉzëKç[%µµöhZXÊÞrÈ´+µÚ÷1RÖnûk·$qÝöéz
-¹æpÛX¸-·%PJ)çz+5méïJý·eµÁÖë9ûzcË-Pß3F)¹6ÊGvÀ\iëZ¹x{Ò®4Ræ}!e1ÇÕ5ç--»enµ¥`ÃR´Å:Ö¾´l¦ãÉ×EÄ ±Ë_"=à¨  8¿ü	«àHfIeÝË¿àè°I(`c:KÈhaµL.¼SíØsXë^Loü½¯ëøIßm4K8®oûîßßÞs¿y-ELÁ;,ëÒ,Ë	ìã­¬¿7Ë¥M4p­=¢U^>(lÊç]Ð­[^IúèÆ|^e Îöò µ÷®î`_ð%Û[÷i{ ­ñã¢°Ñ[:Õiµ±êË(éuîp98ò¹#.m¡cü¶Ãå½v÷\Ð 8ë`ÏhyQÐÜ}®xÚIpí­HÖEÝîûo¹ßaQÚÃ<ë°Ì)ù@#0ÚK5äö:cwã%=ìNÊKVÞÚõ>J÷[.}À`Et9[Ô0	QXëùTÖÉªå<Ã Õû¤(ÚÀÃ ÞýtÝdf 5Ò¹ß¸äÒéuãS\aFz^ÇqR~Î<Tô´Hx§÷DñéºKPwpºáHÐ(}ÔN·Ûwz¦Ú48/÷YÍCÒ*u«§gSÒåÊq[8ObÚH§xÎ]ÉÃØFéé²µ§;¤|B=4üúF_U.7YáN&Ë4Î`Ýò p÷÷:(ü¸ÛN£¢Õ*Çê©r[ËÏá]æ×åõéÚêc$bvNJ
-vÄËÛ}¶¬2TB­³*Zouy®á£ØY9¡Øk¦HÎL¨vª½òÄnÒ(w{«E]kæDï,(ÔûjÖ¥(x
-¾Êí)´ÌjgÂÞ­ËÚ¢âéÝRv¿JÏõçõ>E¹PÜ+ÎµÝïq§¨qXj¯è@t
-{t&ËO!¡ÖY)­B:O©³2B©×DñÙvDÎBB¥·v¬Ç-C' Ð9HZ%a}ÊªÆ'].t:Ë*aBÌ'¥\fµÎâB­×\2Î£H~y»=Ü«ÜÀÃR9ôºdJôf9)¿]lï*ü
-µ] >£í$^wµ4ïjÌöH°%ì1}HtAGß×.Fó(s¢ÈÊ¸iæÌÂHAä«ï*ñu½t»0ÃBÒ5ËùvøÀ$(Z[5C¼ÊÂ@¯ÖôzH<öªwÐÜ£f^Í=ÞÜ<«öC"¨E>à©J0ÚÄíFIHkdü Q&'Øéd®ÖF]²RpAhé[ÕpP\É
-]Y)
-t%«5#¯Mr0&kæ&Y¨ÉÆa!da &kzÐÐd 
-§;±4 B[¿_Ú0?uY 8W	*õxagwmc"k YC<;Ðä$A5F"Ãã9Yiæ(p,OV(ÏVæåÉÂ@yÖ¾sÇ©'Ogñìòla<#OÊ³å8îÖæeØ<àóqSÛ$1¿M®Ç2-P¬s÷
-jMåî¼È*AXJ­Iè}´ëR9y¥ÖtóRYi8#I­z¹Öõ2!VV"(ÖV"æh8HÄÊÂÀ3øÃ®WöìÊa!v­Yµ+í:Â9ga ]kKg*JÇ®ÉÁ±SYæÑ`Ðreôãäâ6yX)SF- ¬³ù
-ä8"RÜ>K¤5À´
-;!RND¤5F¡HYi±i+pFQ(+ThM:wíz
-eaàØ´Æp;Ó={r0=[i¤'ìÉÂÀM­Ú½ÑÔS(ÚFãZG\mÚþ¢3 $ ©¤WDÔÂCRj4Á÷ö×û_ÓL`¢ls1 ¦\tãÜ³OTìKXú}@êL_í#³R"2~¢·¤¦jTQó0¨4ÅT<ÍË	EýÀDgú^§ÐÚ<(ù>@ù©@³ÈÉÍêúj£â¨Î­újNPÛôãXfª­/jÃCE:ç#ób.¬.875í·iú.1}Áe¾¢½»+q!BÓ#ÐgL~­Óéá$ÝÏpQÝs¢¢º¯ÉbkæÚèê¾Öå© P÷¬îG9]¦îYPD÷5T_÷C_ÝsÈ¨îk²þ|ÛÑ=èEtÏòFè£j@]lµáÚùÚ	¬g^V¸àÃ~f.pwtßÃ%Î/¸,çW´ë¢mÉ{Dè|âîk¤kË#$ª{NJT÷5Tçzä èê~Ôu	uÏÊè¾fí¹Ê&¢{Ñ}56PÑ=ê¾&ëüõÜ èEtßjëæ)(¢{Ý×P½àÆ·í±ò»£ó*8|NX'ÓpðæuUy½#6/p,Wlw³Rq¸Ì_Å°j ±[2Ç5FíÍIüöÎyt!²æ!âfÅc¡Û«õXñ ³Yég×4±}À} !¦f¡S×(~t³¼îêÄÏêçVÃiÍà­QY(ÄÊ­¾}@!.f¡×(Í	ÅÍ/¢ÏF¯´¡ú²zûÿÑ·«5¾[Ëx%|4&7[ ÓàÊêô¢ÖoÊß ¥Ê÷wNn÷¿ýéÑþ
-endstream
-endobj
-36 0 obj
-<</Filter/FlateDecode/Length 2714>>
-stream
-xÚÍ;ã6Fóý¬ÝÄÆûQÕ¥`«ì®rfog[PÚi'v0øïïEâ^ 	õu°3ÅÄÀÃÀ!Æhú:©IÂ_5=©hRQ©éöìû¶·uûm÷¨àQÁã×é%(òée+AOÖá¬ÑiÒÎ­¥~û2}L¿tK~2DøW`&Æé×·ÆÎoÿGØRÚÁ/ÅødàßàÜýõNÎ9°ÏmcoÕ´õBBÅ>Ö³HÁZ¿Us9õñ0ßùÏ÷éÔ¤¬0Ö«ä§÷éÅaKqrZãÞÿûïW)uÒDxÍËöö)¥=ÎÁã|nËOÝÇöLÀ{]y%·gÊÞ?£ Õú\.â4¼ÏÃvm/ÿyÿyúñýµòù6º«+¸hìÕÊLÚB)5;.6Á£ÍgI¸¸¦æó9øõ'K±d`H²þ¢õëú¢ra-kÞÊÔåÅ8I%]ÒJ°ùíÕþh¾(<_zÅ£çº±·õ(ù¹[òV½÷ËvFúÚ ¸R
-Üobclì}sã8öàL¯÷³Y²»¥,gyñù9ä[]ç¾J?I?¶TèÖäG½ö¥ùÞÂåGIm©§­²µÜ'2íB­¶sÌ¥½ë9åÚ-IÜÖsº]B®9<6ÖË­	RÊ§á¹^KMk:óCi²qþò¾-6X{½1c_ïl¹êG¦Ð(%×FùÈ«2­]+o/Ú¦PÊ|l1¤Ìs\\3¯iÙ5Ûp¯},Û¢-Ö±ö¥d3\O¾N"þtìWíÀùéØW2ãL*û~þWUB$ÓYBF¬`ràjsÄöÃZÎ2,|`zkàlmxÙÿÃOú¡h+ YÂõtyÛwÿøþþÇÃk)b
-ÞaY×fYN¬àïeý½Yt,m¢ké­ò¢ðAÙxÈ¦|¾ÐMØºå%¤îÏ ÔÙVs«;9W'|ÉöÞ}ZEÁHküqQAØè-Á
-ê´ÚXueô
-Ë;\®|îK[hÅ¿ípy¯Ý#t!è"Î:83ÚE^4w+vÜ{ï&R¤eS÷«ûöâ[îwXö0Â!Ï2,s
-F>ÐLöR¹{±»ñ^6'å-+oéz¥û->`°"º-j@ÊI(¬u{>åÖMåÁØOVï¢8^hg\xtx÷è¶nhRPÔ``^B
->ìeÒfîÕÉ!Y	9zCºÁM^13
- )Û¬¶¸Téõ)¬u·ÉÒGíô+_ÃäF48/÷YÍCÒ*u+ªD*Ï!¸+Çmá0<zJ§_BràM¸w5L$cU¤=Òu­<EïðòYrÈ¯oôUårîdâ¹Ü@ã&Ø)7/Âû@¸íôcT´zAåX½"]lµÕç Qñ:±¼^#ÝÒ<DÌÎI½*B¡ÛYI··ºÕÆ:a*vgåvoåÔ¶û	úE~¯É¨ß¡á9PÄð5TS§'Pèx:þjT¨hyZ¾¢¸ð¨	_T·.Ï¶EÅs¼ ¥ì6UoøÇ/ ÃWË=<\ñ;â°ü^u¤= bwNBÄî5R"÷6~	ÝÎJ©¸ý(¤ÛQ1;+#hðNï÷Dô
-èPé,$TzäW¬áDÎA"Boµ¤[íÎC$Ô9	uÞBJO!¡ÌYH(ó©9dãûéíþð(pFKàÐ×M*ÑßSòë<{WÜP(ëÅuÅô ë[¡>#hgVsO¯!òÍ¬[}Õx !bæ¤AÄ\£Ð	n³±Ð«áH±0+´p+Ó¸R=R yYhÞÃw¦;0ÚAl[cÌ$¾GÐ°,4ìF?´*­Zc\ÉåÐ[Õ;{DÍÆ=þVs.Óõö,ÿDQS»WBQ'ÿ3êLBZ#ã' 29ÀàþK'»G¸ÚuÉJÁ¡¥oUÃ9BÑ$+ÔdMHWHda &kG._#ä`MÖ3ÁÑ$5YcD2Ñ$5ÙÂ¸>PÈ¼Î¥É Úúm:Ã(:ø<×eà6+¥YÜwtmc"k6 èÍô¬ÉI4k:ÌÉJ£ÜõÎåÉÊåÙÊÂµ"OF
-"¯ïhT¯§ãA9,Ä ­®âNÕea A[Ï4YhÐãÚRì4:¬	Ìù×<êóqÓ ë1¿.­çF-P1jF/ü
-jIå¡ÍÎ§^EWk[çwÇ=¯rò ^­1"i±#7ð¬4W[a¤³iô*+ôjMA½:x^­1üÑW9,Ä«5Ë<4@F¯²0Ð«-÷WYèÕãÉøäà¾CYæ´hpgý¸¸¸.Ö_ÊRÅCÖÍ|R®0áT¡x|Bkg¦B[9¤ST(+¢Ð£0æs²²@e124eaà}}á:¿xêÙAìYcD1r_ÏÂ@{aØö¬1:«åâ²­KÓ¶Õ
-%I%ÅURoBTGkzïÿcû4èYÄd¶Ælú8Åº¥ÝUMA"fE¤t^ïk@íFö~µÌ«xù0­ëS4/,´ô)¶gPÙ<(öî vãÞ!2bqÑx³ÿ5f$ Ðé<(z*=¥S4<Ê¡c-S]ë:|\4·àlËÓµè¡6ó9;Î-øm
-ÿ¿àò_áîrG8(|¤á	¿sk.8ì Qás""£îj¦!(âzVRèú£ ÆÐõ¬ëk¦øtå×³ ëk(ÿ9O×sÈ¨ëk²æî!q=¸¾ê/CîA×³ p8¿º¶ïnâÂ·jj^;aõÌ)g¥	>ìGÖüvÇõ=\¢ùË®qµ^F¸Ð÷ÅZ_Öäê,§êcQçsò¢Î¯Á"Yè óYiáÚ³¿(-?+,"þ«3}ÀDÄÏ"â¯¡úâ?4?¿&­B*~Ê?EÄÏ"â¯¡®Ë Ê·õ±Ò½£s&>'¬épðªyUi¾#r/pµ5Û2<)Èe<× Gkc+ªpN*Tá5NjOíP¸YÉqsA]³!ºnÓZ9\I³Ppö|â;+°êN¬ÌA¡V®Qz¿¬QY(V	ïÊ;Ô]ïRó³xkkk¨ùý3ðÙÞ6Tß®Qv¯_¯ñ}©Zã+µb!å[ñd?
-î¡^^ÔòEAùËTùJ1¢Ácÿò·ÿ­üÎh
-endstream
-endobj
-39 0 obj
-<</Filter/FlateDecode/Length 2699>>
-stream
-xÚÍ;ã¸sÿ
-ØÁàð~TM)poªÝy3×¢¼sÉ]°Üßw"Ñ­HAjÞ-%~h FÓ·ÉLþ)ÙÉd§ÉÆLßáØ¯°}¬Û¯w{{ûoÓ[2ªÔÓÛV|p*xgËdCXKýþuú~Ú-qx¯tÊðÓ:`W.çéçÎÁïÿgØ¢t¸)ëøAIÄuÛØ{-í£ÒÐ°·í¬Jò>nÍÜª>ÌáWþýËôÃf2^9MÓÏé-:åK(y
-V%¾üçßïZÛ¤µË°Í¥Ó	:­µ#!Àþ|}ìÛoÃçöÈ~ÂkC{¦·G&_ßct}Üy_-N,¼.Â6wÊ§_¾üsúÇZåõ>º¯6W
-Ù/±Ö7YEÖØ¹ròöÞÃk­C¬uëobl<Yû¾>P´uÞÊ(Ó¡F¦´ÈØ­[ÜÝm¡²'£ëÏ'cÞñìµmüe=K}Öß¥º±×~ÝjdçÅL)ð¸Ëcºs,u;çñ5¯µYb7×R·Zb}ñ®½N®ëØ-mJBë=Fwuo×±t¾öpýÙ¢¶´ÓV²õ:&*íBm¶:ÖRÚÑµNµu[$.k.§T[Ï­ç
-kZ)íÝðØ®¥5:çÒt§þúº-6XG½s'çß¯lµÚ[¦Ô)¥¶F{ËX²¬C«ïO6´®ÐÊ¼í1¤Ì3ÆqqÍy_c®­¥`ÃR¬Ç6¶±õj¦×oÊÉ&ç§?&Wÿ`¢@"Æ8ý>Ù+&ævì·é_puX%@Bp2[%ä"h;H#¢*ðJ³9Hc®ÁZj>0½wðH¶>¼ÿáG{S´WÐ-ázº¼ì¯ùÛõ5·§7QàÇ²ænYA¬`Ð\Ëús¿,
-Î.®eDôÊË*&ãó1U5°íWTÑ1c>µqë
-#¨_W¸¸u*¶Ø^O¯(èÚ»x\TR>GO°ÒNszë¼yå2<}® W¾ðËúä°0ú\1ÚpËCHðjFÈ´©µáé Á£×a¢UY6s½ºoO¾×qEÙ6¤<KZd>Ð	\¥Ü£ÎBy.jz9ØT·ª¼eè}¶á·$.û©(ÅDh!Ô"1!Ë¢ÊMõ¯®­ mÃf+#C¯¾Gº¬¹Mî mAÂB$xsÔÅº{¤BâdÐÙàH>« g/ÇQk¸U1_HI9 3Ý#å§.g¢YH|MÔ»½»¬DnÈ]ýcd@&U\û=i^ò³*$#5G=îÜcAÏFª ²«¬ë´ÛLÚ­E©NÇ ÛU?è3frWtÊÓÉ%¿"Õp³÷~^Óà¾ÑQÑéUätj^C"V0«s¨Ë*^ö 
-½.B¯s¨B ]å¤+!~¤`®Ëûd(x
-e"¯2A5Ås¦H01¡ä%HDòé\ûøs}h^åI¨õý¾~Ó­ÅJl/"CÛs²¹§ëõfeÂ'Ìõ>Ô{n0D®÷ dßnØÕiÿ¸ë@ÑôTdzzÓù"G</!"çH½lb	-/BBËs¤3ãÄ!$t¼	³÷£(!¡ÜEH(wD³÷<j!5µ÷z÷ÇÌ#D(v	;'ÚÍÞwPë"$ÌÞ{Û=3ÞÏEHèsD}N£§ëîÖá(Á&rx°ªøÈVîdâzÃ}×Ý7Pèë%ò52h8ZBat®õ}lî3ÌË.ÊYÄræ,´ÿÎ»(d
-¹ùQ%a 9ðyÅ+Â(NYS?¾Ã¼=T®(£ìÝ¸¥@Í0P³¯a ZE¨V1ïÜÐÚQk*Çl7µ£U9GüóÜnÞ*´ü&e«¾`'ï^ëöô)!Î¯´w:¿Ö!¸:³Åß#ôrÇ=c æhó+(KA2
-RUGÈÜRó1E,-Uå(qÝ)ÐâJNA':yÀ"t%Ç(;³Ò=W0ÐcÁ@W& ÐuéÈ	 ¬Û½ghúØâg:è]±:A,¸(#ò Ü³¼{X0÷ä,ËIE{öBR:åíéT¹g/î!T¹'Çx%÷ rg}*Â@aøT>íYäÜ3¼KÂ[³u.N]®kÈâºöJ?ökMëÔøÄ´^BAÔÊ1.ãGµXP­¥¬w;0Q«ÕÚI~¢ZE¨Ö^4Q«ÕÊ1âîG@ûj µr32#ÓzªµáP«ÕÚÈ©j	*fãwLa2#T·;¦§×Åök[Îx¨ÓòN!ºÔÉ-¼úJ0ÈGYãB6¨T*åôÑ,U*íE£<Ä@0P¥½h<*D¥"6ßçOÎ÷%D¢¢<)QJ´^QP¢"(Çû.ÏË¶®cÛ°e5©¦áR£­.es´ü÷ú·ÛßÚ`¢nS¾rÌ¥ñ¶~äG{ELD¾wPô¡8Ë PÅwPç§#^A¡»êÜ=BKË PÓwP¹ÿÉ:[Õ¤}Çû³}&4¸(¼Û£²ñ¹
-ÝAÂ*^F¿#ëÞ0ë
-åÜÖ¯-O¸äÌCÌÂ;¼p âÂÐÊà®ìpì®LöwY|Õ!QÙK¨ì9M.ý½ÈCÑå®cPDö"(\ÜÔÁ2Î=2b|1~/\g&5¾
-Ïâîì0ãK¨ñ9Sé-´;d"ÆAa
-ß"²AÙs¨¨êæÚh6(|ÂeoòÅGáígc	ÞGïfö{¸DöW&{Û_±De/a¢²çP4_MCPDö"("{Eïá!("{Éì"5Ô£¨çEPÄó½>õñ¼
-ïlßAÅÃuØ^FmÏÁÊÞ<hØ^El5(b{±}oöîìA¿ùX÷ÌñHuÂûàð>å.KW·ævGÞàDK98Ür=Ü]ôÄh¨Ì%8TæçÒ¿ÂÜ¡PÂ9ÊyçF9G!â¡q÷¢ÒûShBt-B!ºæ(ô³GB$-B!æ(K;Q³ªù¨¿ä"d
-r¯.ÝG5,B!æ(Ý¿½î~C¼	Ú'öýíðúÿ£¯]ë|éxÂò½yZÙSØ*âÿf¯ª_e®_åoL5xîþô_8Ö4
-endstream
-endobj
-42 0 obj
-<</Filter/FlateDecode/Length 2730>>
-stream
-xÚÍ»²ã¸@sËNìàbñ~TÝRà*ï­r¶ëÉ\Dyî&»ÁL²¿ïE¢[ @Bê<SJ	<l MÒômR¿j
-zRÑ¥¢RÓí78ölëöËn¯`¯`ÿmzJ¤ügzÛJÐuF8kt´sk©ß¿NÓOÝ÷BÿjìÂÄ8ýüÑ8øýÿá[ögðK1>ø78w?C}sìkÛØ[5m½P±õ,R°ÖoÕ\.}<Ã¯üûéÕ¤¬0Ö«ä§/Ó7Â&âä´Æ=}ùï¿ß¥ÔAJa	7í5RJGýõþØÿuÛ#ý	¯uåÜ©xùqã}¹l8Óð:ÛÜ*ãò/ÿþñåZy½®ÁËÕ\´KìÕÊLÚB)5v&]l½µ°A$ÜzÕÎçkðëÿ,1ÄYÑú}}¡ra-ëºQP7ã\L*Ñ%Z	6¿=Ûm¡Ò%ó¯¥Þñì¹nìm=K~ìÖÿy«^ûu»"=7(fJÇMlc¡qìÚ8=¸Òù~5Kìæñ«å*/>?xçV'A×¹ï¦ÒOR&¡×-z5y¯×¾t½·pùY¢¶ÔÓV²µÜ'2íB­¶kÌ¥£ë5åÚ-¸­×t»\sxn¬<[#PJ)ïÇz-5­Ñ¹>&×/ïÛbµ×s1öýÎ[ ~d
-Rrm·l¹*ÓÚµrñö¢]i
-¥ÌÇCÊ¼b×\×hÙ5¶á^ûX
-¶1,E[¬cíKÉf:O¾M"~tì£vàüôÌ8Ê±_§Áè°J(àd:KÈhaµL.¼RmØs°«Þø$[^ÿð£~(Ú
-h0./ûë_þvÍãéµ1ï°¬¹Y +¸Æ{YnKh"áZzD«¼(|P6²)º 	[·¼$ôÑóy:ÛÊ3±s­0¸ºkuÂØÞ»O«(¸i?.*½%X¡SV«Î°^aY×Ïqi­Ão;\Þk÷È]º³®v7ÍÝç§Þ»iÙÔ}tß|ÏýÒ2lHy´Ì)È|  í¥J¹{ÜÝxIÍIyËÊ[ºÞgé~KâÒVDcH ã!
-kÝOå¡/Y ¦ìOVï¢8^hg\x	:¼zt[7õÙõ 5!oö2i³GÊñ	+B²	
-3J`æèu<Ò<D7*zÅ4Fx¥÷{¢<Ï+ÑP»V	ªî4<	Ú£Úé='Õ6Ô4è.wWÍCÒ*	ëá]íéµLïOqËã¶pHOÒhá×ÜûBràM¸w5L$¹dPÍ¤öÌoÈ[@~þ Ï*¬p'ÏåZh0Á®H9	Üü½$÷D¸íôcT´zAåX½"]¬¾Õçm¨xX^¯¨²Ü1;'JÄì5T"qldÄí¬H·*2»³â 	µÍÊµ·æA0<%_ùîhÍs ´õêV¸GÝgAY%LÉµ¡ÚcÏ	ªEª¯ÉæÕX»ÑGmLø¤½uyÊ-*è- )e·ùº|×?.ú#PÔ|}EóI½´þ
-tÚCÚª¢zzEõ2ßÃç\°¦Êá3ëöÐ ì9±"²¯±RKH¨zV¤,B-ùà©b{V Ðö5ÕÎö·!,t=]_sÑ~òDúVê'ô].=eÊ5Ô²êY\¨úkîôA?}Üwzw@a$ð°ô©V²I%úQ¹(¿NÅwµþ */P,WP{ûIÑ7°2õ& ×Ñ5'D×5F"YÁÜÅ@E³¢Q²ñ£`ÜºÅÈ¬XàìJ+­1âÌÂHAä¹ùFøîmÀ®£y9,$Çnävj-gNjëHÍ¯²0Ð«5õª9÷ªwÐÜ£fÎuN?ú¼9ýC¿¨EðÔîäçP´çEIHkd|(8Üéd÷·³¡è¾UçÅ¬  +kHºp%ÕÃ¯ÛqDMr0&kªI3 Ij²U)·'4ÉÂ@MÖt¦a@pe^ÅÒd mý6ÝaM?ÏuY 8ÄÃ2læxÅÀJ4k±Ü
-­ÉI4k8Is²¢QÍ£`¤sy²bò¬)h¢äÉÂÀD³Æx)Ñä°¶º{Â ,4hãD­1¼Nks~6g}BÜ4èºÌ¯ë¯ä¹QÇ¨ÓC3§FEQk[çSøQ9 F­1è­»0*+Å¨GÁçFeÅÚ=MÑ¨,LGk?¡L9D¦/õ"SÊ´aN1P¦,iñ¤LÚU9 YfC?/.®Ëõ×²ñP u_4×ê´íçgÙ³¸%hON=[qOä£¬h{ãznOV,Ð5½öda =kO$îìÉÁ ö¬1Y¬9²0ðÃ¥F÷C¯BY,¨Ðen­à".Ûºrm{R­PTRÌYP%µð)u´ä÷þýíû5([Ää¤«5å´ÆÍw¨Ø ±ô»C¢Ê±#HÄÅ¬()×Ì»äPñ ±¡yá*~>Vb*²æmÝVãþã	ÕÍBwï |Û@³ ÉwP©}sr ZçA¡×PÏ·u"yZ~GÖ_¼lËÖ'µæ¡6ó9Î­nêþè¾à²t_Ñ.ºÍ"Ô=ñt_#5uDuÏÉ½wP¡u|ELÏþ(P~	MÏ1}ÍD'ÍÃ1=
-gwP¾»êéPD÷2ªû¬9{{EtÏÂITrEL_CuV2Ä%nÃj^;aõÌÙf¥	ÞìGwû.1}Áe¾¢]¦×æýÇ&}"4=ñL_#u¾®ÖG¢¦çD¾¢ßêsCPÄô¬H¡éubBÓ³âDL_3u>=`"¦gA¾¢9ýPåQÉs ¨äk¨Î¬ò<äô­fÞÏé»dÄô,2o1ªÙ|´Fù±î+ÉÀ1Ú0gÁá}Â:¯rWÜk8¢ôÇRzÅöðáís ÈõÅÈÑ÷*ªpNT¨Âk:z;@!âfE¿ÈÁ:âì&v&ïkbj
-1u«í¦Æ<qÝÁ9(ÔÏ­ær@!Vf¡ÔûU¢a
-I¸k¹UAÍ¤÷FP®´¡ú¹rxý½?èWÖ¿±e  ²üLÌCKp´ºËZ~9(ÿºÿ.} <÷OúÔßÓ®
-endstream
-endobj
-45 0 obj
-<</Filter/FlateDecode/Length 2700>>
-stream
-xÚÍ;ã6sÿ
-Üãý¨RpUç©ºÌöd®$yÇì&þû× Ht³RÐö·[J	üÐ >6!¦Ï4ü7S²ÉN®Á±?`{[¶?îööö§dT©ÿ¦µ;ùàTðÎÉ°úåÓô1ý¼[âð^éá§uÀ®\ÎÓ/o_þÎ°Féþq.&?S·3ð:ë¶²÷ZÚG¥¡a·í¬Jò>®ÍÜª>ÌáWþë}úñ'3¯¦ÄéýczNùJUÉEg§÷ß{ÕÚ+uÖÚ~}>½ØáHø¨<²óëÖgz}d¼Ö>Ã^ÃÖ£ä}ð»à`³ðºÛ¥SF8ý÷ý?Ó¿ß¿"ö_ßÕFI!û9BÁCóYã&ë¡Ó¡rò5B¾Ö"ò­Ö!®ª¿	¡m1pËkêÑx²öuy¡
-i)ë¼Q0§BLi±-Z¶¸>»?ÛLeOF×3OÆ¼âÙkÛøërú8,¿Kuc¯ý´ÖÈ^:JÇ]îÓc©sìÜ9?¨éåV9vñZêVËS¬!Þµ×ir¡e5ÒÆÒúcOà]ÝÛZgøÍùÖÃõGÚÜNk	4ZXÊÚê¨´3µYë8»õèR§Úº-×¥N×Sª-çÆVÀs%­önxlRËó¦4Ý©¿¾m³QïÜÉù×[ívË:¥ÔÖhoYkSehÕâýÉÖZÛCÊ<cg×hù%¶éÖúX
-ö1,Åzlc[©fzpÕø<©lr~ú{rp&ú	$blÓ_MQ¹bbnÇþ~kÀ"¡Ù*!AÎÙ@²UWÕAûsÖ\Ë4óÏ½@²öáùø?ÙMÑ^A·«æü²üðÏÛk¶§7QàÇ².Ý²YÁ ¹õ}¿,
-Î.®yDôÊË*&ãó1U5°íWTÑ1c>µqë
-#¨_W¸u*¶ØÞO¯(èÚ»x\TR>GO°ÒNszë¼yå2<}® W¾ðËúä°0ú\1Ú°å!C$ø 5£CäÚÔÅÚðtàÑÛ0ÑªÌ¹]Ý×'_ê¸Ã¢l<9ù
-òè.AâÎëÃQg¡<5½¬Nª[UÞ<ô>Úð}ÀTb"´&êÌ³åQå¦zªºÈÌeÈh6[82qxõ=Òµ&B´	àÍQëîòUòdÐÙàH>«`à]ý(i¨'U1_HI9 3}(å7bÖ!R_õnï^Â5ºúÇÈ,®Ó®CT2l]^éáÖYjÀº¤ E±þqÁ=ÏF*²ëm/^â§ToÌ V_Þè3ætWUt9ÊÓÉ%¿ Õdpõø~Üâ¾ÛQÑîUdwjÂí{Þyø]ÂDüÎ¡j¬ÜsMJ/BÃs¨L"5
-A¡ã{JOB¡åEPhù^¤.<cx A5Ïs¦Hò^DLÏî:
-®ÁMÈÁöÉìVDô"(=¢¢ß$feÂ'Ló>Ô·ld÷ d_gíê½ÿ¸æ@QòT$y:7å¹2D/!"çHWPð"$<G*O#¡ÞEH¾À}iÈ¦¥!ü^ÄïÊõî	wÐï"¤æwNDóx7Bv Yãõ9Æ~®Ïèh]ZçHgÒlcH(uJ#]ÈM*m·8½Ýv[ pFHäÁªâ<Zæ`Ò<Ílâ2õ¾+ðJ»A¤Í æ:µ ¢PQsËÎòå,Â@9sLä|ÝÅ@!00ßæ×¥a£þa {Ñ¸vü»Å@ç0s{=ôò=+ åeÇü[
-t«§Gzýdþ¥*bA©öÆlj*ÇlÛÑª#~Îynøòl'ÿy&e«º`'oW¹0 N	´·ÒÞé¼à¤)BpõFÌP:Ùì0EÐs´yà<àJº#Äö\)Âh®ä~ä2®@WrÜX;p¥óÐF|B"Ô$Çäú5 Éº®oi2õqÕpæuÙ D¹&i|"×P\c\{S¬Úa`®É1h®Ô)ÂÀ\³ð0èOú³grMFó'§;wÓ;þ@r3é yÀ"ôçWWâOúc<fæ wI8	[%!6].KÆâ²ÔJ?öiùAm.pnÀ§
-âSq!¸2àSúc2vGîÝEèÓ£hÄ0Ð§½¾q}Ø(èSFó)§Ïå£ò	§xâ¦¥*bÁø,nÀ¬"4k¯«>aÖTÌÆgE¡¯À}n³¢§eÄË²ý6m ¢yÒ ËI%FècQßÇbnMçÑ©uÊYüPHP§"Ô)Ç ÉúÈT¨uÊ1±úu@§"âØ¬¦d½>:h&U	
-IR9JI>OE¤r<4/*a J{Ñ¸Ü_]ò¼-+ÖÖ'lÕ@õA4Å'F¶*ºÍÑßÛßg¬_3ÒELQË1ç>ÔéGûHDÃ"&ÑÞAÑOe
-},B!ßAåþ!Phgê¹©r/Æ(tµ
-e}UúPhnTË»ýü©ÖCÂïÎÏÆø\	r·ñö®qd¨x:þ¬»4Ì,ks[®6?á»bNëÂCk»²?Â%²o¸2Ù3ÜÍçeÊ^ÂDeÏ¡èÚ¡8QÙ ì9ý%AÙ ì9½,Æ!("{}/R×î:à=("{Ê3Ågì%HTöéÜÎ=d"²Aaö~UzkÅ¡çEPÄó=!ä^2oV(|Â=oòÅGáô³±o#wú=\âù+ó<Ã%á{ùóõ¼zC]mVêyñ<¢·Ñc"Aázàn¤6)X"#²Ùs²ií("{Ê3ífö{LDö$*û^·º>Ó×©ìEP$³ïAígö»dÄø"2b|NvÙY½ÝæmÙ3Ï; qÖ	'Ãá}Ê]×/~7ÌïX½ÁÉ¬Îà6kÂ>u¹º£\v>Þâ(Äà"bpwÀqâm
-ÉÏ9ÊÞºaBD-B!¢æ(¥wÿÒA!z¡ {½¶·~)K@¨9Éygá'!*¡÷g÷#QÎC,â!îç»?Ðè~¼	Ú'öeíðòmßèÔ:ß°å "Þ0V6çèG<½ù{êwAöcDTçþù»ÿ$¤Êú
-endstream
-endobj
-48 0 obj
-<</Filter/FlateDecode/Length 2721>>
-stream
-xÚÍ;ã6sÿ
-/¹÷£jKÁU§ê2Û¹º'v°øï_"ÙÍ&HAÓlG?4MÒðu0ÿÍì`²SÆdcÛpì7Ø^çí·ÝÞÀÞÀþëð*õ¿áe)Á>8¼³e°!Ì¥~û2¼?Ø½W:eø×:`W.çá§×ÆÁo3,QÚ!NÅÄâàßÂýü ¤âº-ì­öQihØm;«¼K3¯Uïf÷+ÿý6|úÁÆ+ç£)qx{^¢S¾`UrÑÙáí¿|ÖÚ+uÕÚ~}¾¼ØáHx¯<²ïÓëgzyd¼Ö>Ã^Ã£ä}ð·à`³ðºÛØ(#_~}ûïð·Äþã=qQm²"<45n°(9-*_#äkm!!ßkâ©úêÑ5n~M=/Ö~C¨BËº.å@ÌåÅP#SÖÈØ5Z¶¸<Ûm¢²£ë¯c>ãÙkÛøÛ|ú8ÌKuc¯ý²ÔÈRàqÇtãXj»6ÎãOj:Þk3Ånì¯¥^kyõ1Ä»ö:R®#´,£¡FÚXZì©0¼«{[ë¹Þ{¸~_£6µÓR²ô:&*íDm:Nãn9:×©¶îÛ\§Û%ÕÃsc+à¹ÂµõÝðØÎ¥9:×MiºQ}ß&Ì£Þ¹óïlµÚ-SjR[c}ËX²ÌC«ï/6¬]a-sÛcHWãäë-?Ç6Ý[KÁ>¥XmlãÚGªÌ_MÎæø`¢@"Æ8ü1Ø+&æõØïÃÏ0ÌJ !8­rä$Qx¥Y¤±?×`MµLøÜ;øH><ÿôÝítK5§ýóÿº¿f{zU®x,klÈ
-Í½¬ïÛe9PpvpM#¢U^V1ÏÙ¬ªq0í°¼¢9óA¨sXWê
-ShxP× âÛûðiÝ@{ÏJÊçè	V:hNo7°ÑC§Í`æ¸¬OëC¨Í£[.B0DP3:D^ M]¬O	½­Ê´ûì¾<ùVÇe#äÑØLÉW0ß@'p	wX:å¹¨ét°8©nUyÓÐ{_ß¸¦¢,	 4QD? \8D«ÛÖÌÀ¯Ë4©Áz¨6 c³aTHQïgnkìâb´¹àÍ@ÕWª(3Ò­ÉCZèlpB$U0å(TÒµ)Faô!RÒà\Â)?¥áÌÚ D*0izå´CêPÖèê##Ã²p)eÁ]qUæhU"×Eä,#5g[*s2Û«$¸òñÙHm`CV0ëÂ¿Cç·AªgÐù*ÈO¯ô3»«BºÈÌåéäjJ¸Ø|JßïiqÛðç¨èøõ#ërf:9>ÎÑëD"0A¦®bWï¡n¤ã_;¡Ðî"(´;Js÷¯P¥
-ý.òÒM;Rsõ¶!j^D¤¡ÊeNÖ96íEd½º@³dþédBÓKé9S!sLèzº¾Ú^¶çP#ÚÌfaÂ'Ìõ>Ô58E"×{ 2Æ/xu ßõg húTdz:þÖJäç%D$çH;{Ýº¸Põ".T=çªîr3RìBBÑ0oj|*Jhx&ò©(.$T»iU;'¤=D(v	{+F·gtE´.BB­s¤+i¶ÜR!¡Ô9ÒØþàüqx½ï¶"@Y<XU|GórLVMWá¾Bi¯P"i3¨IÚ¹qý¾ ¢PcÜHùCô²½Ì1Rëbe.a [Ñ(1Ð¿"ô/ÇÈ¶Ûb sE¸xÂ1NO6,h[	
-±-G¹$[
-4¬Ë1Öm¶hUZc#?¶j*ÇlÜÑª#~æy]óOí¹ü#öLÊ8W}ÁN¾Ns¡ÃèüJ{§ó1B5E®^Ùâ÷¥ÉS 0G	®² ,9B'Óóî²a¬	*§ Óy&%D~NÑ£Ijcä¬hRäaÞ:5B×{DL a}\5¡Éçc]®¢dAleJ(H²É1úÒ+Ô¦ÃÖÄC5ÇH'þ±à2o+$×aR³®M*ÂXMÊ)è*nI%Ä¤âJfÜaR´Õ$3=bRcdàv4¼KÂõØª³±it¾,Î7`éÇf]¡D(zÊªbÕB|	¢UEx	Ï1üÁØPEx	ßFxt©]Ê1½a¬.å±§MÐ¥âRNQzìA\*Â@¶0Æ'\*Â@rêÒ%ÑTÌÆD¡@Ö£×%Ñ÷KÈóíÄóíûý¹üÉ@Ö9vìð§|VÅv)XÏ½%Ú
-âª^md|¨ï4à©{TÄ²£ç®ï%Ä¤"?iRc4ï81©LZ|hõÒrr§m¾omyÂn¨N¦áÂ¨ÑVE²9»ý÷þ]å»6(^Ä­	pÌÉ3EÌc$¢bqñêìà2³Í¼#KdQëÖA¡§ájÜ|ÒAaê»Êí¬ó
-í-ÂÏ²vPñC²@£ÀÒw`ié	ú]?êjBb{&Î;¨ñð¶µd¹kmzÂUo@9!fáâ.ÐÐu?pSùg¸Dù+îGÔ¥ø=îA{ÆD/"ë;ª[Ë¬§PD÷"(¢{ZBÝ î[*|b<"ºAa¾ÚÝ\ºÈóEdkÊ¾$Z¡Ø^DmÏ_³8e"¶AÛ· Ú7)AÛ í9ÔHàf
-2>á¶·Aùâ£pÚX@7Ç;ü#\bûWà3ÜMz¨ì%L4ÁçPç	þ!1¾%r_º ñEPÄø­p5üC(b|Ið9Mðû:½$ø*|§õ(_FÏÁnË=a"ÊAåAuÙ*_EÏ¡_¿dþ:ïè8ë«ãð>UNïoà9Ñú
-'Ó:Û¬Ç Tæ¹s[{MdBì-B!öæ(4_O'(ÄÙ"âìVTJGT©E(ÄÔ~%û,*ÄÏ"LÆ9I<øØK@¨9ÉµÏ2ÔÂ"bar´ÎQ{E(Ä½¥ùeëæOÔÀ{¡ }b?À±ã/úuµÆ¯n9¨·!L?§Í9ªÇty1Óo	Õß2ë¯´®óÜ?~÷©þÐ|
-endstream
-endobj
-51 0 obj
-<</Filter/FlateDecode/Length 2693>>
-stream
-xÚÍ;ã6sÿ
-ÜÅûQ5¥ÀUç©ºÌ¾É®Hò;ØMü÷Ý HtlRÐö·[I	üÐ >6A¦/4ü7S²ÉN®Â¾ßa{[¶ß7<~^Q¥þ^ÖìäSÁ;[&ÂRê×ÏÓÇôónÃJ§?­vår~ycv~ý8Â¥íâ\L,~¦nGèwJê ®ÛÊÎµ´JCÃÞ·³*Éû¸6s«úx0ßùãûôé'3¯¦ÄéýczNùJUÉEg§÷ßþûªµ'WêãYkûóéÅÆ{ÂG}àýß·¾Òë3µö°]¯{ÉçàwÁÁfá}¶SF8ýúþïé_ïßûoïKj£¤ý¡à¡ù¬qõPDÉiP9ù!ïaH¥Ö!®ª¿	¡îm1pË{êÞx²öuy¡
-i)ë¼Q0§BLi±-Z¶¸¾Úm¦²'£ëÏ'c^ñèµmüu9J}ß¥ºuïý¼ÖÈ^¥Àý.3û4³/1ûÎÌqüAM/·ÚÌ±»×R·Zb}ñ®½Në-ëh¨6Ö{* ïê£­ußo=\´¨Íí´@£¥¬½¡J;Sµó¸[÷.uª­Û"q]êt=¥Úrxll<VX"ÐJiçv)µ,Ñ9ß¦úëÛ6Û`õÎ½±ÕhïSJmö°6eYV-Þlh]¡yßcHgãìó-¿Ä6ÝZKÁ>¥Xmlcë#ÕLÎ_&MÎOMÎñÁD?Dqús²)*WLÌmßÓà°H(à`¶JÈEs6,DUàfuÆþ\5×2Í|àsïà¬}xÞÿé'{W´WÐ-á¬9¿í?üóöûÃ¨BpÅcY¶¬ @V0hne}Ïå@ÁÙeÂ5®¼¬b2>³YUã`ÛnyEs8æPç°®0øºÂ)4<¨kP±Åö6|¸¢ hïâqQIù=ÁJ;Íé­óæ3:bÈ`ðð\Î|áõÉaañ\1ÚpÏCHðjFÈ´©µáé Á½·a¢U7s;»¯/¾ÖqEÙy4$6sòä7Ð	\Ä½K¬Gò\Ôôt°:©nUyóÐûhÃoN\öSQÐB¨Db0CÎDµ4à3»
-¶óÑ8l¶2"p8dâðî-Ò ù!$(A[°	>u±nTÒeÉC2èlpB$U£>Jù)¤U1_HI9 3mò53\YH|MÔ7D"ktõY¸t²àªÈ÷¤(9«B2RXp	9X)?W:>©lÈ
-Î²i·T/Ç ÛU_Þè«Îä®
-<è"39§K~Aª)àjï9%ü¸¥Á¼ÑQÑéUäôuîõnÞuX]ÂdtÎõ6~sÂ¥¥.¯ýÙæÊ]DrïÉò2î$ñ 
-õ.B½÷PµkªB¡àEP(x.R«¼û:Q¼ª)ëì+cBÉKä{¦3£L¨yj¾¢9Ì SèEP(zÎ
-ì¹Ç¬Lø¢Ó¼uº-æ= ã×¹ºzÅ?®ù#P|I¾£¸Ôf(^BD÷éJÜº]nïèHê_Äì"$4;¥ÒKô	½.BB¯÷HóÕ!Z]Ô¬Þ¥gÛ."Nçbty.BB£sHñ)$ô¹	|^|à:÷&Ë£Ý)No·{@qFHäÁSgËÌK'M\&Üw~ÒnP"iwPsk¥>3ï!¨%DÔ==ëú]³åÜcäÞc E(äãJ\³a ¹h\"^FqÊzí¢w#ø²ÇÊ åö({'ï{
-Ô¬5ÛcìiöÕ*ÂÀTùhÐæÇVAå­p>;ZsÄÛç6ohÏvðo±gRÆ¹êîà­/ÄsJ ó+íÎû#Ö!¸z%fß"\F)B£Íû#² ,{<2&,E-Kí)"¤q5) [+mÊPá¸RÄâÒ.XÏ·Ë 
-SÄÂìYÎ;Sí;ÂL@¡ë'0@X×	ghúXBvv»×.{òP´³Ç¸4¨ÓN.å¡ÇQ¢"L;{ëÐéM*Â@öy¨QÐ¤"fÒ^ïÇ&@ë×'$*ÂÀÃOøSþäk¿ÏA%ïp>¶J,BlX.kÆâ²ÖJ?öiù´ºó©ð©ÜRë1Æ'[TE,(Õ%läZ^RåBòÐ#Dª"jwÖìIUÑ¤ÊµÉe\ª"Õ£Á2"UJÃ(OHURå:èWñ%¨ÎB¬ns£§%ÄËý"m ¢+úäq$D%$)í®CÆ@0Ð=çn­øSþä¢MÐ"dÓ¡:ëübXD{8ä&Q	hOñìT¨%Úc;¼{a D{ çy[V¬­/ºU5¦á¼¨ÑVE²9Zè{û«õ¯j0Q·)J\{Ì¹ñÊ3#1o èZ§¡8Ë ÐÇ¨Y(³
-íÌFYô{ ªAa®ËF¹v ÎA5i³ýñå>\D¾a:?Í>A¡ÐÙÆKOA¡ÝeP¨÷;ó`eÈ¹­T_ô~7p¹bNãÂ}CËYÏáÏ7\ç;ÜY§Wv¡íõ¼LWl 6óaÈ^DFdßÑ!("{}Å¡ìEPDö\¤.ÏM*{.YØ@í¯Y8"#ÊQå÷`ì_{2å ò9(÷LRå ò97d.15+¾èoòÅGáÌ³±#KwSû=\¢ü+S~;G/o×í#QåKhjßCí,	>"¶AÛ÷Pg"V?El/"¶ç"U¸,zØ^ElßCî/¡íEPÚ÷Li-Û\í1ÏK¨ç¹Å¦ö»LÄó"(ây®ñÒSPÄó"(âùjï¦"ô·å±³»gp
->§êåÃõÁÕMgõ¸¼ÁÉ\ÞÁí®î@¨Á%$Ôà=Ê ¤âm
-ñvÂfé
-±µØºG¹î,GìQ£E(ÄÑ=ÊÎôËYfîIöqt$ÄÇêãä¼s£'!¡sÍ3BÜ+B!îåòæûÝ3ðY(&hºoÖh»¯Öø}móuZ*âmó÷ÞiesNÞ,Ë§3IPýâ'sû
-(OÿXvôØ?÷7·ÄÉ
-endstream
-endobj
-54 0 obj
-<</Filter/FlateDecode/Length 2703>>
-stream
-xÚÍ;ã¸sÿ
-ØÁàð~TM)po«Ýy3×¼sÉ]°Üßw"ÑÍ&HAÛ¼[I	üØ >4!§¯4ü7S²ÉNî¿Ã¾_aû´l¿î<xü:½%£Jý7½­%ØÉ§w¶L6¥Ôo_¦é§ÃN~ZìÊå<ýü©³óÛÿÃÖ(íçbbqð3ð8ß)9ñ¹­ì½öQi¨Øm=«¼k5·Sæð;ÿþyúáG3¯¦ÄéóÇôò%<«ÎNÿóïw­]¸¸R¯ZÛ/ð/o6FØ>ê³ÏìÇü¾õ^¬µÍèú|ÝK>¿6ï°Ýze\~ùüÏé¿#ößßÕJI!û9BÁCõYã&ë¡Ó¡rñ5BÞÃËY¸Fªþ&º·ÅÀ-ï©{ãÅÚ÷å5*¤¥¬ëZDÁ\Þ\52¥EÆ¶hØâúj´Ê^®G¾^yÇ£×ºñ÷å(õyX~êÆÞûe=#{ëPÜ(îw¹³Owö¥Î¾kç8þäLo³cw?KÝÎòëswmu¤\{hY{C´±ôü±¥Bð®>ÚzÎðë£ëµ¹Öh´°µ5Ô>Qigj³ãÜïÖ½Ë9ÕÚm¸/çt¿¤Zsxl¬<VX"ÐJiçv)µ,Ñ¹nJÓó×m¶ÁÒë»8ÿþ`«-ÐnR§Zí#+`­Ê²t­Z¼¿ØÐB+sÛbHWãìë-¿Ä6=jKÁ6¥Xulck#ÕLOF¯ÊÉ&ç§?&c|0ÑO cC~lÊsÛ÷Ûô/	%ÌV	¹rÎ¨
-¼Ó¬ÒØk°æ³L3øÜ;ø$k÷ÿð£Ýí4K5ç·ýõ/{¼g{xU®x,ëÖ-+(tGYîå@ÁÙeÂ5÷^yYÅd|>g³ªÆÁ¶Ãò*:æpÎ¡6Îá¹º|p®0'çTl±}t^QÐ´wñ¼¨¤|`¥êôÖyóË1dÐyú\F¾ðËúäð¡õ¹b´aË]ºHðÎv7¨SkÅÓN{ÝD«2oæ1º¯/¾Õ~EÙy4$6sòä7Ð\Ä%Ö§½ÎBy.j:¬Nª[UÞÜõ>Z÷cÀTb"´&êÌ³åQå&,ëÑ8l¶2"£
-)ê}ÌÌ}F1º¼/\aÑL,äu{®:dùi¨îÐÙàH>«`ÊQ¨nRBQeèøE4èZT?Jå¥3\YHÆS/vH7¨Û5ºªÈÈ°,\EYÐVÜcÒõÜ³ÐgTteBîEêu$¸èñÙHm`CV0àÂ`¿CªÍ;q¤ze¯üü¾bRwÕåAÔ¡<\òRÍWÏÙáÇ##îËýõÞPEzg¨³¯ò=?D/a$]ÅïÞCÝ>¹éO Ðî"([³£P½Å¡Òá¨ó%/"CÉ÷ÂU¸ä@¡æEP¨yE5?ØÖèEPÒ»:-³ci°öPò$"yÎTH[ÔÑ¼
-5ßZ5¡Pô"(=êþ1Ô,LøiÞ:óLóñë´]½ø×ü(J¾$Ï@çª¼õÓ# ¢x	Éá9Ò.¿q¡åE\Ãs®LÆÃ0z!¡Þ{¡Zk¯!¡ÜEH(÷^n<k8EBµÚ9Q$D·"»ÒtE´.BB­÷^2(º	¥Î¤§O­ÈP8M$ò`Uñ-0ig6q{?ø
-¥Ý DÒfPsfÞ»tß@QK(H.Î1h.î1ÐË"ô2ÇH½tr.a {ÑX;õýý+Â@ÿr|`»-:Wó&c7oXÐ¶b[r=ØR aEhXQ0Ðª"´*Ç¸=VAå­pj;ZsÄo:¯m
-ÿÔíàßcÏ¤sÕìàÆ½`N	4~¥½ÓùaÄ"W¯Älñ{çãS 0G	Ò,E(KI]äY0ZÊ)è5Xx®I	Ñ$§(#± a &{URb &E¨Iq]FôAM& ÐuH	 ¬ë´34ù|®Ë!J6Ä\þiBÊPdcÜGÆ-¢M&N$"L6Ï¢áü)Â@öÚ{Z)èOFó'§#)/úSAüÉ)®¤øSþìUIz!Ía?½zãùÿDsPÉ»$­& ®DcqYq¥KµA¤Ê 6CþH*¡ RåwrMR¤*Â@©ö¢á^ª¥z+xJcdz\Á0T9EIPª"UNQH?ªÃ%¥]°¾18f±`fÊY^¼/AÅl¼pZ	*ºM~\B^/÷´.æHï«8Âé³#XÐ¤Å÷¾ï?1©MÚÉíôTr:T{pÌk&èTÄÒtÚk§i\§¢SNñj*ÂÀc¼£0Ð¤ãFüA¢çmY±¶¾`«ª¢)F8/j´UÑ¥lÎÖü>þ@cýLt.b²W¹YGEL$ÝAÝû«GO PÇ2(\¶Ú-»¡¡ed¨èn¸:>B_Ë 0õÝAå~ÖyâA5sïâ«L¨qñø©¦!u©Ë Ðê]¨|J/BÇï × Ï$ërµù¼/Ä,ÕúÖ weKdßpE6Çm¸àPÑKx¨è9Ð½÷BÑ 0ñÞA¥ÃÉGPÄñ"(âø^¤Jw	÷q¼
-òT>\ßwJFD/"CÑs0*ú¡vED/A¢¢çL4UÎCLDô"("ú	^EDßÓTêÓfÂ\ô6(_|Î<Hðá8²
-ø0«?Â%¢o¸²¬án¦a"He/a"+;¨ÝìJ"#Æãs2ú7}~_EßWgaÅ	1¾dõ½Huf´O ìEP({ÎHcb"² QÙs¦ë«Ê^EdÏ¡ºr
-Ed/"²çP·Þ°¨ëmSHðÈïò[á<8|NÕ/<O×/j7Lí½ÁÉÎàf;¥ÎÔ'¡Ð£Üû×;âm
-ñ6G¡úýØZBlÝJé|kÀQ£E(ÄÑ%÷gv(ÄÌ"43'ßù1âc	õ1'¹öÕ·#!¡s2Ö¨{E(Ä½¥hwoCböÝd£í^î²ñ?ºZçÎZNÄÛæ[àiesNaóeÙåÍÌ÷ª÷2»AùÍjÁcÿô§ÿ{1È
-endstream
-endobj
-104 0 obj
-<</Filter/FlateDecode/Length 321>>
-stream
-xÚ]Ok@Åï~9¦à¨¡ Bb*õÐ6Ô¤Þ6»£âº¬zÈ·¯»³¤ßsÞÌcG¿¨ì&ðzà5NÐtRhYs¶ôÂDÇ'GöÍ{¦<¿xgêõ~õ¶«~¾§Éqýí|ez}>a
-*=ÝBä¸:Ô·qÂ¾Í Yæø­'}ÕN|2Ú§¨;ÙÂê\ÔV©g¥®Ø£ ðòÜ¶)qÔL¶èeÁrrÈÊåäJñð=%×¥á¿Lêðu©Í>7D¢ØRZ#KIi)),m_J¢ÂÎtÝï³þ£QYHÞ¨ ))ÑmHt±v$RºØå!{êbQÏdC"õLÉ¾\,
-bnÅìò¾J>k½Ü­]¸Ý¹àNâýP2.ûü1»¢Z
-endstream
-endobj
-105 0 obj
-<</Filter/FlateDecode/Length 241>>
-stream
-xÚ]PÁj0½ç+æ¸¥5¥	´.B¶¥îº·6PãÁ¿¯²2ÌLÞ{¼7YÅOÜè Ù·²Å ½6Êãdg/:´!¥eØ§Tå(ÉªF¸71"d¯WþÕ\ï«¦ý~z¸ëâöâ¼8ºÏüÔ.SÀÞBYìs_àð¢lwq÷îzm8\ª6mÚÙ¹_ÑÈ	cI®Ø,I«prB¢f@Ræ9²®A£þýÑÑõòGxRRº"iñ\°µ?ný1ñvDTQoIåìýê!Ý#¥F´ÁÛÉuÞ,Ôo
-endstream
-endobj
-107 0 obj
-<</Subtype/Type1C/Filter/FlateDecode/Length 510>>
-stream
-xÚcd`aa`ddäuòóÒvö´ 	ØæþóaYøs>ëYr?ä~(0ÿg{èÅòIYH2üã¿@¤:Hø¥## Dk×ÌÄ¢¢üòÒ0_g``¬g``ä_PYQ¢ ¬©`hii®£`d``©àZ§àXXää(ç'g¦T*hØdXéëë%æëå¥Ûiê(gd(¥§¥¦(¸åç(ø%æ¦*}£&ósJKR|óSRòÎdTbd`lgì``fdd)yð£ïÇòßa~>Ïø½m'ó÷-?v.KY¿¬âLì¦ÞnYÝ³'ÊwÏèÔÐ÷ÛmgæwÙú]}íä:»º:²jýCükr:º»9Z»«gÉõvrn÷+V,\Ãñ7½º»tÑ¢î³åÐíû©":»{aIIwiµP]Á¦Üåó¼vúMéìæ¨é®nï®ëmÖñÝ-víoé1½õS»{º'w÷Oì¸ì;ÏÕßùWMëëÚ=cb÷ì «|<¢óJóòJ³8øÿ´_Àö[n:»ó4Õÿ<x¸zx¸wríäÞ9y¿? þÍ)
-endstream
-endobj
-110 0 obj
-<</Filter/FlateDecode/Length 11>>
-stream
-xÚ«ÿ  G¾u
-endstream
-endobj
-111 0 obj
-<</Length1 51826/Filter/FlateDecode/Length 23700>>
-stream
-xÚ­½	x\Å(|ïí¾½¨Õ¤^´«%YµËZmyeyÅÞ°Æ­Ý¶¬¥µx!ø&Ø`'<3ÅùáÏ$¼à	3Í$3ö$axdÞ ù?K«nÉ&Þ{£>·nÝºu«N:çÔ©S®iG»I³ië7Ö7~ñÇï' vî'ÒÖj×­}C{8þâïÚàzÀÈþÃ}ÿí{Vhñ¼¦}ãÌÞXOï¥ï]¥iß:ù÷BãÚÜp}®gí=0zèÈíé/ÃõOáùÏöîî±¥ýÛ·5íLÜÿþCCÆÉÀö?pè9ë»õ/Àu³¦EnJÄn|ûRTÓ÷éj6ý!ý¤fÂûO[á5ü«_¯5j¿wÇ´üo¿W3ÞëÒ¢k4õ_×ÒKµ%ZôñÚó¶?èA(öN¼§OOhQø§iZ§¶Z[¨­ÔÚµQmÖ¥mÔ¶ÂÕ(Üó]«¥ëK4>¬yô	Ígx5<é×´G5­fÍ£»këÿÐõ/u?ª_:ú¨¶·à1Í­Ùv\_û¨¦×D£ËãgôpaÔ@BU1`¶hç[Yç­¥ÝÑÑ«zOD;£{{zÏØËènÄNt×GÏh·Æáï¦­ÅgtçYh¬»»Ê±c9v*çD7°O°J>LfÍè[y×Ö«·¹©#ïÌî¼ââèò3Oum=óTG^qw7ärX5ß¿g«:;¡Î*@\\ÊÆ­gäÑºOà«Òâ378w¾C]?ª=5-A×¦',Q	ÐX¢­lù£úM]të¦Òâ<L(-.-zvwÀ»Ý5k6n]5-î®Õ´\èsÍxzÀ}«hUÚrízm¯vH»]û{í>íí{Ú9íß´ßjè½X¯ÔÛõúÕú.}öø£úÞúGõx=ôÇEÀPð
- pïÅ³ºÏ9ï¬æ³0R}ANÈå¼p¤x!ÅaùVøS÷PMÎ¢n``¡y)²:àUöüºôX´CK§¸ö¨F/H×tå¾s²3ug3â´EÚ*Úô¦¦ÆÖæòj=Ò
-:ªõ¶ÒPS#ÁÒ
-gc¸©n·475FÚÊKKBÁB£­µ©±@/¡«¦Æ¶HSùB½¹´Äá`¾pSÈigÕBÛ¸äÂøFxG[ïÁó¸)mR(h¾Þ6õµüé:àãÎRªÖ¯§>ÓtÙäëK#Ò
-'T{±^êV@Â\O,SU½¥rTÀT¡­mÎÒæFãÄ'ãë?h|æFøûì³!ÝæqxÒ]¦ÝÖ\îL/v:á8L_¦Ã´ã¯ÃáðÛMS7tîèiv§f7C7ªÝNa:»éµ;W6»Ýàö`0èJwøà¿ °0»Í°ÛÜnÓ(I~iíuO/»D·Ù]w¸:üuØ8 Ãps¶ò"+ÝåJ×ípßfi.S×3]ºÝç1íºnú zF-TRÏr>Íax:°¹O:þW_m¼x±þ~ò?ÓM'Ô*ãq8
-vÃi¤»á;àJ².ª¥ÛÓfèA»*hÒM{^Ýá×ø2¬U3m:0mW(ô¸ý~¿G7¡]Ò<cê%i+.¬SiúåîA­ly&|½7ÇotÃï³ÛLÛH3ýôé÷A^¦ ­êÒ~íÖ£eé98vÚ´"Lßã.ÎÀÔ·/uòÀ7 ìÃKZ K º lÃKý)	; n8	àÜåa=Á @zýRäNÜé;r§CîtÍÜ~gâ ðÜïáB^jCòk9 FR¿©Ûód £É`Fc»Õ;òu÷ lÛááA@n0°òg y
-àÞÅÒ`Ý2 nüø{éÛæ´5ÃØ>ÃY±HoAS>'STgåÌ*u»yÕÙ5U³Z+r¾ùÐþÔ¶óµ?èµúr(¶jTØ¾o;òaju?ÅVìÓ v×*ÿÿ©/_eÍ¹4}/Ô¨6¥C9!MàÆ&pc<;&¦êN.ÊÍFórêòòr£QM¿ô³K£ú- ÕØôÓTGn ë·C¨ Rcí\dÓûyUÓìd"Ã|]RZq(2³Tì¡ rø& O üà"ÀoL|ä=Ì=u'gµiÇùOD>ø¡#u¬æh<; « ¬ÏqNÅ:ëRg]>G!R!CfB4ÜfL{stÈqH¾Ó)Ï¸¤g²W»qB±ÍlZ7S¬M;Lw`¯ÐW.üÛÅÆóù|>¾¯úÒþ!ôGËÓÎRkÚª-ªXj£ÁCµXRÞà±l£ÑI½ä)¹u!8>Aè 6 X0!1~¨-i~O¦¹*±K1ªO`Kð=|4o b×6¨\¸øbµ¦m ¡qÔiåð­8Ü·S·û9µºxv3¦Þª%5R³¹¸rZíYI#  ë9«Ç>8°1cV[ùÚþÒ¹kVè×çøîwù§o.ÝUõ_Ý¹¤]Õh<wÂóÐæéú=ÃcÏÚ«©©unÆõÒ×	r EtIæ7(¨ÆìF1^àä; 3ËyJtK»å­ny[^ï¹åen*¥·´Ò.ì:WR_z0ÁÃ}	]1cå/ó"QÉ£ì^@Î Ì Ø5¸ìÚ£}.¾ð4ÀOÞ0éÓ`*©O°àZJ¸ ¾ ðe_Lí×|L@ßTåàñû2Ñ)µq '"[ ¹«­)£Í¯WÀOS¨¸ÿi³Ê/Î:>ù÷«õ7ç×¯ozð¿DºÚûGÐÅFà,)4ñÒ H¹	¾ÖÃUÂÙ÷iX3Ù /MªÚ¤
-vÕ Û öøéý|à 'SëE@~ðGZñã¾	ÈÜ6jBzw çxÚQ@N)¢ÁYÖ}(è,ÑX½\HÍ­_Ê(vªÿ°ÿ"Ò ÜDé v5À ¬°á7Ä9pàn û0oCÈ·åÀ¼«Ù&¸Ï>ÆýðÀq¢"bFº1µ¯¼@~72DÂP'äFL­FÀ(Î¤jâã)Q©aNuk1èÈ1£ § ì5¦Cb1dÕa²÷ë¡6 E&IÈüý*¯«³äµÉDxÑ²¥-Ñ¹óÊWæîl«þL]¶QÐ28´¿¡ÚîY]éØ¸}çõUsçäÔ-fk+ðîW@+3&ÏGtw#öÖñ¤ gl2H¦tn,3dÈîÁâéZ±{`A Ý\@I	úðIhÈó ¯Ð\sZöQ­Ô-ú³Ð¤åAþr¸hèä>7ÿ¥k Ý!¾Hò? N"ç8¿Mûïàdà(À)ûPÞÃg¦gq¾Ñrñ­ní~¸xàY ì	¢ Ïmi`ÝDxoy(Kzà5 ¼an'R©T@LAn(|ZH¾ÜB¥ÊàðãXð'"L(âÁæ³ZîQoê³"ñåBsú¡}42.f@#d@#d@#dÐÁñZ
-YKëy\sÌv&Ò9Î	_àwô>á@_¤fGÊä0Nø½Ð_:c8`ã¢²ôÊ¨ä(O«6²óDÊ|
-Y.ÈAÆi¢òHDÚ¤·,Ö¥-Å!r6´a²®h+Ôß-i¯ÊÞ¸jõÉº¥Ïê±{JKfw4æ/Ý:§ve^(²¸=XÑíì(øEMÚê÷
-§×´¢¶uÓ¼BgÄè@ÍH7fË4~ý8$8áÐ¬­ºQ 8£,óÔìÔÐj·`Å,	. òÊéÛ©$dlRÍrA¡2>@2/¦m¥âðsâT2*Þ@Ï½ÅtáéÉ	Ýèäî{I(æk ÝÆ	§<&©G9©XÉå¡^D0å2B)Ü88à7bH0ç_ò16ù³¼ ð¶À0ÂýÜ ð/|ÀÄùÇ~9·T ©  RA è>Ý^ p5_á×ävB¸¹2-SÇ§3iÀ*ÙìY ÓPÍd­'çø×yeKs2ãÅc(d(y(3ÀBZ&5
-2Ih}(åÝ8tÝaéá»¥!oÖ¼Ü^1@Æ ä#Ä Æ 01×[|ì«dÂlV@:ñ5Ì~Fn!¤¬4Ã©Eù§¢­Ôo´5éãë&¤¯m:ÍVúWûòË/ëç'·¼¶¡ãÉ9.®yéiòô­ØÙ</°mIP	) ªBR`CÓU$óôSÜKÈ£Z67öåTONÉ,NÒBÓÕÛ©aB({á~ÍXêjvT±óÜkÓ²TæLé«z>Q1aóú!¯òú9ï1iü ý""q<q<´:3C¥Àêô$V÷âòmÝë6ésÿ½zw8\cí"àp-í]kW­4õm«3ôþØÜkÚÓÒ:Ünd=Úè¯ßü«Õl÷&ª_%XA#fO³¨8¨YåA¢Q3R Ú)À²¢êå!ÕËiÐÀpc7diyIºãÔÄM68?/>Ì<&õa6¾¶Éf6M¥à=	Èy¼¦nÎæ/>I¤q6ñVH=oBáJº/&*éf ÔØdÌÁMÐ0­:9Ë6à¢ûXQµi,Æ ·TÈ	Ûx+Cº]!}tE	2&H« NA:j(säÉ2WÔÞhEc T¹S¨xó<#ô«ï
-ùÒ!È1Aæ±xF(#íhS7
-a¨O¸Pé¿Â;Q¸;0ïm/#Ú®~ÑñÙ(>,K;!ÒÅúoó[»»Ú¶Ý°2cîuËk\µm×ïßøåsVøY-³
-êK²~RwõÂÒèâëìþÚg¯J[6wC_k^m|ÅÊB_¦§hA}A¸¼ùØBøó:ð1¡FµÃ¨ÀÑaWü^«óV~'ä50Ë] ÉUÏò ±2¡=#Îä¯6à«øjF¹]d b¯!­C¢Ãçðâf@n¯ò*§hç ^Pj±¦\"G'°;Pà*ÑÀ4¼4y « ºâ Ü0½Èôi83¦WPrµÌªjNZe5 AãÊN¤øt'H}N3î ¸àgP4qañ¿â9ÑçsBÃ9¡á,Ûw²bq9)UéYG_ÄNù{ü;YBK.°²ÚÅ Yê¨?ùKý+o«ç¸Wç}²ÌÀC<´TkÑ;¾ú²¤EBêIE¦\áõ'è0(G!ÑØXA2¦¡£ÒÆjFLÌ<"¢))eòSaAh4 k5óabPÉ[_¶C:ëuÔÀH@=+{xó>³'­õ ¢( ¡ ¶.S}òÅÏ2bí4p×¸1çüLR÷aêprÞaÙBÂBü½G%e,rÕdBbM¹}Ój é,u6kuù° XÒ<é V!aM ö¶J)¸áBìù¢÷"{/«èájçcÚRS CBÇ|HÃe¿%ñ O/¢F9'/º74Ó|íÀ	Ó vn²ùÐdóy}¢y « llõN©66Êm)_.Æ ØUrÝÈ# ÔwKmeGX%4L%»J~Ë3å§ÒÎ?¡¤öùZ%e7Ñ(ôõ;ë­±ó¸;Oþ~àq0ç´iÏÂu«0H¨'|´Áê÷	áG$ß¢`8>L))&§¼ )ÅüqDæ/ òe±1§®|D/C3xGÅülÉØ¦è>c Bø@îx5ÓÒîéál·ÙÆ¡LÙb²ÈkÆQÑ½ßÄ²qõ	rPwD?-ûf zÍ¨(ØAÒ´bÎwÓdÜÔ8_^"·KàvÜ.R+C|9ÐI9ë å0B[èÂ­UA)UL`Ð·T!)«%%T<u«oÅ´:;ê9e®¬ð"Ì\FÞ$ézó¸J}#µðóæ%H¥!F=Ð´ó÷s*>Ù.Vùüd³¶©1HÁzpo¡åB¡gt{ÕqJ~ºEx\èèNi£k¤!®ï¿C>ûà´¯°Ñ¨¨Q4·¶ÕÙPÆBÛd(èp¥Î(k®3*|ºHZ6ø,ÒÉé3:>ÓS]ªúÜæ¹õ¥ÁüÖu«rõ5ÙyÑú¢ºÒÐ¿Ërk«×äUú¿¶x{¹¿¸ª¹¤bI]nvU{é¼kªü³jÚJ«W4ä7,m(¬-+ôl*Ï®fùjõ[ó«K
-¼¥Mmùe¤»4Ã¼ûé.Õ¶Yèú¡fÝõ3Ö¯ÖºÒ3Ý0	ù.Ý\JÏ%iò>JtYÊI&uEð±mfµßRR5å$«,3¤59Ê	ºâÑ±Ä0ª2$bqÞ		C j$Ì/ºåv\-óôÈWUÂ (Y(Äð"qªæÕ\7Äº^NµAK¡âqA¶	rXç6Aö²YÖÿúÄ"òXnµðYAîd qa²7½],1Y$Y#ºã#¬F «Ï ÚVìñ´èIkäv7ôL\ÖøîÍè4«?(7aÎ
-ÖÆ,[Ì½ò¸°Ë#8áV´DÜÉá·^tZV~P5ÒBU.*Q§ wsÔhÜfÊ¼Õæ ´M­Ôºí÷Å¥À*yñj@¶ÉPjpñB°µùtámÁ0úí´6«%ÍæüÖ«[û¨Ie¶o_VåÊ[ÚR¹jntãs:ýFFI[ÙÂýJn>4üÀèR÷wãÚyÑ¼æµóV¬æzYËZ
-¯ªÙpi¿öþhò"}ã£Z°Tÿ ,@Å) ¨Pµ"3çtá:òé&ÿWýFàC¸5å5Á!ÑBÖÿ³<IÄqdKÉOôw·p-Ù7#É¯$y±º{SÜ7¦;ègÄÃÐfk?Ó/èçÐ¸©ÝJ¦5&W'LGNÒ-ìl¢û  'Y¢ ¬ÛÐJ¥<¤áâ~e¶]$Plä}ÒaÐg`ë0tÜÑ¿Ùú×'·[yýJñKç 8¯íé³d±ñº;î< ¯ó*ªb*Õ2'¨uÕ"èòïQ
-;/8µ´	^êç¢W:00EC»v¼D,ð  L~£MÖÞÖvRæ¤zVê¸¾JÕ{Oò´_ã¢,°U=Ð±ÂÉ	rÙÆòZ0O4«&2õ¯ùí¨´üÁç y@îÚaà¤a³ðÀ©v~+ wÌ©	4¦@«Êd¤ÇM@B´$VX-d3ñò]dÌ`gÈ+&(/i¸*ãå's¦<gtºgG&¼jf;×ª,íbëRêA9ßrÃ\f'Gc w Y³ç©ßõ(k¸:kk&L&Ì:&sD¥8+H­ iT" ÃÉóú+¼#NÙÊI[Á oW767¿Ý/a³+þO3Á¤øÔ&-uÐÊßÉ³õaN 3-§QÓy éh~vk? ä' ¿ø/ êMÚl*E¯¥l&g\Ú`)Â`iÚ-ª3Dè¢¬ØYª7é õz©SÿÊädçÝ]®§]3ù¯ÿ².GÏùþ÷ç>§§½¸¯*7÷Ò90ª¿k.Õ4Ë¤Ö:O94ú\b«q	`k¤×1eI%B.Ë-MÉ(6f3Ë¢ 9³$ixy`jYÉª×2¹Ë²áM 'qbÚÎÓÊªîÔî:ðé8ï 9ÍKîò¦*P¡( $½ÙByíö{°XfÆÅâ2_L41¸9&ê"^#È|YM²3åË|¹bÉÎ×åÁ#ÀH(Qr*¬ #NÒ=X#im3B×5/ØÐÐrMÿÜkóÝ]Ëg-ÞÜX»,RÉ¬Þzüú]Ç¯íõ¬vt­ì_9+Ó¤¿ùÒï-*Óúß%G µö&&$&\tú*Çm"ù)Uÿ×E¯]KzXÈ#g\)cryõZÎU-ÕIt3c«åË¢^öS/ªgÉ­,ó¦®ãÆjÇÄNü*È."©2 ¸ÉÀVÑûÝäÞ·èý[µRFîd+ºArJ¤Ì"fC³¹÷èã³ÙXeE´"«J÷éÎB[-ù×³êæ6ÝÐUQÖuÓµ¦Öº´ôæ8ÍüÂ|³sÇ¼ìpëµÆ6®7oÿËu+>[¾ÒÆ¡rAÿ®Ï³»«}j6Ã'4ÿ8í`ðð*¿¥+ÊÐ¯dHnM}å:(*Ó=øEyoP®Wv1°sSÜâ¦VÌÝõôÔÂ#µðH-<B5Y]ó&ñ~D¿¬Kzâ4X ÍÈT|IH
-ÔÍ>ÅJÃõ¿|IÏ|O¯üñÄê·V¼ÚjËC[ºõJnK7·åÐ4.Ô¨'ÿ/·¥dhÄFÉz&¾!±ëwc½ ÇÓIB®ØÉK©mèjÃóÂW/1´	Ñxªa3J¹YÃïn6}oõäsÔ¦8ÏÕÀ<Wf<BN:r+´Ù§ßIÓY7ªõ)7z:ëPß|æ8"!Ý$Èì+¾<RÀó)Êoù®ÃØ·4x<nYgbS}Îe%3¬b2¬b@Ü	uÅ kÞpà)¥·¯Ë âe(e¡ØZ/»H|¸e·§ ¹ ðÀû  ¤ WßU¬²Ú¡æÛ2ø¼2xqæÑÔdjEð=õ Öì 0¡zLèå ­27dT ú¦-|rË/·`¥áøÆYbÎ¡eZ5æÈÓ¹7òæJÞ\oSçÚ[ù<Z}ØdS(³o¡T½PjS(-Óf¼S-Õ¢{d ×nmlj.§¤`Yú=FIzSÏv¥¹¼­¥B_ú@mS[î²¡us·Í]°./ÔÐ]µñ3U%·4-©ýª¾}òGéA³ºûøö<©t\½ºEiÎÂ{5ÄÇWã¬NÚ IzÔbQ·ý¢Ý&Ê× èQ¤´ü®Xc"Ü$é` O	b	Epd¦àpÜzRÃzè=ÊIÛ+ïñjìý4Q`'ö	Ê5µdæ¡qç¨-~8¼]tK|à¹D¶ÑQPª4yfãF½`éäÆçõ9tXm¿ÚÞç¸=åÜâ)·Dv½ hÂÔO
-2ä;ç½Hk;^Îû#¨WyA¥ò²´uNR« iÇTîc¯K½"dÈ-­ºKêó¬jb­¼â ä¥Êø°S~)Ãv¿OkX @´r¿,º¤ÕùØ*55 ×ì°ã BSóm ÷×ÐEÌ E(+n@rÄwÂìÕåÖîäag ^Äiq^ìÔv2ðy,³o|àÇT³Ôú>ÖêÞ0!AÑ­AÑ«^ ä5¾61M¾IÓp§ðµ ûÑhY rB<°Þ©áVé Ð¶cK û=Hòk^:8SÌ	ú¾F¯ÑØ/°ÜlÀf"y[cº^rk¤É*åçM¹^¡`5#&mx£ÑÈ²ªòî¼w!°³¤Øº¹ß	Àíâ*9Ê6"2?»Ò)±6Y©ÜÿNrk nhîaý0áÖÅìÓà´\6ïÃ-Ðª¾Ê¶ªZÕ	­êVÅfwb«2®ÇgÑ<Ìf¥ùM@&ÄÏéEíËí yMtê¿ç§M..¶'ÌdÀµ ûÑ_×]ðµÊ_!Ä¥eÀàsÁàsY»D9
-p
-ý_pê¿¯|àiöÁ¯qÁ×¸àk\,5ýXêò@¾MuÁÉÃ-Ö¢¸¨Dó4à3iLY_À¹}°g¿8;ZN¬b^·eeã(ëèüéËJ\C|§p ·Fù*íCI5	a*¯	§E( Þÿgs|2·õÈâ ú,ÁÜ¦ÁÂÂNæû¸
-© 0PºÀÆÆÓ©ñx2J£&Í*¥É¨-«Éæè¥/×oÜXûïV5éZ\ï|¦¤³>}îäOgOµôÿyÉÔ~[ö]½/ÞÔ¢|R¡©»p»<e<va,vQgìÄaì²ê(o²ï·Ç©´^hÒ¼\©ã\¬ÿ×ä®::|IæÞïÃ7Ìoâ®µéI±@¼Ç$Ø H°A¨|iÿÉÔuäKÇ|UUEÁ;ø¶Iç½ª)º¶c-®£±Rì0ìÌÐ ä16Ã:µÃ¸µ¼oçJ¿
-£ÌkR	0`@7ç\Õø_îS
-z 5;LoÉà>1÷ihâR2â]bxÿ®n&6YóW©¸'w³¤öJQ#Ê«Å&ò§;°ßQâhÊÎP¿ð%LÄ&Ï¸8Âü 	ü U±Ê¨ü+ÑgV¦aZiùëcKÓr&?.ËdÊ­l3µ(ËßÙ&È	A)ñ.Af«U¹EãJ¹÷­Ðô«³^´DÈ:p@ä7÷­úÖ}ëå/·5üòmì8pBþ?ñ¬J¤¼Ur§{å´²<´ AºÀ^îìWì¨UâÚ¡¯íaQÚÙb"¼&ÄÀHP¼noì¸åö³ê$]Üa³è°ë3¡ë3y¤+;R¶ªþJqIn ÄLòAÀ¢C°Ýr¦)X!7Kuä§RÜ(Ý>êy&U¬YÔ,jÁî}÷KîÏrnQ+í¿daz¯BÆäV ®løÎÄÌ+Ø¦¦9è£(åE£§³?®0êpÄy­W·ÉøZ¯*g^þÂÁÅo þ Þ÷Y39/Jx\¿%'QPz¹Y-@>PW":e¤9a¤)¹ïâº|´ô¶R§­ÔVQÁI-+ÒÓZF©1f?ó½Y¦oÝ¢Eÿºt£þR|çäÓúÂ{'+a;½®Kï½ëÒÆZã9ÍoÆpéÌW-cSrÓìbÛÅü'ádPFÚbA,éAN¦*­¼NÎ8¦s×½%:¦ìäGÂïdhwJê× ù.+&èæÈ)4àO%ó Y%zÇ6Ù¸ðE@þNRûåGä¶U^äUyýGâ5T!õxßÉí¤q@ÉÎäE¥ÊËS?mÁ:]\ü¡ÓJJh¯¤`µÈèíB.§%ÿ@®jú¦läúG@þàç²Ë¢³ßâp[Â)á÷ú. ¿Ý".JÉ*@º¥ÎÂ@ÆÂtOMK7ØäK8¬K&¬*+'ô5û<í»D£wA(}Á-©«9;*Éýë<*ïÿäECGX^ò, /É;`\ ]0]dwO§hDPÈ'ÎSÜVgÖÇü ùYú±',¼äAÚT¦ØúD:~Úúc°Dá§âÊ iÀD"äá7ù<#NPWü ÓûAQuX"\xÉÎHâÂ3vµ¥cBúÖ(Á	væÂºô¹¸°ÒaBÔén¦ÓÛ¦¦·Mã¹ÉCú¯¿Ï|ÄzBkÐ]È~p_$oJU÷9$4} §Ð
-A|(æoEYïdTõÍb«½FzØH¶¸éI³ÝK\ÏÓ£Y]ë¦
-4ý¤Õ¶®F_ßlzàçXl²Õxn²vçNýùOÐm÷£Æó¸·×¸ä«xð£õS;ªÓâë¥ ÃÉ:´©-(.)Ç%]²f©é,mJHY±>Ck}WÔEÃ;Ry<:ÅæeÑïê}|AÛÅLzZf£"¿Ò*²Q ã"ÌÜ!YYÂ}dY´	ªÀ6µ¡Ìé'K,(.KÔó XÅ2nâò·ã°pÔ0pÔ°ÄVË÷Xù"²:ßá|_'íybr\,û¸;?ùÃ4kåJ³XäÉ~íj)ý 'h).òà_5_àT»ªbÝ?Ê¶n!­¨Ö-æ(àPB®ÈQ	PH+F0Éî?N	YÓêxrP#?cv?L§2÷öã«ûW:±jÿ­5MÛ÷Eæ¬i¾.®_ÿÐãÍ;nà¿í{××ÿÕßÎÃ_2a¢îFkùú_j-ÿýoÞã)ÃaJý5iÕ~1®å'¯å&}ATn½O·XEà9xTò¨
-ÈNB®<¼²0!Ùl!ÜÉ"¶°¾ PLâ R]È}z¥¢p-2dÊå"èmd¹¨t[DT³E·8ª¦	£´ÜveIç;rDZ¦¯ÒëôÒ¬3£Ðh´êË·V×íX7§ní®f3mnüFnÏgÍe­ÅEMKÝÌMKlmËÖ}òCã³}ò®{K5T¶û -æ^Ze<<4Ã¹Åø(,\4,Ü/,\4,l0»ÛB
-Å¯P|
-Åm§P
--/¬R§xêÉñÚÒ¯Äwx+R: xk!`uÂ[Û:?û:'©ó1¡']ßE HØ>ÚÎX1`Õå ÖduñáÊºµd\ÓSáNòÄ;_Ê"I)ÌQy¼TJ%Èlá³á5³Ï-þòÀ~+­V
-®Æ¬Ï¢JÙ¯Z%W	û­©AªFj[#µ­£ÉS+·òÕòkNp*.Ï4H¾É× ùÄ¥A
-n><:kß>»¶¶|:8ï)|¯¸µFÈÛe7kod±ç0 ªÈFifhfifùÊfñ!ohfnÛ-ðÉ.Q¥%ÎMmú§ðUã©ìºHãîeÙa_®¯jãm5Õº"»ýÓå«lvøIÓ¿wEæË¼·Æ@³BmòÞLÂWßá@ãg&lÈbúÁßò¸É'3yd>$A¹u¤¼/)¥ð¾Å9ìhk¢Ï*§jtñ^Pþ)å38ßwÅî~¿ §+ïÂåVÚfÒÐ°	WÚdáñÆ«Öñ\dóê{>Ð÷|0uûx¡¦Ï|QVÿ^¢áªàküjc>^[{g^â
-â>	þð& ïÁÎf-Sû ?áTt;òwòyÌ¿,¿ÏfM ôIÊ*c	Ð	Óý"ÙùeÏÒîû@^û;¢Ëìd Zf"é¸çOL=îg,Iä@Vv3ÉáH94Yúiûçúæh~Ê`SnÌW7ã]ÇÅqÇÚìrJ¦Ï$WVÅTQ©¼Ùà©ÖÚLèñ°HÌÆÅÉS©ÃÉ*µáLÊ>oüusùîÊºË·-oøVÏ÷vmü7?7â\·|Ûjãa§+X·ºeC_FÙäoô:ÿä`5ÉÉ­rN«»4¡¿	sgµq÷Y`þN¡]2D¡hö¼ ®8øëlÀÙQ!é-Ï5ì|dï+ÍxµI}¦l{S}Å(w.îDÙð+mC6^,×p
-@QÐÆ[¼OÌØ¤¶&ySòAÿº}ç2o¦yZ­ý¦%þ*ÜÏr{Ë Ï®TÏCD{  ÎØy÷WÇb% (î¯ÂxH	
-:£"%íäÀ	¼Ãö1*äÞPa66BGD3P¥£ÉÍÜES3º]a¥£Pé
-W"¶R¿§¼}]2µ»$EÑèa¦SQ 
-$æd4yx@×*ÐzÙjyÇRôaQ>ÊÏ÷RÖ\go¡Í+gLoP°ÐÝ"=üuã­kñ½ù9î¹ù]Gm»fW^~dÛÜâöªoWµTÎjZÓ¾ag¦o'8vEsåìÕmµ+ó#¾5ÞoAû|fÂÜc<ýQ¿ÊñNY/CäFAÞáÓ²#5èSRü¿úû5n¤õì¶CmIpL"Z:\,­Ú Þ mÛ¯háI^°u8>,ºLàbjiK±óÚÆ×§øäKFb5Ùg´áz¢GGvÕè¢éòmºÌÍ:1Ê§È=Öú¡×üXïµBrPÊÕÆxIEx¶ZHË5Ãf5åVÈ&<íj¦
-Ní§0û½	0ÁNrExà÷èÀB ÌßuÃ]7ÜuóÝPÃkxÊrR,©w~Ïµ±ô,(=JÏâì?ø¦làë&¥Q#MËÌÉ/B@± ;È1Á·d ÆþvWñÂ-ÍýÜÆPÕâª«;'&k_7?(¡ÿr²£eUm°»ÈìÒä¥vô¹µÝÎÑÖU4Wxª»$(ïÔ67N­¸ãÚBü\¶in2È8pàA Ünò ¶Jzbi¶ Ðhóeo `PÓüµh}ù ~ËmèÅ®]Ãbº[[ °à:tÀ^Æ\ÄæÇÉIÅÎMº¹eñØ­=&F½zYà8©|ÐW­Þ/±MlhNF:×¾ð¶x:AcM_6SÎR¡UyÈuBV¼E(KA<·[1jc c GNÜð0À3 /¢åB;ðDµ´+	-Íví^5ÇÝgô­Qnø*Àw @
-v÷"2´Ã¼`-Ñ®-ØÈËãNýì úÙµ_Ò88K]ÜP_ÞsVCÂÚé$}Uû>.Ñ²3ÙÚw7íÁÄå;ëû$Ëôx/4þuKñÛh²+ÆõRë©&8Ä­\²ÜÚy¸xà=KìB¬HéåuRðCS"
-bAv ¬$À»Ä¾ïÙD¡e´²»tO¶ûÀÆÉßMþçµ?Û×¯¿þÉ<}¼]>°5#ÏMO ¢äu<ñÖ ¢°.ØÓEP´  LÊ3v¦ÈvÚuP:(
-qø4ò"±eùÀ0&ôútÞ[CZ5Åòik ®0QzòñÀküjB "@D
-_Í¨Ä}9ð* ~ùã×%$fÌ´H2èçéÒÃ¬¥ gÛ°ø©pãyhÁö3ÎFÏ*|ÛC¼®Öóxßº&ödÂ1ä5Ç¡Rî<Y$Äñ0­*|]dM+ ®Øë¥ÃK³h1T.2âÛ=UÂUHwbj--²H'¶y¤Z¾ÃI~9!b*Ð)q¥%hÝV9Ó¼Å#ÁsY¾fS%ìP	Å¹^Äé°ì"ÚE´ï]üØ¸zTÌ3o¹äÛ$ÈO	aF¦<;Æ[U°|eÏË"û©Ë%=¯jcH9ÿ|Y¸ßuä	²F· .)kïVù;ÉÓ)yz§{Ùh'µ"!cA6_îËCIz+hÒÇ(+¸bl¢s#º>bÏ2ÅÍ_ÍwZ>A¦ó2áÒãSV_©GúÄ«Ç!ùJÊÛr ¯È­ãì[	òÜzNRÚ$%B»ñifvÈ>Ûä·'ÈÏS=µA¿Q[ËÙÝÂ=ÈOÞ%ÆØ	9Z8BRjfiZ·· ôàtÚ¼à UñÀ¯ > þ3âÞÉJ%gWá*ÒØ/ç>@xàE¬Ø0íOI"Mkè Ø»iUWj#÷ö*ú°âZ|'ÿýÜÚó ¯ ¼ð<(fÉ¼3`.ÀJ­,f%­·=(H\ô[y[ä	M-Î¹Ìòï[ÙÉ8*¢|R]â}änAúÅfù·æÈ­Ç9%·A*Â³wj -EÂÅ5åvNqpäáÈdâå© L²<,Y^ä-ØýÌýé%¶g^øÀ lFgV/íä¹U.»^â\Ê÷By¡¼VøÖ£ § LëêS²/áM@&d3]nÛåön@FäöñyCrsËîÁB³ÄQ<KXq|S¬T·	RHèA!§E}÷
-R(ÈAºù®¼¦SÃ),Kb>eQJÝ#Ô«BÄÙEO³^ÀGâçóe7 q1j¦ÉíA¬íoKÊ³`Ô^n>#G%[Ñ'1SCñÀ« ¿ø º><òª ÚVlØpàÀi wV^9Á`¶¨¬ÑñDv,Zo:¬Õë× yo{afjXç äÆï±BÃÔ'±*S'SB¨Ý°_:Vñî3¸}¯È-âôp w	rNlAV
-ò² ÏI9aD8ÈU8Pf©>òi!	fëßoAïeB)%kN=üz²ÿQËF¡¶0«Ñv4 Z¦ågny/¸e¥Bæ#igZÒhiÔàÙ2MD0äõH^äõ@^äõ}LÝ|m®pÍ[ÛÍª£y®¶H»9.ÈVÙ«H»q¦Èß6~ï´Âä~M¿è'gÿu9~õê¾if~©îù­oë?¬Æ¿ÌÓ_Ü·²Th^íR~×%´Ç6¢Í.ph1É]sß/ÁæàXý®É½·tÒº~Å¥ôoéÔjµEÆK¸¶'V<!©<±jäÉê|ÄúÍÈc2Rnß(Èmâ'±õâáÇT¶SåYFn+HÄ"NK(c{òÎå²\u ï	r£ gf,rÄä:\·`ÛL8ä¡î4_`«ü¶=ÁlõX"ÁÀHyK"Qª&LÆpÒJöõ²M}­ýAw$s:_o"ý$¤Àe&L'Qg£,ø)ÂKRÔÅy@^lò¤ÜyKt|+Lvw^M6è¸T«Ù&x½ÒÐèÝF± ¥Í¥ÿB¬¬½ayÞ³nä YÓ`Î-5
-©dXÀ«A¾ È¤õ7xà »Õl·X¢läå"ª·R1S«>x$`iEiÒÙv=Òªbí9³m-hÇ³áåå±¶æÅÅÃ5?dºóÊ£Ñ¶ÙYK¯móåùl5íe¾±ühÈôøæ×æ5êç#áüÚÖ¼¦²ÏäwúòB¾`YsqÍüR¿QÝVcº½®Éoø#ùÞºîÌ*Î)­1xÕ¥ßé¿¡Ó:õñ³Æ å,ý¬íÝ&F·8EÈÒÎ8xè¼¤\ÑöÌøSaÌ-¢þóâgNgÖgìÚWFcµà$gE:È©(vK|ùSÇlÙeYÃ.~Òê'2§Ì.Ù5!3åñl	â-"Á-_¼ÀEr¢ÚBïÉj
-5QèkëU6!\¡õý«ºìU==7Î½6ò/|Y­Wû
-ë'>.~ö/?k¶Oÿû¹MôxvöUt4ä3siBÿ¡iùè1å{qTä¥.A4ATXD_2K\/lÌâp,Ñ	Å0
-å}I]©üC!gÚ¡êØ$+ãMªºZÀÞõã*õÄ±ýÖÞîº·ò¹È|(2Ì"ÜrhÕ~@nþaé»GÄ7j¿ Eþ]Ô´õ8Æ_$9ÍÔR³Ñ¿R¸¡¶½«)2oXÌ~É_:¯jÖ¼Ìâp¤lyÏüoñû{ýO/o}ÍØ·$¨êâÎ¯tY©	ÃXP³SÐ`x6l\ñ]Ã±jâá2bäD.ÙÆ¦v ÃV4ä@·	Â1(Õ²Ô	8¬¸ã1ØÎÞeÒñe²ØS6ó¬)
-bBð²ÇÆ]ÆIÕV?EÉÊTsSEÀqÞ"=Ù)HêYÊsRÿOäH¾t}Dº¾ .
-Ä# P)b0VNâö:®ö0-´4ÙZdñÓÐÿÙpµíÁµM½=÷Uçt½Ð´ÀYW¾|·pÎ76Î^QZ÷¹c7u¹/|ò¹Ö|é×öVv6XtñCå£#)2ÖPÊÙ,¥D
-_HøÛdÝ/ùÖpr¨­õrË:ð£KJ>C)ÓbníSjý¡ÛÄMó¼ ·É-+×C)ÍÊYÝ/.ð"QÞÍ@µ?·øéàk¸Ó#q9AaÀ{A¡§ áú¾SÜÖ"È	¬M9df[ÂK¥yR0.bÁAâBeVôiqwoiC9Â'©>
-(¢Â¨ùèc{røõñuÜ,H¹ }¬_æûµbPÏi%Ì¸P`q+¶eé¨©¹\?[xmÓ¼M­¹}%­%É'3ËÖtd|iþ
-çGí³³óËï\pÓ1ÕUg×tÔçdô­Ö¬]HóQþì0¾¯åéW?otÁdOkñtFObÄZÆ0  ^$ï¥0E½UÒxX<}ÃOÎJ«
-Ôá¦Ð] ;ÈfÈaè|KÞE
-GJ- Ö
-*Ø-bR\iÌ¾.=Å·²1!{j-Þ§¼È§T¶!GøÄ |P¶è±JvAéì#D#Æq%È½)DÿáuþÖÙÑ9yÊÌÜ¯íèÑ®uúD~]GuÈåYæÕú:'7èß"R£ÿHÿØZµþã³ð]Æ$GiDÆvD §ºMPéNrX\mìóP ³J¸È¬R :TÇÐEÛuøÉáQ+d¶©åGn"D:-{ wæÜâÎü`¦yTòRhÖiÀ? çJhûâ,óÁÒåSìuh:\9÷PEÍHç,²YVÙ3!EäÈJ"Þ(³i§ [8 ;>^%)U¿N}0ÉdñR9Û,ÔSf'2ÊejúÑØU¹¡ÈÜÚªhº=¸¨1¶ãÈÁyWGÏ5µ§Ï^Ô±ÎWØé¹ÎÞáøKÛÊ
->wô¦£é×5µêZÖu»ª:óéÌ(øó_²õkðàe-ºt¶R¶xÛËáOÉ=²*|cêòðÔRºxi©f¤Ðt3Ò§ìBÚÏî¤êt´ä¥Yª¦ì\7øp§²£¦@¶+à exúYªÅã	%FË`|Vº¾A¶¢I<Ö,ÂÓ)Î`/`'MhR
-gþ%wveqýZOW=wUkÕ¢Ê,½ b~EpaÃä?O\ÒÊ²®^4ùc3¡´2ÐiÎ¯½ÿ8.Vã"euê6$kcRJ1ÉÚìõÀMw@#aèn£HªlSÚi1fDr$é}YÇ	ð®¬Ôù~êû¤b
-IPÙ yà<Àë¸¿<!ÑX4òÒþ_ÜkK¬|}WWFQvvIIvv>1n|1R\²nµd¯<Òÿ×ãäíìufìÜ@7íIKo²ÃêQ]°9)Ó KÈ×÷d%Á
-eMÆA	fJílÄíúétçôóX<Ó¤­}Z6P<Â¼#£éþì°·0ËÕæÒB»s±+­i¡±Ç¾ñ6È¨Æß=NÇ)zO$Cëèé{$å¤rÄÑ$2öm)>fÛe¸ûøqµÐ.­áægôJ@¶ò.Ô«*ååâÁ^)/¯¤WÔeam2Zq¾$£ÕÛej_>XÈ!£j]Äì&9Úâ!	Z$)VPÐ4¤D½[M<BÿÿøÜk¦O1>tíÈ-ùNùØêc³É)Ó^·ùêT^·u"+²¼Ñí(JIíæâÜ´Én@7@#yl[nÙ\YÒÊRreI+WòDÎ±©\J¯
-(·ø03Ð°0Ð åÓhM1a£¥ÖM=áÖ-Lïë·ç­×°0#ruSU{yF3TVØ87]Ï=vpnÕä×õÑÊ²º¬'ª×Îj)ÍÛ<ùmmjNÔ´°þ<Â-sbX¦Bµ«éIyjÎQkNtËè9ñu«ÓÁPè$»¦GÌSnñ*@!`Â6:LnÃ	ï±ÃÃÌ8SýÚ­Üðu¥=,ÿ
-À;¸íÜ¢Ñ S g(cÉ5gd À§hââs|Ö¦Ïg árô°<9ÚE·o%ñ¬Ã9D¶*äYA>$$fUtËJfØòÑ(BM<ümB}1¦UJX<3×.hYîC2Ê¾znå¢Ê^°ný¼êÉldVfù'ÈÈzïåÎ@¶ùä}Å÷Ì8¥>åÜòaK³eáä-9÷öý¤ äÖ§³½ïV[#,¤p¿­(ÍX¹HÝ{,â÷ý4mïù-lq*$@XöÅ^+)¹RD(Ì2ßñY9Ó7YiUùá}s7¶æòßþhsÙ­ôç÷7ÞÂ;ü[ÞÙÕ¿WÑÙ\¤³Lui®þ[è¿,­DÿG´­gÉ	òYbÉí)K7K&,jÓ,²oâh6.Ì´'ÛÖ-k»eïÖpF±<6û³B1¶Ï§f}±}j¿Mê|äGsiÂÈ<Ëì¤~ôMDú±}Ù½{¦kÒY!1Ç#8Brú_XHÒ-H»tþ*Ùûøtu» nZ^ 
-b]¬ÆxÔ©æ©,dÇB¨t¾Ío¬ªïÝU¼`s3Ûòæ§£-ïj_Ñ}bAiÙø±Å±Îr·çñhËóïé­\VkÍ«õI-`üÛã´Ààd9é69ÍÏ­8/kXÚ´39L:uã¼4×m²R¡tyRíèq¾Ôc»çótÒÝbBÿ¤ZùVG:³PD*2BÓ-·¡Ë8çòòq5
-jXû/¶mÍ ¡óÉ1-!Äì0%ÍJÚ*H U¬fÄQÌb_9>üÀBììä=-YæJ=*g·Ræ{±ùç	Ò-H GÉ?£Ï!ÊGéplbqN:¶YÆ8+)Õ.ÌÎ.ûÚT>V.ùÉír;ÅÓa\>t9WÙiÇ6ÎùÓeïCºä÷5Å6#FôyyÕ³Z*fé_K«5ùKÊÒh|TÀ<xô_Òþ¶"ò½'H@Vÿ».¿ãMmZqJn§º7}£+u£:^áéãÕÌlºRÄr%c.»ëÍÚVÄãä"]÷zE¼<Ùétöå6¯Ýhm^Ó­Ík¼8nUÕIÅv!ùlgÃl|\Uf=Zf]Vh;ËÞnC¡b÷§Qô
-7m/¡î¿ØÃÅºOlWAa·¦ ehtHÍt§uhE§Lbm²7ðÃr6Ö8ÿ§7µê³Z·ÌÚ°ªuU^VdiY_jÖÌëÊË¬.¯{kaI$TÜ\³rY÷3Â²ÜHxV[mtîìHØßá°Þï:\ihýÅÇi»Cù´I
-î¡cØPD';¶I|ø·ÄÄdW&YöÆ{áÎS?)þ±QåË«\^äAÜ$óí"vhDÊa«	.ö%/}é:ÙßÊ£g&EªfÌZTu[òã^3¸Y/ÒH>>E(ðq»/%ø1Ú59½àëY°`Àåv'ØP¶xÈNí .l;xjv MfõAÉ¬AÈ¬AÈ¬AÈÕÔÒBËyª£Ô³®ëÖ[srg3ó-l\§OìéüMsµÇ½ÐX~µ>éc9ÐÇ«úV`ØÐµùÔB÷çÅÂmYÁ_ä6¹õ ÷NI¦SæpÅÂÅ_ôõáÛä¼ ±k½ OÊS)çnÈþ²PN9è8z úèü0 Ï ¼ðÀ|·,Ò£xÌwÈÕQîH°ÞlÛIVfØü_ÇT:Í{YRXv,È£YZ¤ì¤")®Ò
-µêÎ9QögîÑ+s´_|Ì§:­= 6Ö7{AXô¬u¬fîö³ëSîpyA^Uq«Ët´ÍÈº³81ùK´ÐfVõu§g]U°¾¢õA½éË}é¢/·ý´µÐ¤ë%2Z²»û-¸å`e7û:® äáæ¯HìëJM1jsì48T¹Ê"{iü¤Ê@*îhÛ¿äRTµÔA6^(/	½Z6#NÍ5Á-ÛrÜ¼û~@ÑÐÊäæØ/JÞQéÚ¤a*@b"9RâCOÈ;TMñ¿3ÅaP("'ÂG>/Wn@¶É[elhçRòªóË²Å%G!¹ç 0*.Ådø" '{dÆ¡vZâ\«Ø5e«µ×0A¾ç¼IÖàvîïòcIíQ[nPÝTuùÀÚemúº¤|Ì×»X	 1¬#ölÉþ¨SÄQÙáÒ²ÊÆÞóê=/ÂÜ\«;e/µMçÆxÆá«|TI!N¼OÄ¬Gåéç%åeAÉ­9ÅOGâùìÓC`ç0oÅq±6^¼ S{º¨i¼ç´¤R´Ýí)»&­3ì_÷|Y»ûåöÃ,e=b¿ñGuX'i9ej6CJøs6R>&K7r;-u6Ìiã¦çë9C[^,yõºó;zôÒI]¿¤É>Hãeàc¡´ÅØR~ñhòËÆx¿êUøõìMÕK8ÕF"Ú«ï)ÎÒfëøëÈzAn]úÞä¤C#eõÄÆþj¿±_´Ñ>!à°P¦µñ8.)Ç%å ¤È$d·à«|Øê¨:(®ÈVÈÔaÙ¥íqS4^X=7#ýa_/ìÍÜ.¾\§m£ßäÎë¦øÒÏhh1åäÑPñn5¶:ZÅ³îÖLë(DuîmPùïNÍVVSö¨CØ¾)ÁcLÑnUÊ,AvË{KiXïÅWý«bÌö²µp»øEË®C®:ò¹ä¸ rK* í`vérò¬ !¹õ"¥ð~¦r¡ïò.ÇYqZQZOÐ´Ô	dáýÆ);<AÈY
-Å£èpAÃn413ïÔd«Ã[| 'Â¡,ã¹¬`ª6Þò¤,½o}Í)fáNI<Êûå IO=Ð"ôòØ§.èSô©ûÔmÒð}³ßïR;Ã¬ïÏ¹ÌÑ0([xA¶PG¾l·JÞoüYÙVõÏü\¼0þ»äû'Aù¼î  Á¯sj5, XÌdeöÊnßªó2!ó/róªìb;,Y\%³¦§=pqP°çD¸ËÁ
-C¼Ü-2Ï«",áÖBÔ£W°ô5yð%AÆ­m^ÅtTÅ1;Ø¾w²í­é²é$Ì\¸pLoxE|\Ð.¶UBH	aD¸Ô¨zÓIØÇq+ù¥Q3¬vÚòRlÜõ¯OHT!_KÝFéSuÎÎØeùÀ©¨¸Ø
-0%­¯lF0äi º* mào~@²T¥ ÃÒ> k*åçòeNqSævÕ Û ÈWá¬TFÞDaóñM¸ÖràUÌÊB¤*ú)z\°ønÆ¤¸£ÂâàË3.ÐÏ2h¿1Ü@ö;9=..ïÇ§m"CêÊÊ íe{ ìJ"éï w Ü/Aæ_¢çp}Ù/§ôÂÅ¨xQïä¸ USÞQ©;IdJQÈwäÖ÷;ÜyAÄ ÷~Ê¶kj¿ÚTÚâºÌ~µ«è¨ìål&E÷¿C&Û%Ôÿy@^xàúÏýrT6Rðÿi|/J<	d7ï÷qA"<&È«"Úa4üQ4È³MÆCÎsJÊÌGmt*Dêð<25<3É[Y2F¬¦VHÞ ÌQgú~6ºÖÿz$ÇÈê^ûõÏgÙ«øÖ5»3ôìý ^_Ü¹K/AtõßÕ/Mþ¼g·^L2iú¥&ýÊ¤æàYòá"´2%GRà'WCbºRXa8ÀãCV«·|að9Êâ_ ùÀ LJ´ ­ÃÔþOø9/õôåbrvõógÇáHOOÊdN»ãOÑÙînÊP2¥qLiS6K_ö×Dªêqþ¶ÊqðnûÔÈ:öíÇç¿È	^(O	¢BÛ£úú(k¡+
-ôPO>ä,ck\_£cÓ <-pa¯
-  MÅöÈéi§À à&ó&a4Ò¥)~$ª	`KÑ9ÒëÃ!ù[Eû=®¡®ÞÕ3¢Z¼-õ$fÞ³reÏÁl4K£ü¯vU[#ßÍH>Ëå°Ô[$
-ðk ïü CÐ ï¤ðÐ)6ç ^ø5ÀÇø¢íBÆàöu@'8fBåùrûøl>p"p":p>Hj¶ZJiPQ@³TròNõ2á>£Á^@£Á	I]È6I½[çbLË>J·ß±Þ.È#TfL23tå'ágÝ.A xëó4õ5Â×·Ââ(übÜI;¶ÈqF
-ü0õ<sÜ*§Û¤÷§?$ÚÄr ÍbÕÛÈ!Dï¯½ÐàÄ·5+n¬h#Ã»­é|3ÜsõíÅ³gE|Þôüæs×ÙÙ£/\<çºÕiËÍù+]«óQ>§Ým<Äz?.i`ú~	ÛYÄ,Ô¥¡÷Mü3mÔ6æ ÏKLgJôZS¶½b}0¹ÁwjxI	ÌÎQjMîU£>Õª³¨ýM7wtOüñû´§^'j;ü>Ðrlï þÜ?!sÉýúGÿÏ%}¹íßÈghü<g»yò·ÚAûp}9üßõÆhÚÿî?Ðªô½0¿¼¤ÍÑw]úQ¬Ut,Ø
-¸
-`ÀBfUµôû±6;¹Hc91iÆ|m®ñ%m³`ôÂõ½kXåÛÅé¶üþ¿ ßûõêw#üfiuFµi|ð¹&m¸Ü+ý§ß¥~ß×*|í*ýÚ#¾ë µ°×¥N~Ðw¶ÅVßéPÏ9FßÓ7A¾û´
-}£æ1ò´åú¿inãu~¿þcPkþÇ¸Éåúï§ÆïmåvÃþùUÇ®;Òj<öôÞû3ve5g5}ð¯ÿá_ä/³Oä4ä¼7_ÿ½[òNÙ£{go«*¯þ¨öæºÌºw~ÔV7íß¦¶MóÂíFû¯æÿçÂÕòw.É]rÿ-íøÌeov<½üå¯¬Ø»ò«XýÛ«º6Þpzó!ú÷
-w¤¶¨ (Ü©è+ÉÕOÓàªH?bÑ]zÿâAtæã6­@[ªp<!óztºã¨P¸d±fîW8Jÿm©ýótJFÑ'#æ5
-O×*Ì{õ¿6O)Ü§µ8Ë©9×â°·£ÅºÏ¹Káºæs>¯pðâºóMÛ5«Pá¦pÕ(Ü¡å»(Ü©mqmU¸KËv}Kán­Ãõ¬ÂÓÜwÂ=Z]f@áéÚºÌE
-÷ÚJ2¿¨p¶/ô­eCñ={G£DæE»z=Å¢kG{ë¢Kûû£t{$Äã±Þº®MÑ=#b{Æú{êj~tNS]CoS¬q>3§­¶¡µ¶©AÝ[]ðª6õÉh|$ÚMôôÆô$öGû¢£{c©õH¾XZ·f01Ø¿p¼§&º¾nó¡Xñ-uÝ±¾øÁñÔñ±¾ñþÃXôØ@|<ééÄê¢«F£»Fâ#ðpwntdôpl¤¾êíèîìïq3îgÐC½ñ=ÑøhO|÷H´o0q Þ82
-õ$z!×¡±ÑXnª:Ìô$ÕË¢³§¿¬2ÚEã£±ÞX/íÜ=v 6 ÝÛ3
-ÕCQêºØ(»»gh4>8ð'
-ÆòFcøGô@ÂÛ¢#ñ#±ºè&hþÞØH|Ï ~Â®ø ýÇ²¡å°ÅzF¡)£=CC1èÝ1n½±Ä äºÓöèï`¯À£ñ>ªÑî½ðành x-Ôïp46°êöÇöÄwÅûã£©6#PçXÏè´ytT¬7uæà
-AWBkEw`]G°NÐ!=xwÞ4ÀÆìvëë R#Ã~BKÆ°]ýÜ8½Ð´»©!ñá=cøBlèÈî½±1B±Ø }a| {^ÝÙÏ/W$¢»öAYo,±«g :£F<p QÕ².-mU¡èèèà!­L\e0XûáÛ¦Ú;c´òP-iÅGácú{öõìÈ¨èQMí"ª;ÆFFâPµÎô]õá#cCCQzðÀàÈ¨Rê ]	»ÇFq¡!þ±Óx¬pº NÀíá>·6ÔQQ_| (!Jô%¨
-öGîì¦ñÜ=K^Õ=¿,¥U/ÿmuÑ&îZ`o±Cðl¢'jñ~?Çæª2Ö÷ïé
-£¦Á¦[úat'¢Õíj¯¯?xð`Ý| 2¡:èñ+$×ïõÕóæTÌî¢{`pA3£ÆgfÔ[->t¸Ç\¼ï0Ü0¯Á*öÂ$â»ñý¸jü±ëOÑ=	=Ò3p8z ÖÔØÝ?F<n¨¿g7þÂ÷^Û¥© A,z&<xp °óÖDcvÅz5$q.|;><´SÃu ·3)zà@,A]ù½c0 J0ÞF¡P¨÷À qï> ãQ.$eâèÄzuâG­ï¡£Ï¢gô ú¡Ñ@¥ýüÀØÀº¡+uç§?¥¦!m6RÏa-êçP\FAux  4PO£ =ôÀÝmäù%ª­\½Z`Kµ~øMzz®bðßqø9»hsçF(e îlÔ= ´öSÉ©÷æ>âß4ÀM³Ò°>s@#«ßVøÛ¿©ON
-ïÊ½ÚO}gj{ Fé[{!÷Ê¹Òµ>º³¾þÊíq¥;KáÞ(%Ð%B»ôh5p=ÜÙoÂÜý ¾Ò»áºjvòZåm}p} îôCÔzòÇ©ðDõÖõöß*êïÝKÅ2¹ùÙ¹ #T~?õh»êÛ©vR}záw}b!G25+l;~OBQÇ½³î@Þ(åÁÚÅ!×}æ= ¾qîb~|k¯*ÛmîÄ¨&}Tâè´vO-tÂ6ÐÓØ§}Y4¸?õe Ób#F¹¸¾QÀ¡ncðþåQÓC5Ã§án\34ê°OFSê»¢<øeÿg5úa­¥ôòQ:cì¸jE¤#ô.¤Mú{)k=`õÂ.z&¦¾ÇOÜª7ÓÐsº;N%â7"ýòØ±ªAúï¥çTùÜîS_°Ú»(}JÞMõ±ÂoS^i£ÝÔ'øÆÝøk¹ýpüà[öZ5Âô~jï8}o?ÕïpRÛ¨vÑ×):ÇÒ¸Åzé>·Ã¸¢äS%Äé;wÑµ´ëÕN<Bz¬gG¾i¾)³WÑËÔ¨Z±GÕ@ø,irÒ¹=PþÊéUT»;"åÍ{èy._¨c8ÙµtÆÃT
-Sµç>ÄzËïIzÃ~ÂFà7ùKÕW$ß¥íSõIâ{	Hï¡2Æ.Æ(ñ ücÎÚu ÷§Y´ÜBjÜ`û^#­U%%·Ë25³ö«~»ÝÉÈ±¨K«/m95a?qÏôÓ{öÐíQÔ:W$}]©cÄ5w%ñZ~fõ<¾[­¨(FuÙãØCÄ/ªUø¨·FgÔäÊu°æ]TÌØcÔ6%÷ÍAª¥p§qK§ô&Õ8¡æØjï©q>sÖæ¶¦xQÝcW-:½%úh90­ûIZÚCT¿;i~î²ÆìTM¯¢:ý\Vÿ~ÃëHáÜµJzCªæ÷&h¦)§$zP?ój®Çzxfå.ÑL§âTS°¨¤d8T¨fÊQ(¡]«é_\÷¨¯å¬ScüÏË]OÕiõ)³KNõWîûñÌÅÔxèvò%kæÌakÑ2Ïá,uX=·$¡TúèU= ¹hLñí©çãÓ(©gæ]~wü²|cê<F°¤ÃôUkÔ8Ù-6$ÇQî¶®¹¯çvY3±H£SsKX~:Ïàî±Ê­¡ùø Í¥½)RãÀd.ùvyóÅwjÔì÷û­R¥ÔTV"iKyê.kÆN/Î³·Ro¹¦15&ÉÞ}¦ÔäÊG§Õ^VO­¥bJÊê1¨ì?5çz>w(^: Rå;ÛÏö<_÷g·ÿýwáBbµÆ¾»FµÎÞàÑ¥ %VkEZZÓ«qg÷ô÷´)àÂ63æ©íIÚÔÊB*1#Å6#Å>#÷bZµâ°^æãáâ®SsVÃGÿE<»ã,{`èZø=KaXð:®òéOªß÷ÔïSêþ¸®_ÇßÌ£òño=þa8þÝ¡~oS¿Oª_¿zþ¼º^¯Òÿ?­a
-endstream
-endobj
-10 0 obj
-<</Type/ObjStm/N 90/First 705/Filter/FlateDecode/Length 2095>>
-stream
-xÚíY[oÛF~ï¯·5QØûe°­u#4NØMÚ¨z`$Z! E¥ñ¿ßïp(fkÁ>-`@ÒpÎ9óÍ¹ñÌ&0Îb>0apÀ¤uLJ¦eÒ0­¥ÌJÅðäøy.æÍV,¸À4P¸õLPÇdBh¦Q@cBKÍ,µ`;y- æ­dsq÷hcA0), A ¨¤8Zh¨fú[Ð5T Í5èÐ@n5FYæ8Z0ðLðÌIX	<Jßa¼Ådãl#¤3Á"é¼¡ð0\âaÇ ¯¸Ð/(Ï *&÷v8¦¸"¡µÁQP_2|+¼)fãg
-3yÂ CÙ)Ã%JÁk<Ó
-D4FÀõtð1SnPÃBWÁç &Ñz'`@0Î¢%§#ÜRX¡1\2M
-Qè$iÐ*xOJä&×ùYm¥µÆá.8Q{dàxHxEòDà6"H`AVräúJÖ`:x
->ñ4HÃó¯^¥å²¬nÖÙ,Gzqö>½,W5è4¨éCNOÓëªÝäõ$½]¦·ù·:ßgü"6ç±OOOz~~~~þQàõân]->C8«ë¼Z¥£ük1ËßÿrÞ
-¼)îz39³ã:«êäèmöµXduQ®I¦éÛì>"tÅãú$`ýìÑ ú4`]íÑTe±GÓ	ÖÛÍ$X{AëÒ°]küÞ'"Öô¡SßD¨Ô7õ-B}mâúö¹ÄõÍó-	ÉÑa=éF¤ËuMÚ´23OítÁu®LïtUâB§«Ï;]xñjF¦mU{w¯ö 2ñú9ÕBèJ|Ç(åC0-í!@ó]6	ü9×"KÜ#ø$tl
-IÐßõþZÌ7ßDöÕÔÓhÄlIÛòFZF1»4ôô÷?>aÛ~Âi3mN¶Ú.Ó&BfëÃlw-ùaöaÕ¤=ÌÙJfÃl­{Mö>ìµW\ä×ö©QC±_áÿ!þ§p£DòM½¡³w³) Êm­6hoRÚ%¼Ï7å¶åinÖ96ú©òUÝ?qú(KôPÁf¢!hCO,Ýo °¸Þ¯©Å±Ç×Å×	7@))SJ<UJ!hf(æ¢±Thÿ°ûca±°X2X,ßÓJ?§ìi¥ ¹¡hv æCÑXªÕ@4-<ýãæ#SË&ÓC2V?û«VC^q¢)fFD3C,5f(þaÿÇ¥Å%Å¥uGØ8´­~»×p;µ¦éU>/²óòÛä´Q'Ð/îLvgÓ*Ïê²zußÝq®g[Ö õKÎ¹sè´DoiZF·óøìdäYoå}OÓÛ¢^æ»y×Ûæ-nñïZêÓOº4|ÐÝnþYÄ¤?F×è/ZìY;NEÇV¯ZùFGÞÊ¶vÊÖFÆç·z«½Ú³z7×iz¶­¿ìëZãò½£çè§F[ÛòZçÈvÂfâv<àvX³}qyÇ­££[ %¯«r¾åÕÑ·ù×b=¿»ÿÆþ<â'âÏ$©óç(«ó£Ñ¿%+üJå?æü_ø$1Þ­óÕÙÛ½êeQO½*çyúÛ&·­Å
-	LÄ7Ùç|I¯ÙÛíýfÂñpÝúIÓÓSÑ%Hd @P]Aw	Ó%Xlà@p]Áw	ðD1|9)ÇûÔFeÑ§ÞBö©¤¼P}*Y tJfÓ§-xwãé®#ÈÝMmØ¦Z\du¶,t4X¼ñ¥½¾EõLÒÑSÅ'Ø|NÄÕLÆOLsç¡Ýél,ö|ÖÉ©¶äZCr8ÜZ`-üÆØ¾Ó¢º¢~jíDs4~¢qÈÅëÉèöÄ(º¾ðØ]<;ÐÖ?uGÉ<æ$R£So&t%£%ÝÑÐÀ4NÎNimí4HütúX4é¶ôfû¹n|2Q2=Ï6yÃ¿>úðóõíJÿñû|±]fU3»ðYU¬QË¦ÎG7:¿¯îJLñbSWGgóòs¤ïªy^«ÅÑx2_Ô	f_¯ù=U}äO:ú[Lú±¹i!oË_Æ£«lîFuÊþSEÒ³ÍðþÓ!¡y>èÜ@§Ì;~ý:/_¢ÌÙ×ÅÇb^ÁB4Pç´#òUJ(ä¦cäK1;[-9ãéå2[`Eì6R0[ü÷¨(æ/=Å_Êßòçr¬\?þzY,s	èsþ4¢ðïEë?«Y9ÛxüºuÏ<Ã<%­ÌqÓÞ¿­
-Hç°]obñD<în{´XéªM}ñ%«°Mßd»g³WùüÓøÃÕ§/®nþðË«xz>ÞûpZ¯vÑßÇ?Û±Ð'\·¹ mEÇ»çì8Ð1]:¦ KË¸&«£4«ªò¯í:¶óò¯U²r×*¨ÿ_Ï@K¶
-endstream
-endobj
-113 0 obj
-<</Type/XRef/ID[<5e70fb91fadbdb77780cdb7508e7e00b><5e70fb91fadbdb77780cdb7508e7e00b>]/Root
-1 0 R/Info 2 0 R/Size 114/W[1 3 2]/Filter/FlateDecode/Length 283>>
-stream
-xÚ-Ò·J`áïÄKì½kì½÷Än%±D]ÅY\wGÅ]Lâx)^¸åå,/gúù%éç' µIÃb<ÂC<6)$±eºñ=o
-~ú6\0U¼y	`ÄÔ|é%M½1/¸dxÉÂeS4í%WLñk/9¸fJ%½äâºétÕKnÎÃ^3]|yÉÇ¸éêÃKnn_½â¶éîÞKîÏ¼°kqÇq'q
-§±g°ë±±	±K±{±Û1ØÝX=ØåØX88#8UX58	â*nâ®é)ò÷sôüî/¶ozùöÂS:ñ~ð~bV]+ý¢+*=
-endstream
-endobj
-startxref
-71706
-%%EOF
-
-</content>
-
 <content full_path="community/leaderboard.md">
 <div align="center">
 
@@ -46233,7 +45051,9 @@ METHOD_ORDER = [
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
-METHOD_RE = re.compile(r"_(dual_cf|dpo_cf|simple_ce|simnpo|ga|loku|npo_sam|npo)_lora_.*?_lr[^_]+(.*)$")
+METHOD_RE = re.compile(
+    r"_(dual_cf|dpo_cf|simple_ce|simnpo|ga|loku|npo_sam|npo)_lora_.*?_lr[^_]+(.*)$"
+)
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 
 
@@ -46373,12 +45193,15 @@ def extract_method_key(run_name: str) -> str:
 
     if method_name == "dpo_cf":
         return "dpo"
+    if method_name == "simnpo":
+        return "simnpo"
     if method_name == "npo_sam":
         return "npo_sam"
     if method_name == "simple_ce":
-        return "simple_ce"
-    if method_name == "simnpo":
-        return "simnpo"
+        ablation_tokens = [token for token in suffix.split("_") if token.startswith(("cf", "ret", "gamma"))]
+        if ablation_tokens:
+            return "_".join([method_name] + ablation_tokens)
+        return method_name
     return method_name
 
 
@@ -47819,12 +46642,13 @@ if __name__ == "__main__":
 
 <content full_path="src/tools/build_results_combine_tables.py">
 #!/usr/bin/env python3
-"""Build combined LaTeX tables from old and new structured-saves trees."""
+"""Build combined LaTeX tables from structured-saves trees."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import re
 from pathlib import Path
 
 
@@ -47853,7 +46677,7 @@ METRIC_DIRECTION = {
     "winogrande_200_acc": r"$\uparrow$",
     "arc_200_acc": r"$\uparrow$",
 }
-ROW_SPECS = [
+COMBINED_ROW_SPECS = [
     ("old", "full", "Full-old", "blue!10"),
     ("old", "d_only", "d-only-old", "orange!10"),
     ("old", "a_only", "a-only-old", "green!10"),
@@ -47869,12 +46693,20 @@ ROW_SPECS = [
     ("new", "a_only", "a-only-new", "green!20"),
     ("new", "dpo", "DPO-new", "gray!15"),
 ]
+SIMNPO_ROW_SPEC = ("simnpo", "simnpo", "SimNPO", "red!12")
+COMBINED_SIMPLECE_SLIDE_METHODS = [
+    "simple_ce_cf1_ret1_gamma0",
+    "simple_ce_cf0p5_ret1_gamma0",
+]
 SPLIT_LABELS = {
     "duet_rare": "DUET Rare",
     "duet_popular": "DUET Popular",
     "duet_merged": "DUET Merged",
     "rwku": "RWKU",
 }
+SIMPLE_CE_RE = re.compile(
+    r"^simple_ce(?:_cf(?P<cf>[^_]+))?(?:_ret(?P<ret>[^_]+))?(?:_gamma(?P<gamma>[^_]+))?$"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -47901,6 +46733,21 @@ def parse_args() -> argparse.Namespace:
         "--output-slides-tex",
         type=Path,
         help="Optional path to a Beamer .tex file with one slide per split/LR/epoch table.",
+    )
+    parser.add_argument(
+        "--simnpo-root",
+        type=Path,
+        help="Optional path to a structured-saves directory that contains simnpo/simple_ce rows.",
+    )
+    parser.add_argument(
+        "--output-simplece-file",
+        type=Path,
+        help="Optional path to a .txt file that will contain SimpleCE-only LaTeX tables.",
+    )
+    parser.add_argument(
+        "--output-simplece-slides-tex",
+        type=Path,
+        help="Optional path to a Beamer .tex file with one slide per SimpleCE-only table.",
     )
     return parser.parse_args()
 
@@ -47933,6 +46780,10 @@ def format_percent(raw_value: str | None) -> str:
     return f"{float(raw_value) * 100.0:.1f}"
 
 
+def escape_latex(text: str) -> str:
+    return text.replace("_", r"\_")
+
+
 def build_header_cells() -> list[str]:
     cells = ["Method"]
     for metric_name, metric_abbrev in METRICS:
@@ -47943,41 +46794,34 @@ def build_header_cells() -> list[str]:
 
 def build_row_cells(
     epoch_column: str,
-    old_bundle: dict[str, dict[str, dict[str, str]]],
-    new_bundle: dict[str, dict[str, dict[str, str]]],
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    row_specs: list[tuple[str, str, str, str]],
 ) -> list[str]:
     lines: list[str] = []
-    for source_name, source_method, display_name, color in ROW_SPECS:
-        source_bundle = old_bundle if source_name == "old" else new_bundle
+    for source_name, source_method, display_name, color in row_specs:
+        source_bundle = bundles[source_name]
         value_cells = [display_name]
         for metric_name, _metric_abbrev in METRICS:
             method_row = source_bundle[metric_name].get(source_method)
             raw_value = None if method_row is None else method_row.get(epoch_column)
             value_cells.append(format_percent(raw_value))
 
-        lines.append(rf"\rowcolor{{{color}}}")
-        lines.append(" & ".join(value_cells) + r" \\")
+        if color:
+            lines.append(rf"\rowcolor{{{color}}}")
+        lines.append(" & ".join(escape_latex(cell) for cell in value_cells) + r" \\")
     return lines
 
 
 def build_table(
-    split: str,
-    lr: str,
+    *,
+    caption: str,
+    label: str,
     epoch_column: str,
-    epoch_label: str,
-    old_root: Path,
-    new_root: Path,
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    row_specs: list[tuple[str, str, str, str]],
 ) -> str:
-    old_bundle = load_table_bundle(old_root, split, lr)
-    new_bundle = load_table_bundle(new_root, split, lr)
-
-    caption = (
-        f"Combined old/new results for {SPLIT_LABELS[split]} at LR={lr}, epoch {epoch_label}. "
-        "Values are percentages."
-    )
-    label = f"tab:combined-{split.replace('_', '-')}-{lr.replace('-', '')}-ep{epoch_label}"
     header_cells = build_header_cells()
-    row_lines = build_row_cells(epoch_column, old_bundle, new_bundle)
+    row_lines = build_row_cells(epoch_column, bundles, row_specs)
 
     lines = [
         r"\begin{table*}[t]",
@@ -47999,21 +46843,18 @@ def build_table(
 
 
 def build_slide_frame(
-    split: str,
-    lr: str,
+    *,
+    frame_title: str,
     epoch_column: str,
-    epoch_label: str,
-    old_root: Path,
-    new_root: Path,
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    row_specs: list[tuple[str, str, str, str]],
 ) -> str:
-    old_bundle = load_table_bundle(old_root, split, lr)
-    new_bundle = load_table_bundle(new_root, split, lr)
     header_cells = build_header_cells()
-    row_lines = build_row_cells(epoch_column, old_bundle, new_bundle)
+    row_lines = build_row_cells(epoch_column, bundles, row_specs)
 
     lines = [
         r"\begin{frame}[t]",
-        rf"\frametitle{{{SPLIT_LABELS[split]} | LR = {lr} | Epoch = {epoch_label}}}",
+        rf"\frametitle{{{frame_title}}}",
         r"{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}",
         r"",
         r"{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}",
@@ -48037,7 +46878,13 @@ def build_slide_frame(
     return "\n".join(lines)
 
 
-def build_slides_tex(old_root: Path, new_root: Path) -> str:
+def build_slides_tex(
+    *,
+    title: str,
+    subtitle: str,
+    frames: list[str],
+    neutral_theme: bool = False,
+) -> str:
     lines = [
         r"\PassOptionsToPackage{table}{xcolor}",
         r"\documentclass[aspectratio=169,11pt]{beamer}",
@@ -48087,24 +46934,8 @@ def build_slides_tex(old_root: Path, new_root: Path) -> str:
         r"  \DeclareUnicodeCharacter{2026}{...}",
         r"\fi",
         r"",
-        r"\definecolor{Primary}{HTML}{143B63}",
-        r"\definecolor{Accent}{HTML}{0F766E}",
-        r"\definecolor{Warm}{HTML}{B45309}",
-        r"\definecolor{SoftBlue}{HTML}{EFF6FF}",
-        r"\definecolor{SoftTeal}{HTML}{ECFDF5}",
-        r"\definecolor{SoftGray}{HTML}{F3F4F6}",
-        r"\definecolor{SoftRed}{HTML}{FEE2E2}",
-        r"",
-        r"\setbeamercolor{structure}{fg=Primary}",
-        r"\setbeamercolor{title}{fg=Primary}",
-        r"\setbeamercolor{frametitle}{fg=Primary,bg=white}",
-        r"\setbeamercolor{block title}{fg=white,bg=Primary}",
-        r"\setbeamercolor{block body}{fg=black,bg=SoftGray}",
-        r"\setbeamercolor{alertblock title}{fg=white,bg=Accent}",
-        r"\setbeamercolor{alertblock body}{fg=black,bg=SoftTeal}",
-        r"",
-        r"\title{Combined Old/New DualCF Tables}",
-        r"\subtitle{16 split/LR/epoch slides}",
+        rf"\title{{{title}}}",
+        rf"\subtitle{{{subtitle}}}",
         r"\author{Generated from open-unlearning metrics}",
         r"\date{}",
         r"",
@@ -48112,20 +46943,119 @@ def build_slides_tex(old_root: Path, new_root: Path) -> str:
         r"",
     ]
 
-    for split in SPLITS:
-        for lr in LRS:
-            for epoch_column, epoch_label in EPOCH_SPECS:
-                lines.append(build_slide_frame(split, lr, epoch_column, epoch_label, old_root, new_root))
-                lines.append("")
+    if neutral_theme:
+        insert_lines = [
+            r"\setbeamercolor{background canvas}{bg=white}",
+            r"\setbeamercolor{normal text}{fg=black,bg=white}",
+            r"\setbeamercolor{structure}{fg=black}",
+            r"\setbeamercolor{title}{fg=black}",
+            r"\setbeamercolor{frametitle}{fg=black,bg=white}",
+            r"\setbeamercolor{footline}{fg=black,bg=white}",
+            r"\hypersetup{colorlinks=false,hidelinks}",
+            r"",
+        ]
+    else:
+        insert_lines = [
+            r"\definecolor{Primary}{HTML}{143B63}",
+            r"\definecolor{Accent}{HTML}{0F766E}",
+            r"\definecolor{Warm}{HTML}{B45309}",
+            r"\definecolor{SoftBlue}{HTML}{EFF6FF}",
+            r"\definecolor{SoftTeal}{HTML}{ECFDF5}",
+            r"\definecolor{SoftGray}{HTML}{F3F4F6}",
+            r"\definecolor{SoftRed}{HTML}{FEE2E2}",
+            r"",
+            r"\setbeamercolor{structure}{fg=Primary}",
+            r"\setbeamercolor{title}{fg=Primary}",
+            r"\setbeamercolor{frametitle}{fg=Primary,bg=white}",
+            r"\setbeamercolor{block title}{fg=white,bg=Primary}",
+            r"\setbeamercolor{block body}{fg=black,bg=SoftGray}",
+            r"\setbeamercolor{alertblock title}{fg=white,bg=Accent}",
+            r"\setbeamercolor{alertblock body}{fg=black,bg=SoftTeal}",
+            r"",
+        ]
+    lines[lines.index(rf"\title{{{title}}}") : lines.index(rf"\title{{{title}}}")] = insert_lines
+
+    for frame in frames:
+        lines.append(frame)
+        lines.append("")
 
     lines.append(r"\end{document}")
     lines.append("")
     return "\n".join(lines)
 
 
-def build_output_text(old_root: Path, new_root: Path) -> str:
+def normalize_numeric_token(token: str | None) -> tuple[float, str]:
+    if token is None:
+        return (0.0, "")
+    return (float(token.replace("p", ".")), token)
+
+
+def simple_ce_sort_key(method_name: str) -> tuple[float, float, float, str]:
+    match = SIMPLE_CE_RE.fullmatch(method_name)
+    if match is None:
+        return (float("inf"), float("inf"), float("inf"), method_name)
+    cf_value, _ = normalize_numeric_token(match.group("cf"))
+    ret_value, _ = normalize_numeric_token(match.group("ret"))
+    gamma_value, _ = normalize_numeric_token(match.group("gamma"))
+    return (cf_value, ret_value, gamma_value, method_name)
+
+
+def simple_ce_display_name(method_name: str) -> str:
+    match = SIMPLE_CE_RE.fullmatch(method_name)
+    if match is None:
+        return method_name
+    cf_value = (match.group("cf") or "--").replace("p", ".")
+    ret_value = (match.group("ret") or "--").replace("p", ".")
+    gamma_value = (match.group("gamma") or "--").replace("p", ".")
+    return f"SimpleCE cf={cf_value} ret={ret_value} gamma={gamma_value}"
+
+
+def build_bundles(root_map: dict[str, Path], split: str, lr: str) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
+    return {source_name: load_table_bundle(root, split, lr) for source_name, root in root_map.items()}
+
+
+def build_combined_row_specs(simnpo_root: Path | None) -> list[tuple[str, str, str, str]]:
+    row_specs = list(COMBINED_ROW_SPECS)
+    if simnpo_root is not None:
+        row_specs.append(SIMNPO_ROW_SPEC)
+    return row_specs
+
+
+def build_combined_slide_row_specs(simnpo_root: Path | None) -> list[tuple[str, str, str, str]]:
+    row_specs = build_combined_row_specs(simnpo_root)
+    if simnpo_root is not None:
+        for method_name in COMBINED_SIMPLECE_SLIDE_METHODS:
+            row_specs.append(("simnpo", method_name, simple_ce_display_name(method_name), ""))
+    return row_specs
+
+
+def load_simplece_row_specs(
+    simplece_root: Path,
+    split: str,
+    lr: str,
+    *,
+    with_colors: bool = True,
+) -> list[tuple[str, str, str, str]]:
+    first_metric = METRICS[0][0]
+    rows = load_metric_rows(simplece_root / split / lr / f"{first_metric}.tsv")
+    methods = sorted(
+        (method_name for method_name in rows if method_name.startswith("simple_ce")),
+        key=simple_ce_sort_key,
+    )
+    color = "blue!12" if with_colors else ""
+    return [("simplece", method_name, simple_ce_display_name(method_name), color) for method_name in methods]
+
+
+def build_output_text(
+    *,
+    header_comment: str,
+    row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
+    bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
+    caption_prefix: str,
+    label_prefix: str,
+) -> str:
     sections = [
-        "% Combined tables generated by src/tools/build_results_combine_tables.py",
+        header_comment,
         "% Abbreviations: F=forget_qa_rouge, H=holdout_qa_rouge, FC=forget_qa_cos_sim, HC=holdout_qa_cos_sim, U=utility_avg, M=MMLU-Pro, T=TruthfulQA, W=Winogrande, A=ARC.",
         "% Each table is epoch-specific and uses either epoch 2 or epoch 5.",
         "",
@@ -48134,15 +47064,51 @@ def build_output_text(old_root: Path, new_root: Path) -> str:
     first_table = True
     for split in SPLITS:
         for lr in LRS:
+            row_specs = row_specs_by_split_lr[(split, lr)]
+            bundles = bundles_by_split_lr[(split, lr)]
             for epoch_column, epoch_label in EPOCH_SPECS:
                 if not first_table:
                     sections.append("")
                     sections.append("")
                 sections.append(f"% Split: {split} | LR: {lr} | Epoch: {epoch_label}")
-                sections.append(build_table(split, lr, epoch_column, epoch_label, old_root, new_root))
+                sections.append(
+                    build_table(
+                        caption=(
+                            f"{caption_prefix} for {SPLIT_LABELS[split]} at LR={lr}, epoch {epoch_label}. "
+                            "Values are percentages."
+                        ),
+                        label=f"tab:{label_prefix}-{split.replace('_', '-')}-{lr.replace('-', '')}-ep{epoch_label}",
+                        epoch_column=epoch_column,
+                        bundles=bundles,
+                        row_specs=row_specs,
+                    )
+                )
                 first_table = False
     sections.append("")
     return "\n".join(sections)
+
+
+def build_frames(
+    *,
+    row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
+    bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
+    title_prefix: str,
+) -> list[str]:
+    frames: list[str] = []
+    for split in SPLITS:
+        for lr in LRS:
+            row_specs = row_specs_by_split_lr[(split, lr)]
+            bundles = bundles_by_split_lr[(split, lr)]
+            for epoch_column, epoch_label in EPOCH_SPECS:
+                frames.append(
+                    build_slide_frame(
+                        frame_title=f"{title_prefix} | {SPLIT_LABELS[split]} | LR = {lr} | Epoch = {epoch_label}",
+                        epoch_column=epoch_column,
+                        bundles=bundles,
+                        row_specs=row_specs,
+                    )
+                )
+    return frames
 
 
 def main() -> None:
@@ -48153,19 +47119,878 @@ def main() -> None:
     output_slides_tex = (
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
+    simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
+    output_simplece_file = (
+        None if args.output_simplece_file is None else args.output_simplece_file.expanduser().resolve()
+    )
+    output_simplece_slides_tex = (
+        None
+        if args.output_simplece_slides_tex is None
+        else args.output_simplece_slides_tex.expanduser().resolve()
+    )
+
+    combined_roots = {"old": old_root, "new": new_root}
+    if simnpo_root is not None:
+        combined_roots["simnpo"] = simnpo_root
+
+    combined_row_specs_by_split_lr = {
+        (split, lr): build_combined_row_specs(simnpo_root) for split in SPLITS for lr in LRS
+    }
+    combined_slide_row_specs_by_split_lr = {
+        (split, lr): build_combined_slide_row_specs(simnpo_root) for split in SPLITS for lr in LRS
+    }
+    combined_bundles_by_split_lr = {
+        (split, lr): build_bundles(combined_roots, split, lr) for split in SPLITS for lr in LRS
+    }
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    output_text = build_output_text(old_root, new_root)
+    output_text = build_output_text(
+        header_comment="% Combined tables generated by src/tools/build_results_combine_tables.py",
+        row_specs_by_split_lr=combined_row_specs_by_split_lr,
+        bundles_by_split_lr=combined_bundles_by_split_lr,
+        caption_prefix="Combined old/new results",
+        label_prefix="combined",
+    )
     output_file.write_text(output_text, encoding="utf-8")
 
     if output_slides_tex is not None:
         output_slides_tex.parent.mkdir(parents=True, exist_ok=True)
-        slides_tex = build_slides_tex(old_root, new_root)
+        combined_frames = build_frames(
+            row_specs_by_split_lr=combined_slide_row_specs_by_split_lr,
+            bundles_by_split_lr=combined_bundles_by_split_lr,
+            title_prefix="Combined Tables",
+        )
+        slides_tex = build_slides_tex(
+            title="Combined DualCF Tables",
+            subtitle=f"{len(combined_frames)} split/LR/epoch slides",
+            frames=combined_frames,
+        )
         output_slides_tex.write_text(slides_tex, encoding="utf-8")
+
+    if output_simplece_file is not None:
+        if simnpo_root is None:
+            raise ValueError("--simnpo-root is required when writing SimpleCE-only outputs")
+        output_simplece_file.parent.mkdir(parents=True, exist_ok=True)
+        simplece_row_specs_by_split_lr = {
+            (split, lr): load_simplece_row_specs(simnpo_root, split, lr) for split in SPLITS for lr in LRS
+        }
+        simplece_slide_row_specs_by_split_lr = {
+            (split, lr): load_simplece_row_specs(simnpo_root, split, lr, with_colors=False)
+            for split in SPLITS
+            for lr in LRS
+        }
+        simplece_bundles_by_split_lr = {
+            (split, lr): build_bundles({"simplece": simnpo_root}, split, lr) for split in SPLITS for lr in LRS
+        }
+        simplece_output_text = build_output_text(
+            header_comment="% SimpleCE-only tables generated by src/tools/build_results_combine_tables.py",
+            row_specs_by_split_lr=simplece_row_specs_by_split_lr,
+            bundles_by_split_lr=simplece_bundles_by_split_lr,
+            caption_prefix="SimpleCE ablations",
+            label_prefix="simplece",
+        )
+        output_simplece_file.write_text(simplece_output_text, encoding="utf-8")
+
+        if output_simplece_slides_tex is not None:
+            output_simplece_slides_tex.parent.mkdir(parents=True, exist_ok=True)
+            simplece_frames = build_frames(
+                row_specs_by_split_lr=simplece_slide_row_specs_by_split_lr,
+                bundles_by_split_lr=simplece_bundles_by_split_lr,
+                title_prefix="SimpleCE Ablations",
+            )
+            simplece_slides_tex = build_slides_tex(
+                title="SimpleCE Ablation Tables",
+                subtitle=f"{len(simplece_frames)} split/LR/epoch slides",
+                frames=simplece_frames,
+                neutral_theme=True,
+            )
+            output_simplece_slides_tex.write_text(simplece_slides_tex, encoding="utf-8")
 
 
 if __name__ == "__main__":
     main()
+
+</content>
+
+<content full_path="src/tools/export_unlearning_sanity_checks.py">
+#!/usr/bin/env python3
+"""Build text sanity-check reports from saved endpoint eval logs."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import random
+import re
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+DUET_EVAL_FILENAME = "DUET_EVAL.json"
+DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
+COS_SIM_EVAL_FILENAME = "COS_SIM_EVAL.json"
+LR_RE = re.compile(r"_lr([^_]+)")
+METHOD_RE = re.compile(
+    r"_(dual_cf|dpo_cf|ga|loku|npo_sam|npo|simnpo|simple_ce|falcon)_lora_.*?_lr[^_]+(.*)$"
+)
+DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+RUN_SPLIT_PATTERNS = [
+    r"_city_forget_rare_5_",
+    r"_city_forget_popular_5_",
+    r"_city_forget_5_",
+    r"_forget_level\d+_",
+]
+QUESTION_RE = re.compile(r"\buser\b\s*\n\n(?P<question>.*?)\bassistant\b\s*\n*\Z", re.DOTALL)
+DEFAULT_SBERT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+REPORT_METRICS = (
+    ("forget_qa_rouge", "forget_qa_cos_sim", "forget"),
+    ("holdout_qa_rouge", "holdout_qa_cos_sim", "holdout"),
+)
+METHOD_DISPLAY = {
+    "ga": "GA",
+    "npo": "NPO",
+    "npo_sam": "NPO-SAM",
+    "loku": "LoKU",
+    "dual_cf": "DualCF",
+    "dual_cf_full": "DualCF(full)",
+    "dual_cf_d_only": "DualCF(d_only)",
+    "dual_cf_a_only": "DualCF(a_only)",
+    "dpo_cf": "DPO-CF",
+    "simnpo": "SimNPO",
+    "simple_ce": "Simple-CE",
+    "falcon": "FALCON",
+}
+METHOD_ORDER = [
+    "ga",
+    "npo",
+    "npo_sam",
+    "loku",
+    "dual_cf_full",
+    "dual_cf_d_only",
+    "dual_cf_a_only",
+    "dual_cf",
+    "dpo_cf",
+    "simnpo",
+    "simple_ce",
+    "falcon",
+]
+METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
+
+
+@dataclass(frozen=True)
+class EvalRun:
+    input_root: Path
+    input_root_label: str
+    run_dir: Path
+    eval_dir: Path
+    run_name: str
+    benchmark: str
+    model_label: str
+    forget_split: str
+    holdout_split: str
+    lr: str
+    method_key: str
+    method_display: str
+
+
+@dataclass(frozen=True)
+class MissingEval:
+    input_root: Path
+    run_dir: Path
+    eval_dir: Path
+    reason: str
+
+
+@dataclass(frozen=True)
+class GroupKey:
+    benchmark: str
+    model_label: str
+    forget_split: str
+    holdout_split: str
+    lr: str
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input-root",
+        type=Path,
+        action="append",
+        required=True,
+        help="Root to scan. Can point at a saves folder, a campaign folder, or any parent directory.",
+    )
+    parser.add_argument(
+        "--lr",
+        action="append",
+        default=[],
+        help="Limit reports to one or more learning rates, for example 1e-4 or 5e-5.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        required=True,
+        help="Directory where report text files and coverage tables will be written.",
+    )
+    parser.add_argument(
+        "--sample-count",
+        type=int,
+        default=10,
+        help="How many examples to sample from each forget and holdout split.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=13,
+        help="Base seed for deterministic example selection.",
+    )
+    parser.add_argument(
+        "--sbert-model-path",
+        type=str,
+        default=os.environ.get("SBERT_MODEL_PATH", DEFAULT_SBERT_MODEL),
+        help="Local path or HF repo id for cosine similarity when COS_SIM_EVAL.json is missing.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Remove the existing output directory before writing reports.",
+    )
+    return parser.parse_args(argv)
+
+
+def prepare_output_root(path: Path, overwrite: bool) -> Path:
+    root = path.expanduser().resolve()
+    if root.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"Output directory already exists: {root}. Pass --overwrite to rebuild it."
+            )
+        for child in sorted(root.rglob("*"), reverse=True):
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+            elif child.is_dir():
+                child.rmdir()
+        root.rmdir()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_yaml(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def dump_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+
+
+def write_tsv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def format_float(value: Any) -> str:
+    if value is None:
+        return "NA"
+    return f"{float(value):.4f}"
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._+-]+", "-", value.strip())
+    slug = slug.strip("-")
+    return slug or "unknown"
+
+
+def format_run_path(path: Path) -> str:
+    cwd = Path.cwd().resolve()
+    try:
+        return str(path.resolve().relative_to(cwd))
+    except ValueError:
+        return str(path.resolve())
+
+
+def extract_lr(run_name: str) -> str:
+    match = LR_RE.search(run_name)
+    if match is None:
+        raise ValueError(f"Could not parse lr from run name: {run_name}")
+    return match.group(1)
+
+
+def extract_method_key(run_name: str) -> str:
+    match = METHOD_RE.search(run_name)
+    if match is None:
+        raise ValueError(f"Could not parse method from run name: {run_name}")
+    method_name = match.group(1)
+    suffix = match.group(2)
+    flags = [token for token in suffix.split("_") if DUAL_FLAG_RE.fullmatch(token)]
+
+    if method_name == "dual_cf":
+        flag_set = set(flags)
+        if flag_set == {"dOn", "aOn"}:
+            return "dual_cf_full"
+        if flag_set == {"dOn", "aOff"}:
+            return "dual_cf_d_only"
+        if flag_set == {"dOff", "aOn"}:
+            return "dual_cf_a_only"
+        if flags:
+            return "dual_cf_" + "_".join(flags)
+        return "dual_cf"
+
+    return method_name
+
+
+def extract_method_display(method_key: str) -> str:
+    if method_key in METHOD_DISPLAY:
+        return METHOD_DISPLAY[method_key]
+    if method_key.startswith("dual_cf_"):
+        suffix = method_key.removeprefix("dual_cf_")
+        return f"DualCF({suffix})"
+    return method_key
+
+
+def extract_model_label(run_name: str) -> str:
+    if run_name.startswith("duet_"):
+        rest = run_name[len("duet_") :]
+    elif run_name.startswith("rwku_"):
+        rest = run_name[len("rwku_") :]
+    else:
+        return "unknown_model"
+
+    for pattern in RUN_SPLIT_PATTERNS:
+        match = re.search(pattern, rest)
+        if match is not None:
+            return rest[: match.start()]
+    return "unknown_model"
+
+
+def infer_input_root_label(root: Path) -> str:
+    if root.name:
+        return root.name
+    return slugify(str(root))
+
+
+def extract_question(prompt: str) -> str:
+    if not prompt:
+        return ""
+    normalized = prompt.replace("\r\n", "\n").strip()
+    match = QUESTION_RE.search(normalized)
+    if match is not None:
+        return match.group("question").strip()
+    user_marker = normalized.rfind("user\n\n")
+    if user_marker != -1:
+        question = normalized[user_marker + len("user\n\n") :]
+        assistant_marker = question.rfind("assistant")
+        if assistant_marker != -1:
+            question = question[:assistant_marker]
+        question = question.strip()
+        if question:
+            return question
+    return normalized
+
+
+def numeric_sort_key(value: str) -> tuple[int, str]:
+    try:
+        return (int(value), value)
+    except ValueError:
+        return (10**12, value)
+
+
+def choose_indices(indices: list[str], count: int, seed_key: str) -> list[str]:
+    if len(indices) <= count:
+        return sorted(indices, key=numeric_sort_key)
+    rng = random.Random(seed_key)
+    sampled = rng.sample(indices, count)
+    return sorted(sampled, key=numeric_sort_key)
+
+
+def load_eval_sidecar(eval_dir: Path) -> dict[str, Any]:
+    config_path = eval_dir / ".hydra" / "config.yaml"
+    if config_path.exists():
+        data = load_yaml(config_path)
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def create_run_record(input_root: Path, eval_path: Path) -> EvalRun:
+    eval_dir = eval_path.parent
+    run_dir = eval_dir.parent
+    run_name = run_dir.name
+    eval_cfg = load_eval_sidecar(eval_dir)
+
+    benchmark = "duet"
+    if run_name.startswith("rwku_"):
+        benchmark = "rwku"
+    elif run_name.startswith("duet_"):
+        benchmark = "duet"
+
+    forget_split = str(eval_cfg.get("forget_split") or "")
+    holdout_split = str(eval_cfg.get("holdout_split") or "")
+    if not forget_split:
+        if "_city_forget_rare_5_" in run_name:
+            forget_split = "city_forget_rare_5"
+        elif "_city_forget_popular_5_" in run_name:
+            forget_split = "city_forget_popular_5"
+        elif "_city_forget_5_" in run_name:
+            forget_split = "city_forget_rare_5+city_forget_popular_5"
+        else:
+            level_match = re.search(r"_forget_level\d+_", run_name)
+            if level_match is not None:
+                forget_split = level_match.group(0).strip("_")
+
+    if not holdout_split:
+        if benchmark == "duet":
+            holdout_split = "city_fast_retain_500"
+        else:
+            level_match = re.search(r"forget_level(\d+)", forget_split)
+            if level_match is not None:
+                holdout_split = f"neighbor_level{level_match.group(1)}"
+
+    method_key = extract_method_key(run_name)
+    return EvalRun(
+        input_root=input_root.resolve(),
+        input_root_label=infer_input_root_label(input_root.resolve()),
+        run_dir=run_dir.resolve(),
+        eval_dir=eval_dir.resolve(),
+        run_name=run_name,
+        benchmark=benchmark,
+        model_label=extract_model_label(run_name),
+        forget_split=forget_split or "unknown_forget_split",
+        holdout_split=holdout_split or "unknown_holdout_split",
+        lr=extract_lr(run_name),
+        method_key=method_key,
+        method_display=extract_method_display(method_key),
+    )
+
+
+def discover_runs(input_root: Path) -> tuple[list[EvalRun], list[MissingEval]]:
+    root = input_root.expanduser().resolve()
+    if not root.exists():
+        raise FileNotFoundError(root)
+
+    runs: list[EvalRun] = []
+    missing: list[MissingEval] = []
+    eval_dirs_with_full = set()
+
+    for eval_path in sorted(root.rglob(f"evals/{DUET_EVAL_FILENAME}")):
+        try:
+            runs.append(create_run_record(root, eval_path))
+            eval_dirs_with_full.add(eval_path.parent.resolve())
+        except ValueError as exc:
+            missing.append(
+                MissingEval(
+                    input_root=root,
+                    run_dir=eval_path.parent.parent.resolve(),
+                    eval_dir=eval_path.parent.resolve(),
+                    reason=str(exc),
+                )
+            )
+
+    for summary_path in sorted(root.rglob(f"evals/{DUET_SUMMARY_FILENAME}")):
+        eval_dir = summary_path.parent.resolve()
+        if eval_dir in eval_dirs_with_full:
+            continue
+        missing.append(
+            MissingEval(
+                input_root=root,
+                run_dir=eval_dir.parent.resolve(),
+                eval_dir=eval_dir,
+                reason=(
+                    "Found DUET_SUMMARY.json but no DUET_EVAL.json. "
+                    "This save root only preserved summaries, so per-sample text export is not possible."
+                ),
+            )
+        )
+
+    return runs, missing
+
+
+def method_sort_key(record: EvalRun) -> tuple[int, str, str]:
+    return (
+        METHOD_ORDER_INDEX.get(record.method_key, len(METHOD_ORDER_INDEX) + 1),
+        record.method_display,
+        record.input_root_label,
+    )
+
+
+class CosineScorer:
+    def __init__(self, model_ref: str):
+        self.model_ref = model_ref
+        self._model = None
+
+    @staticmethod
+    def _candidate_snapshot_dir(model_id: str, cache_root: Path) -> Path | None:
+        repo_dir = cache_root / "hub" / f"models--{model_id.replace('/', '--')}"
+        snapshots_dir = repo_dir / "snapshots"
+        if not snapshots_dir.exists():
+            return None
+        snapshots = sorted(path for path in snapshots_dir.iterdir() if path.is_dir())
+        if not snapshots:
+            return None
+        return snapshots[-1]
+
+    def _resolve_model_path(self) -> str:
+        candidate = Path(self.model_ref).expanduser()
+        if candidate.exists():
+            return str(candidate.resolve())
+
+        hf_home = Path(
+            os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")
+        ).expanduser()
+        snapshot_dir = self._candidate_snapshot_dir(self.model_ref, hf_home)
+        if snapshot_dir is not None:
+            return str(snapshot_dir.resolve())
+        raise FileNotFoundError(
+            f"Could not resolve SBERT model '{self.model_ref}'. "
+            "Pass --sbert-model-path to a local path or cache the model in HF_HOME."
+        )
+
+    def _load_model(self):
+        if self._model is not None:
+            return self._model
+        from sentence_transformers import SentenceTransformer
+
+        self._model = SentenceTransformer(self._resolve_model_path(), device="cpu")
+        return self._model
+
+    def score_pairs(self, pairs: list[tuple[str, str]]) -> list[float]:
+        if not pairs:
+            return []
+        model = self._load_model()
+        ground_truths = [gt for gt, _ in pairs]
+        generations = [gen for _, gen in pairs]
+        gt_embs = model.encode(ground_truths, normalize_embeddings=True)
+        gen_embs = model.encode(generations, normalize_embeddings=True)
+        return (gt_embs * gen_embs).sum(axis=1).tolist()
+
+
+def get_selected_cos_values(
+    eval_payload: dict[str, Any],
+    cos_payload: dict[str, Any] | None,
+    rouge_metric: str,
+    cos_metric: str,
+    selected_indices: list[str],
+    cosine_scorer: CosineScorer | None,
+) -> dict[str, dict[str, Any]]:
+    output: dict[str, dict[str, Any]] = {}
+
+    if cos_payload is not None and cos_metric in cos_payload:
+        block = cos_payload[cos_metric].get("value_by_index", {})
+        for idx in selected_indices:
+            item = block.get(str(idx))
+            if isinstance(item, dict):
+                output[str(idx)] = item
+        if len(output) == len(selected_indices):
+            return output
+
+    if cosine_scorer is None:
+        return output
+
+    rouge_block = eval_payload.get(rouge_metric, {}).get("value_by_index", {})
+    pairs: list[tuple[str, str]] = []
+    valid_indices: list[str] = []
+    for idx in selected_indices:
+        item = rouge_block.get(str(idx))
+        if not isinstance(item, dict):
+            continue
+        gt = item.get("ground_truth")
+        generation = item.get("generation")
+        if not gt or not generation:
+            continue
+        valid_indices.append(str(idx))
+        pairs.append((str(gt), str(generation)))
+
+    if not pairs:
+        return output
+
+    sims = cosine_scorer.score_pairs(pairs)
+    for idx, sim, pair in zip(valid_indices, sims, pairs):
+        output[idx] = {
+            "cos_sim": float(sim),
+            "ground_truth": pair[0],
+            "generation": pair[1],
+        }
+    return output
+
+
+def read_cos_payload(eval_dir: Path) -> dict[str, Any] | None:
+    cos_path = eval_dir / COS_SIM_EVAL_FILENAME
+    if cos_path.exists():
+        payload = load_json(cos_path)
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def make_group_display_label(group: GroupKey) -> str:
+    return (
+        f"{group.benchmark.upper()} | {group.model_label} | "
+        f"{group.forget_split} | lr={group.lr}"
+    )
+
+
+def write_missing_table(path: Path, missing: list[MissingEval]) -> None:
+    rows = [
+        {
+            "input_root": str(entry.input_root),
+            "run_dir": str(entry.run_dir),
+            "eval_dir": str(entry.eval_dir),
+            "reason": entry.reason,
+        }
+        for entry in missing
+    ]
+    write_tsv(path, rows, ["input_root", "run_dir", "eval_dir", "reason"])
+
+
+def write_run_table(path: Path, runs: list[EvalRun]) -> None:
+    rows = [
+        {
+            "input_root": str(run.input_root),
+            "input_root_label": run.input_root_label,
+            "run_dir": str(run.run_dir),
+            "eval_dir": str(run.eval_dir),
+            "benchmark": run.benchmark,
+            "model_label": run.model_label,
+            "forget_split": run.forget_split,
+            "holdout_split": run.holdout_split,
+            "lr": run.lr,
+            "method_key": run.method_key,
+            "method_display": run.method_display,
+            "has_cos_sim_eval": str((run.eval_dir / COS_SIM_EVAL_FILENAME).exists()),
+        }
+        for run in runs
+    ]
+    write_tsv(
+        path,
+        rows,
+        [
+            "input_root",
+            "input_root_label",
+            "run_dir",
+            "eval_dir",
+            "benchmark",
+            "model_label",
+            "forget_split",
+            "holdout_split",
+            "lr",
+            "method_key",
+            "method_display",
+            "has_cos_sim_eval",
+        ],
+    )
+
+
+def build_method_labels(runs: list[EvalRun]) -> dict[Path, str]:
+    counts = Counter((run.method_display for run in runs))
+    labels: dict[Path, str] = {}
+    for run in runs:
+        label = run.method_display
+        if counts[label] > 1:
+            label = f"{label} [{run.input_root_label}]"
+        labels[run.run_dir] = label
+    return labels
+
+
+def render_report(
+    group: GroupKey,
+    runs: list[EvalRun],
+    sample_count: int,
+    seed: int,
+    cosine_scorer: CosineScorer | None,
+) -> str:
+    runs = sorted(runs, key=method_sort_key)
+    method_labels = build_method_labels(runs)
+    eval_payloads = {run.run_dir: load_json(run.eval_dir / DUET_EVAL_FILENAME) for run in runs}
+    cos_payloads = {run.run_dir: read_cos_payload(run.eval_dir) for run in runs}
+
+    reference_run = runs[0]
+    reference_payload = eval_payloads[reference_run.run_dir]
+
+    lines: list[str] = []
+    lines.append(f"Benchmark: {group.benchmark.upper()}")
+    lines.append(f"Model: {group.model_label}")
+    lines.append(f"Forget split: {group.forget_split}")
+    lines.append(f"Holdout split: {group.holdout_split}")
+    lines.append(f"Learning rate: {group.lr}")
+    lines.append(f"Runs compared: {', '.join(method_labels[run.run_dir] for run in runs)}")
+    lines.append("")
+
+    for rouge_metric, cos_metric, section_name in REPORT_METRICS:
+        block = reference_payload.get(rouge_metric, {}).get("value_by_index", {})
+        available_indices = sorted(block.keys(), key=numeric_sort_key)
+        selected_indices = choose_indices(
+            available_indices,
+            sample_count,
+            seed_key=f"{seed}:{group}:{section_name}",
+        )
+        label = "FORGET" if section_name == "forget" else "HOLDOUT"
+        goal = "forget this answer" if section_name == "forget" else "keep this answer"
+        lines.append(f"{label} EXAMPLES")
+        lines.append(
+            f"Selected {len(selected_indices)} / {len(available_indices)} examples. Goal: {goal}."
+        )
+        lines.append("")
+
+        for position, idx in enumerate(selected_indices, start=1):
+            reference_item = block.get(str(idx), {})
+            question = extract_question(str(reference_item.get("input", "")))
+            target_answer = str(reference_item.get("ground_truth", ""))
+            lines.append(f"{label} SAMPLE {position} | index={idx}")
+            lines.append(f"Question: {question}")
+            if section_name == "forget":
+                lines.append(f"Answer to forget: {target_answer}")
+            else:
+                lines.append(f"Answer to keep: {target_answer}")
+
+            for run in runs:
+                payload = eval_payloads[run.run_dir]
+                item = payload.get(rouge_metric, {}).get("value_by_index", {}).get(str(idx), {})
+                cos_values = get_selected_cos_values(
+                    eval_payload=payload,
+                    cos_payload=cos_payloads[run.run_dir],
+                    rouge_metric=rouge_metric,
+                    cos_metric=cos_metric,
+                    selected_indices=[str(idx)],
+                    cosine_scorer=cosine_scorer,
+                )
+                cos_item = cos_values.get(str(idx), {})
+                generation = str(item.get("generation", "")).strip()
+                lines.append(
+                    f"{method_labels[run.run_dir]} | rougeL_recall={format_float(item.get('rougeL_recall'))} "
+                    f"| cos_sim={format_float(cos_item.get('cos_sim'))}"
+                )
+                lines.append(f"Save path: {format_run_path(run.run_dir)}")
+                lines.append(f"Answer: {generation}")
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    output_root = prepare_output_root(args.output_root, overwrite=args.overwrite)
+
+    all_runs: list[EvalRun] = []
+    all_missing: list[MissingEval] = []
+    for input_root in args.input_root:
+        runs, missing = discover_runs(input_root)
+        all_runs.extend(runs)
+        all_missing.extend(missing)
+
+    if args.lr:
+        allowed_lrs = set(args.lr)
+        all_runs = [run for run in all_runs if run.lr in allowed_lrs]
+        all_missing = [
+            entry
+            for entry in all_missing
+            if any(lr in str(entry.run_dir) for lr in allowed_lrs) or not allowed_lrs
+        ]
+
+    all_runs = sorted(all_runs, key=lambda run: (run.benchmark, run.model_label, run.forget_split, run.lr, method_sort_key(run)))
+    write_run_table(output_root / "matched_runs.tsv", all_runs)
+    write_missing_table(output_root / "missing_sample_logs.tsv", all_missing)
+
+    if not all_runs:
+        raise RuntimeError(
+            "No usable DUET_EVAL.json files matched the requested roots and LR filters. "
+            "Check missing_sample_logs.tsv for roots that only preserved summaries."
+        )
+
+    grouped: dict[GroupKey, list[EvalRun]] = defaultdict(list)
+    for run in all_runs:
+        grouped[
+            GroupKey(
+                benchmark=run.benchmark,
+                model_label=run.model_label,
+                forget_split=run.forget_split,
+                holdout_split=run.holdout_split,
+                lr=run.lr,
+            )
+        ].append(run)
+
+    need_cosine = any(not (run.eval_dir / COS_SIM_EVAL_FILENAME).exists() for run in all_runs)
+    cosine_scorer = CosineScorer(args.sbert_model_path) if need_cosine else None
+
+    index_rows: list[dict[str, Any]] = []
+    for group in sorted(
+        grouped,
+        key=lambda key: (key.benchmark, key.model_label, key.forget_split, key.lr),
+    ):
+        runs = grouped[group]
+        report_name = (
+            f"{slugify(group.benchmark)}__{slugify(group.model_label)}__"
+            f"{slugify(group.forget_split)}__lr-{slugify(group.lr)}.txt"
+        )
+        report_path = output_root / report_name
+        report_text = render_report(
+            group=group,
+            runs=runs,
+            sample_count=args.sample_count,
+            seed=args.seed,
+            cosine_scorer=cosine_scorer,
+        )
+        report_path.write_text(report_text, encoding="utf-8")
+        index_rows.append(
+            {
+                "benchmark": group.benchmark,
+                "model_label": group.model_label,
+                "forget_split": group.forget_split,
+                "holdout_split": group.holdout_split,
+                "lr": group.lr,
+                "report_path": str(report_path),
+                "num_runs": str(len(runs)),
+                "methods": ",".join(build_method_labels(sorted(runs, key=method_sort_key)).values()),
+                "group_label": make_group_display_label(group),
+            }
+        )
+
+    write_tsv(
+        output_root / "report_index.tsv",
+        index_rows,
+        [
+            "benchmark",
+            "model_label",
+            "forget_split",
+            "holdout_split",
+            "lr",
+            "report_path",
+            "num_runs",
+            "methods",
+            "group_label",
+        ],
+    )
+
+    dump_json(
+        output_root / "summary.json",
+        {
+            "reports_written": len(index_rows),
+            "usable_runs": len(all_runs),
+            "missing_eval_dirs": len(all_missing),
+            "input_roots": [str(Path(root).expanduser().resolve()) for root in args.input_root],
+            "lr_filter": args.lr,
+        },
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 </content>
 
