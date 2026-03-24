@@ -442,6 +442,28 @@ GAMMAS="0 1 2" \
 bash scripts/dualcf/run_campaign_one_lr.sh 4 1e-4 all
 ```
 
+## Additional AdaPop Runs
+
+Also ran these standalone `ada_pop` campaigns:
+
+```bash
+METHOD_VARIANTS=ada_pop bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+
+METHOD_VARIANTS=ada_pop bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-5 all
+
+METHOD_VARIANTS=ada_pop \
+GAMMAS="1.0" \
+ALPHA_CONST="none 0.5 1.0" \
+BETA_CONST="none 0.5 1.0" \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 5e-5 all
+
+METHOD_VARIANTS=ada_pop \
+GAMMAS="1.0" \
+ALPHA_CONST="none 0.5 1.0" \
+BETA_CONST="none 0.5 1.0" \
+bash scripts/dualcf/run_campaign_one_lr.sh 4 1e-4 all
+```
+
 ## Post-run cosine-sim sweep
 
 After the campaign finishes, write cosine-sim artifacts alongside every saved
