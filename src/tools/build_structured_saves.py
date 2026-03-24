@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from checkpoint_summary_utils import collect_eval_summaries
+from checkpoint_summary_utils import checkpoint_sort_key, collect_eval_summaries
 
 
 META_COLUMNS = {"label", "checkpoint", "step", "epoch"}
@@ -49,6 +49,13 @@ METHOD_RE = re.compile(
     r"_(dual_cf|dpo_cf|simple_ce|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+UTILITY_TASK_KEY_MAP = {
+    "utility_mmlu_pro_400": "mmlu_pro_400_acc",
+    "utility_truthfulqa_bin_200": "truthfulqa_bin_200_acc",
+    "utility_arc_200": "arc_200_acc",
+    "utility_winogrande_200": "winogrande_200_acc",
+}
+UTILITY_TASK_COUNT_RE = re.compile(r"_(\d+)$")
 
 
 class NoAliasSafeDumper(yaml.SafeDumper):
@@ -120,6 +127,13 @@ def parse_int(value: str | None) -> int | None:
     if value in {None, "", "None"}:
         return None
     return int(float(value))
+
+
+def coalesce(*values: Any) -> Any:
+    for value in values:
+        if value not in {None, "", "None"}:
+            return value
+    return None
 
 
 def load_tsv_rows(path: Path) -> list[dict[str, Any]]:
@@ -326,6 +340,135 @@ def collect_cosine_rows(run_dir: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def utility_task_weight(task_name: str) -> int:
+    match = UTILITY_TASK_COUNT_RE.search(task_name)
+    if match is None:
+        raise ValueError(f"Could not infer sample count from task name: {task_name}")
+    return int(match.group(1))
+
+
+def parse_summary_metric(summary: dict[str, Any], metric_name: str) -> float | None:
+    value = summary.get(metric_name)
+    if value is None:
+        return None
+    return float(value)
+
+
+def parse_utility_metric(summary: dict[str, Any], task_name: str) -> float | None:
+    value = summary.get(f"{task_name}/acc")
+    if value is None:
+        return None
+    return float(value)
+
+
+def collect_checkpoint_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in collect_eval_summaries(
+        run_dir=run_dir,
+        eval_root_name="checkpoint_evals",
+        summary_name="DUET_SUMMARY.json",
+    ):
+        metrics = load_json(Path(row["summary_path"]))
+        rows.append(
+            {
+                "label": row["label"],
+                "checkpoint": row["label"],
+                "step": row["step"],
+                "epoch": row["epoch"],
+                "forget_qa_rouge": parse_summary_metric(metrics, "forget_qa_rouge"),
+                "holdout_qa_rouge": parse_summary_metric(metrics, "holdout_qa_rouge"),
+            }
+        )
+    return rows
+
+
+def collect_utility_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    base_utility: float | None = None
+
+    for row in collect_eval_summaries(
+        run_dir=run_dir,
+        eval_root_name="checkpoint_evals_utility",
+        summary_name="LMEval_SUMMARY.json",
+    ):
+        metrics = load_json(Path(row["summary_path"]))
+        output_row = {
+            "label": row["label"],
+            "checkpoint": row["label"],
+            "step": row["step"],
+            "epoch": row["epoch"],
+        }
+        weighted_sum = 0.0
+        total_weight = 0
+
+        for task_name, column_name in UTILITY_TASK_KEY_MAP.items():
+            metric_value = parse_utility_metric(metrics, task_name)
+            output_row[column_name] = metric_value
+            if metric_value is None:
+                continue
+            weight = utility_task_weight(task_name)
+            weighted_sum += metric_value * weight
+            total_weight += weight
+
+        utility_avg = weighted_sum / total_weight if total_weight else None
+        output_row["utility_avg"] = utility_avg
+
+        if row["label"] == "base_model_orig":
+            base_utility = utility_avg
+        output_row["utility_delta_vs_base"] = (
+            utility_avg - base_utility
+            if utility_avg is not None and base_utility is not None
+            else None
+        )
+        rows.append(output_row)
+
+    return rows
+
+
+def collect_merged_rows(run_dir: Path) -> list[dict[str, Any]]:
+    merged_summary_path = run_dir / "checkpoint_evals_merged" / "summary.tsv"
+    if merged_summary_path.exists():
+        return load_tsv_rows(merged_summary_path)
+
+    checkpoint_rows = collect_checkpoint_rows_from_json(run_dir)
+    utility_rows = collect_utility_rows_from_json(run_dir)
+    merged_by_label: dict[str, dict[str, Any]] = {}
+
+    for row in checkpoint_rows:
+        merged_by_label[row["label"]] = dict(row)
+
+    for row in utility_rows:
+        label = str(row["label"])
+        merged = merged_by_label.setdefault(
+            label,
+            {
+                "label": label,
+                "checkpoint": label,
+                "step": None,
+                "epoch": None,
+                "forget_qa_rouge": None,
+                "holdout_qa_rouge": None,
+            },
+        )
+        merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
+        merged["step"] = coalesce(merged.get("step"), row.get("step"))
+        merged["epoch"] = coalesce(merged.get("epoch"), row.get("epoch"))
+        for key in (
+            "mmlu_pro_400_acc",
+            "truthfulqa_bin_200_acc",
+            "arc_200_acc",
+            "winogrande_200_acc",
+            "utility_avg",
+            "utility_delta_vs_base",
+        ):
+            merged[key] = row.get(key)
+
+    return sorted(
+        merged_by_label.values(),
+        key=lambda row: checkpoint_sort_key(str(row["label"]), row.get("step")),
+    )
+
+
 def build_params_payload(
     run_dir: Path,
     split_bucket: str,
@@ -385,9 +528,21 @@ def build_params_payload(
         "hydra_config": config,
         "source_files": {
             "config_yaml": str(run_dir / ".hydra" / "config.yaml"),
-            "overrides_yaml": str(run_dir / ".hydra" / "overrides.yaml"),
-            "merged_summary_tsv": str(run_dir / "checkpoint_evals_merged" / "summary.tsv"),
-            "trajectory_metrics_json": str(run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json"),
+            "overrides_yaml": (
+                str(run_dir / ".hydra" / "overrides.yaml")
+                if (run_dir / ".hydra" / "overrides.yaml").exists()
+                else None
+            ),
+            "merged_summary_tsv": (
+                str(run_dir / "checkpoint_evals_merged" / "summary.tsv")
+                if (run_dir / "checkpoint_evals_merged" / "summary.tsv").exists()
+                else None
+            ),
+            "trajectory_metrics_json": (
+                str(run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json")
+                if (run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json").exists()
+                else None
+            ),
         },
     }
 
@@ -422,15 +577,16 @@ def main() -> None:
     for run_dir in run_dirs:
         config_path = run_dir / ".hydra" / "config.yaml"
         overrides_path = run_dir / ".hydra" / "overrides.yaml"
-        merged_summary_path = run_dir / "checkpoint_evals_merged" / "summary.tsv"
         trajectory_path = run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json"
 
-        if not config_path.exists() or not overrides_path.exists() or not merged_summary_path.exists():
+        if not config_path.exists():
             continue
 
         config = load_yaml(config_path)
-        overrides = load_yaml(overrides_path) or []
-        merged_rows = load_tsv_rows(merged_summary_path)
+        overrides = (load_yaml(overrides_path) or []) if overrides_path.exists() else []
+        merged_rows = collect_merged_rows(run_dir)
+        if not merged_rows:
+            continue
         cosine_rows = collect_cosine_rows(run_dir)
         trajectory_metrics = load_json(trajectory_path) if trajectory_path.exists() else {}
 

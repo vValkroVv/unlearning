@@ -1782,13 +1782,56 @@ Updates:
   - `--save_eval 0|1`
 - `--save_eval 0` keeps only summary artifacts:
   - `*_SUMMARY.json`
-  - `summary.tsv`
   - `trajectory_metrics.json`
-  - `.hydra/*.yaml`
-- `--save_eval 1` additionally keeps `*_EVAL.json`
+  - top-level run `.hydra/config.yaml`
+- `--save_eval 1` additionally keeps only endpoint benchmark eval JSON files:
+  - `evals/*_EVAL.json`
+  - excluding cosine sidecars such as `COS_SIM_EVAL.json`
+- the packager no longer keeps:
+  - `summary.tsv`
+  - eval-sidecar `.hydra/*.yaml`
+  - checkpoint `*_EVAL.json`
 - the script writes both:
   - the cleaned output directory at `--out_path`
   - the zip archive at `--out_path.zip`
+
+## Structured saves now rebuild from packaged JSON summaries when TSVs are absent (2026-03-24)
+
+Changed files:
+
+- `src/tools/build_structured_saves.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+
+Updates:
+
+- `build_structured_saves.py` now falls back to packaged JSON summaries when
+  `checkpoint_evals_merged/summary.tsv` is absent
+- the fallback rebuilds merged checkpoint rows from:
+  - `checkpoint_evals/*/DUET_SUMMARY.json`
+  - `checkpoint_evals_utility/*/LMEval_SUMMARY.json`
+  - `checkpoint_evals_merged/trajectory_metrics.json` when present
+- the params export now tolerates missing `.hydra/overrides.yaml`
+- the sanity-check exporter now falls back from `evals/.hydra/config.yaml` to
+  the run-level `.hydra/config.yaml`, which matches the slimmer packaged-save
+  layout
+
+## Saves-clean footprint helper for `.hydra`, JSON, and TSV (2026-03-24)
+
+Changed files:
+
+- `compare_saves_clean_sizes.sh`
+
+Updates:
+
+- added a small shell helper for packaged `saves-clean` trees
+- it accepts `--path_to_saves_clean` and defaults to `./saves-clean`
+- it reports file counts plus total bytes for:
+  - `.hydra/*`
+  - `*.json`
+  - `*.tsv`
+  - `other` files outside those buckets
+- it prints which bucket is larger so packaged-save cleanup decisions can be
+  made from actual footprint instead of guesswork
 
 ## Structured post-run metric tables for packaged saves (2026-03-16)
 

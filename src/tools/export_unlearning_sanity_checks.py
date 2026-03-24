@@ -307,11 +307,14 @@ def choose_indices(indices: list[str], count: int, seed_key: str) -> list[str]:
 
 
 def load_eval_sidecar(eval_dir: Path) -> dict[str, Any]:
-    config_path = eval_dir / ".hydra" / "config.yaml"
-    if config_path.exists():
-        data = load_yaml(config_path)
-        if isinstance(data, dict):
-            return data
+    for config_path in (
+        eval_dir / ".hydra" / "config.yaml",
+        eval_dir.parent / ".hydra" / "config.yaml",
+    ):
+        if config_path.exists():
+            data = load_yaml(config_path)
+            if isinstance(data, dict):
+                return data
     return {}
 
 

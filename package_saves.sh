@@ -20,7 +20,8 @@ Examples:
 
 Notes:
   --out_path is the clean directory path. The script also writes --out_path.zip.
-  --save_eval 1 keeps *_EVAL.json files. --save_eval 0 keeps only summaries.
+  --save_eval 1 keeps only endpoint benchmark eval JSON files under run_dir/evals/.
+  --save_eval 0 keeps only summaries plus the main Hydra config per run.
 EOF
 }
 
@@ -70,6 +71,9 @@ if [[ ! -d "${PATH_TO_SAVES}" ]]; then
   exit 1
 fi
 
+PATH_TO_SAVES="${PATH_TO_SAVES%/}"
+OUT_PATH="${OUT_PATH%/}"
+
 if ! command -v zip >/dev/null 2>&1; then
   echo "Error: 'zip' command is required but not found." >&2
   exit 1
@@ -78,7 +82,8 @@ fi
 src_dir="$(realpath "${PATH_TO_SAVES}")"
 out_parent="$(dirname "${OUT_PATH}")"
 mkdir -p "${out_parent}"
-clean_dir="$(realpath -m "${OUT_PATH}")"
+out_parent="$(cd "${out_parent}" && pwd -P)"
+clean_dir="${out_parent}/$(basename "${OUT_PATH}")"
 zip_path="${clean_dir}.zip"
 
 echo "[package_saves] src_dir=${src_dir}"
@@ -92,29 +97,69 @@ mkdir -p "${clean_dir}"
 copied_files=0
 skipped_files=0
 
-should_keep_file() {
+should_keep_endpoint_eval_file() {
   local rel_path="$1"
   local base_name=""
   local dir_name=""
+  local parent_name=""
 
   base_name="$(basename "${rel_path}")"
   dir_name="$(dirname "${rel_path}")"
+  parent_name="$(basename "${dir_name}")"
+
+  if [[ "${parent_name}" != "evals" ]]; then
+    return 1
+  fi
+
+  if [[ "${base_name}" != *_EVAL.json ]]; then
+    return 1
+  fi
+
+  # Keep the main benchmark eval only, not cosine sidecars.
+  if [[ "${base_name}" == "COS_SIM_EVAL.json" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+should_keep_main_hydra_config() {
+  local rel_path="$1"
+
+  if [[ "${rel_path}" != */.hydra/config.yaml ]]; then
+    return 1
+  fi
+
+  case "${rel_path}" in
+    */evals/.hydra/config.yaml|*/checkpoint_evals/*/.hydra/config.yaml|*/checkpoint_evals_utility/*/.hydra/config.yaml|*/checkpoint_evals_merged/*/.hydra/config.yaml)
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+should_keep_file() {
+  local rel_path="$1"
+  local base_name=""
+
+  base_name="$(basename "${rel_path}")"
 
   if [[ "${base_name}" == *_SUMMARY.json ]]; then
     return 0
   fi
 
-  if [[ "${SAVE_EVAL}" == "1" && "${base_name}" == *_EVAL.json ]]; then
+  if [[ "${SAVE_EVAL}" == "1" ]] && should_keep_endpoint_eval_file "${rel_path}"; then
     return 0
   fi
 
-  # Keep summary tables and merged trajectory summaries from checkpoint + utility evals.
-  if [[ "${base_name}" == "summary.tsv" || "${base_name}" == "trajectory_metrics.json" ]]; then
+  # Keep merged trajectory summaries from checkpoint + utility evals.
+  if [[ "${base_name}" == "trajectory_metrics.json" ]]; then
     return 0
   fi
 
-  # Keep Hydra configs for reproducibility.
-  if [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
+  # Keep only the run-level resolved Hydra config for reproducibility.
+  if should_keep_main_hydra_config "${rel_path}"; then
     return 0
   fi
 
