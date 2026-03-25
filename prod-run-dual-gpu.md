@@ -69,8 +69,9 @@ export LRS="${LRS:-5e-6 1e-5 5e-5 1e-4}"
 
 # trajectory behavior
 export NUM_EPOCHS=5
-export CHECKPOINT_EVERY_HALF_EPOCH=1
-export SAVE_TOTAL_LIMIT=12
+export CHECKPOINT_EVERY_HALF_EPOCH=0
+export CHECKPOINT_EPOCHS=2
+export SAVE_TOTAL_LIMIT=2
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1
 export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=1
 
@@ -85,13 +86,16 @@ export UTILITY_APPLY_CHAT_TEMPLATE=true
 
 All DUET and RWKU launchers now write task directories directly under
 `${OUTPUT_ROOT}` and skip rerunning finished jobs unless `FORCE_RERUN=1`.
+The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
+plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now includes `ada_pop` in its default
 `METHOD_VARIANTS`, so the campaign path covers DualCF plus GA / AdaPop / NPO /
 SimNPO / NPO-SAM / LoKU / SimpleCE without a separate wrapper edit. The
 standalone AdaPop launchers also accept `BETA_A` and `BETA_B` overrides for the
 dynamic popularity curve while keeping the same checkpoint / cleanup cadence as
-the other baselines.
+the other baselines. The wrapper also accepts an optional fourth positional
+argument for `SEED`; when set, runs get a matching `_seed<SEED>` suffix.
 
 ## Hardware profile
 
@@ -409,6 +413,10 @@ bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 all
 bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 all 2>&1 | sed -u "s/^/[gpu3 lr=1e-4 all] /"' &
 wait
 ```
+
+Omitting the fourth positional arg keeps the default `SEED=42`. For explicit
+multi-seed runs, call
+`bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE SEED`.
 
 This runs on each H100, in order:
 

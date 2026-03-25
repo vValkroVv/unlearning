@@ -77,13 +77,20 @@ elif [[ -d "${RUN_DIR}/base_model" ]]; then
   echo "[rwku][ckpt-eval] Found ${RUN_DIR}/base_model but it is missing config/weights; falling back to ${RESOLVED_BASE_MODEL_PATH}"
 fi
 
+if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+  rm -rf \
+    "${RUN_DIR}/checkpoint_evals" \
+    "${RUN_DIR}/checkpoint_evals_utility" \
+    "${RUN_DIR}/checkpoint_evals_merged"
+fi
+
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
-if has_loadable_weights "${RUN_DIR}"; then
-  CKPTS+=("${RUN_DIR}")
-elif [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
-  echo "[rwku][ckpt-eval] Skipping top-level run_dir re-eval because weights were cleaned after endpoint eval: ${RUN_DIR}"
+if [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
+  echo "[rwku][ckpt-eval] Reusing endpoint final summary from ${RUN_DIR}/evals"
+elif has_loadable_weights "${RUN_DIR}"; then
+  echo "[rwku][ckpt-eval] Endpoint summary missing at ${RUN_DIR}/evals/DUET_SUMMARY.json; final row will be omitted until endpoint eval runs."
 else
-  echo "[rwku][ckpt-eval] Skipping top-level run_dir because no loadable weights were found: ${RUN_DIR}"
+  echo "[rwku][ckpt-eval] No endpoint summary and no endpoint adapter weights found: ${RUN_DIR}"
 fi
 
 for ckpt in "${CKPTS[@]}"; do

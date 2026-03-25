@@ -24,7 +24,7 @@ from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
 from trainer.unlearn.loku import LoKU
 from trainer.unlearn.dual_cf import DualCF
-from trainer.callbacks import JsonlTraceCallback
+from trainer.callbacks import JsonlTraceCallback, SaveOnEpochsCallback
 
 
 import logging
@@ -89,6 +89,9 @@ def load_trainer(
     )
     if bool(trainer_cfg.get("trace_jsonl", False)):
         trainer.add_callback(JsonlTraceCallback())
+    save_on_epochs = trainer_cfg.get("save_on_epochs", None)
+    if save_on_epochs:
+        trainer.add_callback(SaveOnEpochsCallback(list(save_on_epochs)))
     logger.info(
         f"{trainer_handler_name} Trainer loaded, output_dir: {trainer_args.output_dir}"
     )

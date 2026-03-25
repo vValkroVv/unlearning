@@ -5,14 +5,14 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/dualcf/run_campaign_one_lr.sh GPU_ID LR [PHASE]
+  bash scripts/dualcf/run_campaign_one_lr.sh GPU_ID LR [PHASE] [SEED]
 
 Examples:
-  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_rare
-  bash scripts/dualcf/run_campaign_one_lr.sh 1 1e-5 duet_popular
-  bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 duet_merged
-  bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 rwku
-  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_split_first
+  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_rare 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 1 1e-5 duet_popular 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 duet_merged 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 rwku 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_split_first 43
 
 Phases:
   duet_rare         Run DUET rare only.
@@ -25,11 +25,12 @@ Phases:
 
 Defaults:
   PHASE defaults to duet_rare.
+  SEED defaults to TRAIN_SEED or 42.
   The script expects artifacts to already exist under ARTIFACT_ROOT.
 EOF
 }
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
+if [[ $# -lt 2 || $# -gt 4 ]]; then
   usage >&2
   exit 1
 fi
@@ -37,6 +38,7 @@ fi
 GPU_ID=$1
 LR=$2
 PHASE=${3:-${PHASE:-duet_rare}}
+TRAIN_SEED=${4:-${TRAIN_SEED:-42}}
 
 script_dir=$(dirname "$(realpath "$0")")
 repo_root=$(realpath "${script_dir}/../..")
@@ -203,7 +205,13 @@ export UTILITY_ROOT="${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utilit
 export BASELINE_CACHE_ROOT="${BASELINE_CACHE_ROOT:-/data/home/vkropoti/unlearning/saves/eval/utility_baselines}"
 export LOKU_IMPORTANCE_TMP_DIR="${LOKU_IMPORTANCE_TMP_DIR:-/data/home/vkropoti/unlearning/importance_tmp}"
 export LOKU_FILA_BASE_TMP_DIR="${LOKU_FILA_BASE_TMP_DIR:-/data/home/vkropoti/unlearning/fila_base_tmp}"
-export LOKU_RUN_TAG="${LOKU_RUN_TAG:-gpu${GPU_ID}_lr${LR}_phase_${PHASE}}"
+export TRAIN_SEED
+export DATA_SEED="${DATA_SEED:-${TRAIN_SEED}}"
+export PYTHONHASHSEED="${PYTHONHASHSEED:-${TRAIN_SEED}}"
+export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
+export FULL_DETERMINISM="${FULL_DETERMINISM:-0}"
+export RUN_TAG_EXTRA="${RUN_TAG_EXTRA:-seed${TRAIN_SEED}}"
+export LOKU_RUN_TAG="${LOKU_RUN_TAG:-gpu${GPU_ID}_lr${LR}_phase_${PHASE}_${RUN_TAG_EXTRA}}"
 mkdir -p "${HF_HOME}" "${HF_DATASETS_CACHE}" "${TRITON_CACHE_DIR}" \
   "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}" "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}" \
   "${LOKU_IMPORTANCE_TMP_DIR}" "${LOKU_FILA_BASE_TMP_DIR}"
@@ -242,8 +250,9 @@ export RISK_FORGET_SCALES="${RISK_FORGET_SCALES:-0.5}"
 
 export LRS="${LR}"
 export NUM_EPOCHS="${NUM_EPOCHS:-5}"
-export CHECKPOINT_EVERY_HALF_EPOCH="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
-export SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-12}"
+export CHECKPOINT_EVERY_HALF_EPOCH="${CHECKPOINT_EVERY_HALF_EPOCH:-0}"
+export CHECKPOINT_EPOCHS="${CHECKPOINT_EPOCHS:-2}"
+export SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-1}"
 export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL="${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL:-1}"
 export RUN_CHECKPOINT_EVAL="${RUN_CHECKPOINT_EVAL:-1}"
@@ -265,6 +274,8 @@ METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce ga ada_pop 
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
+echo "[dualcf][campaign] seed=${TRAIN_SEED} data_seed=${DATA_SEED}"
+echo "[dualcf][campaign] full_determinism=${FULL_DETERMINISM}"
 echo "[dualcf][campaign] method_variants=${METHOD_VARIANTS}"
 echo "[dualcf][campaign] duet_local_sft_base=${DUET_LOCAL_SFT_BASE}"
 

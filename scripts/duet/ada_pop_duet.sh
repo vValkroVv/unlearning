@@ -63,6 +63,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -139,6 +149,9 @@ for split in "${forget_retain_splits[@]}"; do
                             for lora_dropout in "${lora_dropouts[@]}"; do
                                 dropout_tag=${lora_dropout//./p}
                                 task_name=duet_${base_model}_${forget_label}_ada_pop_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_${atag}_${btag}${beta_a_tag}${beta_b_tag}_gamma${gamma_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -154,7 +167,14 @@ for split in "${forget_retain_splits[@]}"; do
                                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
                                     extra_schedule_args=()
-                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(
+                                            ++trainer.args.save_strategy=no
+                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                            ++trainer.args.save_safetensors=true
+                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                        )
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                         num_rows=$(resolve_num_rows "${forget_split}")
                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -189,6 +209,8 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
+                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -204,6 +226,9 @@ for split in "${forget_retain_splits[@]}"; do
                                     )
                                     if [[ "${max_steps}" != "0" ]]; then
                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                        train_cmd+=(++trainer.args.full_determinism=true)
                                     fi
                                     python "${train_cmd[@]}"
                                 fi

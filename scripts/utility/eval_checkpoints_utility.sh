@@ -222,13 +222,10 @@ if has_loadable_weights "${RUN_DIR}"; then
     "0" \
     "${LORA_MODEL_SUBFOLDER_VALUE}" \
     "${LORA_TOKENIZER_SUBFOLDER}"
-elif [[ ${#CKPTS[@]} -gt 0 ]]; then
-  last_label=$(basename "${CKPTS[-1]}")
-  echo "[utility][ckpt-eval] Final adapter weights were removed; using ${last_label} as the endpoint proxy."
-  rm -rf "${summary_root}/final"
-  copy_tree_contents "${summary_root}/${last_label}" "${summary_root}/final"
+elif [[ -f "${summary_root}/final/LMEval_SUMMARY.json" ]]; then
+  echo "[utility][ckpt-eval] Reusing existing final utility results from ${summary_root}/final"
 else
-  echo "[utility][ckpt-eval] Skipping final utility eval because no top-level weights were found in ${RUN_DIR}."
+  echo "[utility][ckpt-eval] Skipping final utility eval because no top-level weights or cached final utility summary were found in ${RUN_DIR}."
 fi
 
 python src/tools/summarize_utility_metrics.py \

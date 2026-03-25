@@ -1954,3 +1954,113 @@ python src/tools/build_results_combine_tables.py \
   --output-simplece-file results-combine/simplece_tables.txt \
   --output-simplece-slides-tex results-combine/simplece_tables_slides.tex
 ```
+
+## 2026-03-25 Explicit Epoch-2 Checkpoints, Resume Safety, and Seed Plumbing
+
+Files:
+
+- `src/trainer/__init__.py`
+- `src/trainer/callbacks/__init__.py`
+- `src/trainer/callbacks/save_on_epochs.py`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/duet/ga_duet.sh`
+- `scripts/duet/npo_duet.sh`
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/simnpo_duet.sh`
+- `scripts/duet/simple_ce_duet.sh`
+- `scripts/duet/ada_pop_duet.sh`
+- `scripts/duet/loku_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/rwku/ga_rwku.sh`
+- `scripts/rwku/npo_rwku.sh`
+- `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/simnpo_rwku.sh`
+- `scripts/rwku/simple_ce_rwku.sh`
+- `scripts/rwku/ada_pop_rwku.sh`
+- `scripts/rwku/loku_rwku.sh`
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/rwku/eval_checkpoints_rwku.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- replaced launcher-driven half-epoch checkpoint saving with an explicit
+  epoch-targeted save path:
+  - the wrapper now defaults to:
+    - `NUM_EPOCHS=5`
+    - `CHECKPOINT_EVERY_HALF_EPOCH=0`
+    - `CHECKPOINT_EPOCHS=2`
+    - `SAVE_TOTAL_LIMIT=2`
+  - intermediate saves are now driven by `trainer.save_on_epochs=[2]`
+  - the epoch-5 endpoint remains the normal top-level `trainer.save_model(...)`
+    output instead of a duplicate `checkpoint-*`
+- added `SaveOnEpochsCallback` and wired it in `load_trainer(...)` alongside
+  the existing trace callback registration
+- hardened the callback for resume safety:
+  - when Trainer state already shows resumed progress, it reconstructs completed
+    targets from existing `checkpoint-*/trainer_state.json`
+  - fresh reruns into the same `run_dir` do not infer completion from stale
+    checkpoints, so `FORCE_RERUN=1` still produces a new epoch-2 save
+- updated every DUET / RWKU launcher used by
+  `scripts/dualcf/run_campaign_one_lr.sh` so they now:
+  - prefer `CHECKPOINT_EPOCHS` over half-epoch `save_steps` math
+  - pass `++trainer.args.seed=${TRAIN_SEED}` and
+    `++trainer.args.data_seed=${DATA_SEED}`
+  - append `RUN_TAG_EXTRA=seed<SEED>` to `task_name`
+  - accept optional `FULL_DETERMINISM=1`, which injects
+    `++trainer.args.full_determinism=true`
+- extended the campaign wrapper so it now:
+  - accepts `[SEED]` as a fourth positional argument
+  - exports `TRAIN_SEED`, `DATA_SEED`, `PYTHONHASHSEED`,
+    `CUBLAS_WORKSPACE_CONFIG`, and `FULL_DETERMINISM`
+  - includes the seed tag in LoKU tmp artifact naming as well
+- checkpoint / utility sweeps now stop re-evaluating the top-level final
+  adapter:
+  - final forget / holdout metrics are reused from `run_dir/evals`
+  - utility sweeps still evaluate:
+    - `base_model_orig`
+    - every surviving `checkpoint-*`
+    - `final`
+  - if top-level final weights were already cleaned, utility sweeps reuse an
+    existing `checkpoint_evals_utility/final` result when present instead of
+    pretending the last checkpoint is the final model
+- added stale-cache cleanup for forced reruns:
+  - `eval_checkpoints_duet.sh` and `eval_checkpoints_rwku.sh` now remove:
+    - `checkpoint_evals/`
+    - `checkpoint_evals_utility/`
+    - `checkpoint_evals_merged/`
+    when `FORCE_RERUN=1`, so cached `final` utility rows cannot leak into fresh
+    runs
+- LoKU cleanup guards now treat either half-epoch mode or explicit
+  `CHECKPOINT_EPOCHS` as a checkpoint-eval workflow, so FILA artifacts are not
+  removed too early
+
+Validation:
+
+- completed locally:
+  - `python -m compileall src/trainer src/tools/checkpoint_summary_utils.py src/tools/summarize_checkpoint_metrics.py src/tools/merge_checkpoint_utility_summaries.py`
+  - `bash -n` on the wrapper, all touched DUET / RWKU launchers, both
+    checkpoint eval scripts, and `scripts/utility/eval_checkpoints_utility.sh`
+  - direct callback logic smoke via a file-level import of
+    `src/trainer/callbacks/save_on_epochs.py`
+    - `1.99 -> False`
+    - `2.0 -> True`
+    - `4.999 -> False`
+    - `5.0 -> False`
+  - rerun-vs-resume callback smoke with an existing
+    `checkpoint-*/trainer_state.json`
+    - `fresh_rerun_at2 -> True`
+    - `resume_at2 -> False`
+- not completed in this turn:
+  - end-to-end DUET or RWKU train / eval smoke
+  - multi-seed campaign rerun on real artifacts
+
+Remaining caveat:
+
+- `check_saves.py` was not made seed-aware here. If multiple seeds are written
+  into the same parent saves tree, the checker can still treat them as
+  duplicates or extras. The lowest-risk workaround is one campaign root per
+  seed.

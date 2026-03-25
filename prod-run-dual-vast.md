@@ -6,7 +6,7 @@ This runbook is for the DualCF v2 iteration:
 - percentile-calibrate routing offline
 - use hybrid retain attribution
 - run DUET `rare -> popular -> merged`
-- save / evaluate half-epoch checkpoints
+- save / evaluate an explicit epoch-2 checkpoint plus the final endpoint
 
 The validation profile below is the workspace-tested small-model setup:
 
@@ -70,8 +70,9 @@ export GRAD_ACCUM=${GRAD_ACCUM:-2}
 export NUM_EPOCHS=${NUM_EPOCHS:-1}
 export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-32}
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-1}
-export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-1}
-export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-12}
+export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-0}
+export CHECKPOINT_EPOCHS=${CHECKPOINT_EPOCHS:-2}
+export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-2}
 export UTILITY_ROOT=${UTILITY_ROOT:-${REPO_ROOT}/artifacts/evals/utility_1k_v1}
 export BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-${DATA_ROOT}/saves/eval/utility_baselines}
 export RUN_UTILITY_EVAL=${RUN_UTILITY_EVAL:-1}
@@ -132,9 +133,13 @@ For `LoKU`, importance files also move out of the repo and default to:
 
 Half-epoch note for the `NUM_EPOCHS=1` validation profile:
 
+Explicit checkpoint note for the `NUM_EPOCHS=1` validation profile:
+
 - keep `MAX_STEPS=0`
-- launchers compute `save_steps = ceil(steps_per_epoch / 2)`
-- expect one `checkpoint-*` around half an epoch plus the final run directory
+- keep `CHECKPOINT_EPOCHS=2`
+- expect only the final run directory at `NUM_EPOCHS=1`
+- when you switch back to `NUM_EPOCHS=5`, expect one intermediate
+  `checkpoint-*` around epoch 2 plus the final run directory
 
 ## Utility-1K panel
 
@@ -380,7 +385,8 @@ scripts/duet/run_dualcf_ablation_v2.sh
 
 Every method variant above uses the same trajectory-saving behavior:
 
-- half-epoch `checkpoint-*` saves when `CHECKPOINT_EVERY_HALF_EPOCH=1`
+- one intermediate `checkpoint-*` save when `CHECKPOINT_EPOCHS=2` and
+  `NUM_EPOCHS >= 2`
 - endpoint eval into `run_dir/evals`
 - training trace in `run_dir/dualcf_trace.jsonl`
 - top-level adapter safetensor cleanup after endpoint eval
@@ -471,8 +477,10 @@ Each script writes:
 If the top-level run directory was already cleaned by
 `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`, the checkpoint-eval scripts skip
 reloading that endpoint adapter and reuse the existing `run_dir/evals`
-summary instead. Utility evaluation will then use the highest surviving
-checkpoint as the endpoint proxy.
+summary instead. Utility evaluation will reuse an existing
+`checkpoint_evals_utility/final` result when present; otherwise the final
+utility row is skipped because the epoch-2 checkpoint is not treated as a
+final-model proxy.
 
 By default, the checkpoint-eval scripts also delete
 `checkpoint-*/adapter_model.safetensors` after successful trajectory eval.
