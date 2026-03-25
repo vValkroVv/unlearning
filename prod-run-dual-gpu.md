@@ -7,7 +7,7 @@ Scope:
 - `Llama-3.1-8B-Instruct` only
 - DualCF v2 ablations plus matched baselines
 - DUET `rare -> popular -> merged`
-- Utility-1K built once and evaluated automatically during each run
+- Utility-3K built once and evaluated automatically during each run
 - RWKU kept as phase 2 until DUET is stable
 - sequential end-to-end shell blocks for one box; no per-GPU sharding in this file yet
 
@@ -25,7 +25,8 @@ export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
 export ARTIFACT_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf
 export OUTPUT_ROOT=/data/home/vkropoti/unlearning/saves/unlearn
-export UTILITY_ROOT=/data/home/vkropoti/unlearning/evals/utility_1k_v1
+export UTILITY=${UTILITY:-3k}
+export UTILITY_ROOT=${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utility_3k_v1}
 export BASELINE_CACHE_ROOT=/data/home/vkropoti/unlearning/saves/eval/utility_baselines
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR" \
   "$ARTIFACT_ROOT" "$OUTPUT_ROOT" "$UTILITY_ROOT" "$BASELINE_CACHE_ROOT"
@@ -76,7 +77,7 @@ export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1
 export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=1
 
 # default production cadence:
-# train -> endpoint eval -> checkpoint eval -> Utility-1K -> cleanup -> next run
+# train -> endpoint eval -> checkpoint eval -> utility panel -> cleanup -> next run
 export RUN_CHECKPOINT_EVAL=1
 export RUN_UTILITY_EVAL=1
 export EVAL_RUN_BASE_MODEL=0
@@ -95,7 +96,8 @@ SimNPO / NPO-SAM / LoKU / SimpleCE without a separate wrapper edit. The
 standalone AdaPop launchers also accept `BETA_A` and `BETA_B` overrides for the
 dynamic popularity curve while keeping the same checkpoint / cleanup cadence as
 the other baselines. The wrapper also accepts an optional fourth positional
-argument for `SEED`; when set, runs get a matching `_seed<SEED>` suffix.
+argument for `SEED`; when set, runs get a matching `_seed<SEED>` suffix. It now
+defaults to `UTILITY=3k`; set `UTILITY=1k` to keep the old Utility-1K panel.
 
 ## Hardware profile
 
@@ -123,13 +125,30 @@ export ATTR_FORGET_MAX_STEPS=0
 # export ATTR_RETAIN_BATCH_SIZE=2
 ```
 
-## Utility-1K panel
+## Utility-3K panel
 
-Build the fixed general-knowledge panel once per machine and reuse it for every
-training run and checkpoint sweep.
+Build the default general-knowledge panel once per machine and reuse it for
+every training run and checkpoint sweep.
 
 ```bash
 mkdir -p "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
+
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
+  --mmlu-pro 1200 \
+  --truthfulqa-bin 600 \
+  --arc 600 \
+  --winogrande 600 \
+  --arc-split test
+```
+
+If you need the older panel for a matched rerun, switch both the selector and
+the root:
+
+```bash
+export UTILITY=1k
+export UTILITY_ROOT=/data/home/vkropoti/unlearning/evals/utility_1k_v1
 
 python src/tools/build_utility_1k_panel.py \
   --output-dir "${UTILITY_ROOT}" \
@@ -417,6 +436,8 @@ wait
 Omitting the fourth positional arg keeps the default `SEED=42`. For explicit
 multi-seed runs, call
 `bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE SEED`.
+The wrapper also supports serial multi-seed execution through
+`SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE`.
 
 This runs on each H100, in order:
 
@@ -431,6 +452,12 @@ four commands.
 ## Additional SimpleCE Runs
 
 Also ran these standalone `simple_ce` campaigns:
+
+Default launcher tuple for these runs is now:
+
+- `CF_WEIGHTS=0.5`
+- `RETAIN_WEIGHTS=1`
+- `GAMMAS=0`
 
 ```bash
 METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
@@ -492,4 +519,18 @@ bash package_saves.sh \
   --path_to_saves "${OUTPUT_ROOT%/unlearn}" \
   --out_path /home/vkropoti/diploma/open-unlearning/saves-clean \
   --save_eval 0
+```
+
+## Multi-seed Example
+
+Run the same campaign serially for multiple seeds:
+
+```bash
+SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+```
+
+If you want only the full DualCF variant for each seed:
+
+```bash
+SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
 ```

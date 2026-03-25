@@ -1,0 +1,6 @@
+group: utility_3k
+task:
+  - utility_mmlu_pro_1200
+  - utility_truthfulqa_bin_600
+  - utility_arc_600
+  - utility_winogrande_600

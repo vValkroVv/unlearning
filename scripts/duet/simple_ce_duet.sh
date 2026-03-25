@@ -116,15 +116,15 @@ raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"; raw_lrs="${raw_lrs//\"/}"; raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_retain_weights="${RETAIN_WEIGHTS:-${ALPHAS:-1.0}}"
+raw_retain_weights="${RETAIN_WEIGHTS:-${ALPHAS:-1}}"
 raw_retain_weights="${raw_retain_weights//,/ }"; raw_retain_weights="${raw_retain_weights//\"/}"; raw_retain_weights="${raw_retain_weights//\'/}"
 read -r -a retain_weights <<< "${raw_retain_weights}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-0}"
 raw_gammas="${raw_gammas//,/ }"; raw_gammas="${raw_gammas//\"/}"; raw_gammas="${raw_gammas//\'/}"
 read -r -a gammas <<< "${raw_gammas}"
 
-raw_cf_weights="${CF_WEIGHTS:-1.0}"
+raw_cf_weights="${CF_WEIGHTS:-0.5}"
 raw_cf_weights="${raw_cf_weights//,/ }"; raw_cf_weights="${raw_cf_weights//\"/}"; raw_cf_weights="${raw_cf_weights//\'/}"
 read -r -a cf_weights <<< "${raw_cf_weights}"
 

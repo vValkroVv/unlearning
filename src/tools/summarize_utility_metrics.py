@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize Utility-1K checkpoint evaluation metrics."""
+"""Summarize checkpoint utility evaluation metrics."""
 
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ from pathlib import Path
 from checkpoint_summary_utils import collect_eval_summaries
 
 
-TASK_KEY_MAP = {
-    "utility_mmlu_pro_400": "mmlu_pro_400_acc",
-    "utility_truthfulqa_bin_200": "truthfulqa_bin_200_acc",
-    "utility_arc_200": "arc_200_acc",
-    "utility_winogrande_200": "winogrande_200_acc",
+BENCHMARK_ORDER = {
+    "mmlu_pro": 0,
+    "truthfulqa_bin": 1,
+    "arc": 2,
+    "winogrande": 3,
 }
+UTILITY_TASK_RE = re.compile(r"^(utility_(mmlu_pro|truthfulqa_bin|arc|winogrande)_\d+)/acc$")
 TASK_COUNT_RE = re.compile(r"_(\d+)$")
 
 
@@ -43,11 +44,32 @@ def parse_metric(summary: dict[str, object], task_name: str) -> float | None:
     return float(value)
 
 
+def discover_task_specs(summary: dict[str, object]) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+    for metric_name in summary:
+        match = UTILITY_TASK_RE.fullmatch(metric_name)
+        if match is None:
+            continue
+
+        task_name = match.group(1)
+        specs.append(
+            {
+                "task_name": task_name,
+                "benchmark": match.group(2),
+                "column_name": f"{task_name.removeprefix('utility_')}_acc",
+            }
+        )
+
+    specs.sort(key=lambda spec: (BENCHMARK_ORDER[spec["benchmark"]], spec["task_name"]))
+    return specs
+
+
 def main() -> None:
     args = parse_args()
     run_dir = Path(args.run_dir)
     rows = []
     base_utility: float | None = None
+    discovered_task_specs: dict[str, dict[str, str]] = {}
 
     for row in collect_eval_summaries(
         run_dir=run_dir,
@@ -57,6 +79,10 @@ def main() -> None:
         with Path(row["summary_path"]).open("r", encoding="utf-8") as handle:
             metrics = json.load(handle)
 
+        row_task_specs = discover_task_specs(metrics)
+        for spec in row_task_specs:
+            discovered_task_specs.setdefault(spec["task_name"], spec)
+
         output_row = {
             "label": row["label"],
             "step": row["step"],
@@ -65,12 +91,12 @@ def main() -> None:
         weighted_sum = 0.0
         total_weight = 0
 
-        for task_name, column_name in TASK_KEY_MAP.items():
-            metric_value = parse_metric(metrics, task_name)
-            output_row[column_name] = metric_value
+        for spec in row_task_specs:
+            metric_value = parse_metric(metrics, spec["task_name"])
+            output_row[spec["column_name"]] = metric_value
             if metric_value is None:
                 continue
-            weight = task_weight(task_name)
+            weight = task_weight(spec["task_name"])
             weighted_sum += metric_value * weight
             total_weight += weight
 
@@ -89,14 +115,15 @@ def main() -> None:
 
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered_task_specs = sorted(
+        discovered_task_specs.values(),
+        key=lambda spec: (BENCHMARK_ORDER[spec["benchmark"]], spec["task_name"]),
+    )
     fieldnames = [
         "label",
         "step",
         "epoch",
-        "mmlu_pro_400_acc",
-        "truthfulqa_bin_200_acc",
-        "arc_200_acc",
-        "winogrande_200_acc",
+        *[spec["column_name"] for spec in ordered_task_specs],
         "utility_avg",
         "utility_delta_vs_base",
     ]

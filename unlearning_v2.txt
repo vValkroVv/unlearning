@@ -70,6 +70,7 @@ Directory Structure:
 │       └── community/methods/WGA
 │           ├── community/methods/WGA/README.md
 │           └── community/methods/WGA/run.sh
+├── compare_saves_clean_sizes.sh
 │   │   ├── configs/accelerate/default_config.yaml
 │   ├── configs/collator
 │   │   ├── configs/collator/DataCollatorForSupervisedDataset.yaml
@@ -79,6 +80,7 @@ Directory Structure:
 │   │   │   └── configs/eval/duet_metrics/holdout_qa_rouge.yaml
 │   │   ├── configs/eval/duet.yaml
 │   │   ├── configs/eval/lm_eval_utility_1k.yaml
+│   │   ├── configs/eval/lm_eval_utility_3k.yaml
 │   │   ├── configs/eval/lm_eval.yaml
 │   │   ├── configs/eval/muse_metrics
 │   │   │   ├── configs/eval/muse_metrics/exact_memorization.yaml
@@ -152,6 +154,8 @@ Directory Structure:
 │   │   │   │   └── configs/experiment/eval/tofu/default.yaml
 │   │   │   ├── configs/experiment/eval/utility_1k
 │   │   │   │   └── configs/experiment/eval/utility_1k/default.yaml
+│   │   │   ├── configs/experiment/eval/utility_3k
+│   │   │   │   └── configs/experiment/eval/utility_3k/default.yaml
 │   │   │   └── configs/experiment/eval/wmdp
 │   │   │       └── configs/experiment/eval/wmdp/default.yaml
 │   │   ├── configs/experiment/examples
@@ -219,13 +223,21 @@ Directory Structure:
 │   │   ├── configs/hydra/default.yaml
 │   │   └── configs/hydra/eval.yaml
 │   ├── configs/lm_eval_tasks
-│   │       ├── configs/lm_eval_tasks/utility_1k/_base_mc.yaml
-│   │       ├── configs/lm_eval_tasks/utility_1k/_utility_1k.yaml
-│   │       ├── configs/lm_eval_tasks/utility_1k/utility_arc_200.yaml
-│   │       ├── configs/lm_eval_tasks/utility_1k/utility_mmlu_pro_400.yaml
-│   │       ├── configs/lm_eval_tasks/utility_1k/utility_truthfulqa_bin_200.yaml
-│   │       ├── configs/lm_eval_tasks/utility_1k/utility_winogrande_200.yaml
-│   │       └── configs/lm_eval_tasks/utility_1k/utils.py
+│   │   │   ├── configs/lm_eval_tasks/utility_1k/_base_mc.yaml
+│   │   │   ├── configs/lm_eval_tasks/utility_1k/_utility_1k.yaml
+│   │   │   ├── configs/lm_eval_tasks/utility_1k/utility_arc_200.yaml
+│   │   │   ├── configs/lm_eval_tasks/utility_1k/utility_mmlu_pro_400.yaml
+│   │   │   ├── configs/lm_eval_tasks/utility_1k/utility_truthfulqa_bin_200.yaml
+│   │   │   ├── configs/lm_eval_tasks/utility_1k/utility_winogrande_200.yaml
+│   │   │   └── configs/lm_eval_tasks/utility_1k/utils.py
+│   │   └── configs/lm_eval_tasks/utility_3k
+│   │       ├── configs/lm_eval_tasks/utility_3k/_base_mc.yaml
+│   │       ├── configs/lm_eval_tasks/utility_3k/_utility_3k.yaml
+│   │       ├── configs/lm_eval_tasks/utility_3k/utility_arc_600.yaml
+│   │       ├── configs/lm_eval_tasks/utility_3k/utility_mmlu_pro_1200.yaml
+│   │       ├── configs/lm_eval_tasks/utility_3k/utility_truthfulqa_bin_600.yaml
+│   │       ├── configs/lm_eval_tasks/utility_3k/utility_winogrande_600.yaml
+│   │       └── configs/lm_eval_tasks/utility_3k/utils.py
 │   ├── configs/model
 │   │   ├── configs/model/gemma-7b-it-lora.yaml
 │   │   ├── configs/model/gemma-7b-it.yaml
@@ -440,7 +452,8 @@ Directory Structure:
 │       ├── src/trainer/base.py
 │       ├── src/trainer/callbacks
 │       │   ├── src/trainer/callbacks/__init__.py
-│       │   └── src/trainer/callbacks/jsonl_trace.py
+│       │   ├── src/trainer/callbacks/jsonl_trace.py
+│       │   └── src/trainer/callbacks/save_on_epochs.py
 │       ├── src/trainer/unlearn
 │       │   ├── src/trainer/unlearn/ada_pop.py
 │       │   ├── src/trainer/unlearn/ada_wgd.py
@@ -1506,7 +1519,8 @@ Examples:
 
 Notes:
   --out_path is the clean directory path. The script also writes --out_path.zip.
-  --save_eval 1 keeps *_EVAL.json files. --save_eval 0 keeps only summaries.
+  --save_eval 1 keeps only endpoint benchmark eval JSON files under run_dir/evals/.
+  --save_eval 0 keeps only summaries plus the main Hydra config per run.
 EOF
 }
 
@@ -1556,6 +1570,9 @@ if [[ ! -d "${PATH_TO_SAVES}" ]]; then
   exit 1
 fi
 
+PATH_TO_SAVES="${PATH_TO_SAVES%/}"
+OUT_PATH="${OUT_PATH%/}"
+
 if ! command -v zip >/dev/null 2>&1; then
   echo "Error: 'zip' command is required but not found." >&2
   exit 1
@@ -1564,7 +1581,8 @@ fi
 src_dir="$(realpath "${PATH_TO_SAVES}")"
 out_parent="$(dirname "${OUT_PATH}")"
 mkdir -p "${out_parent}"
-clean_dir="$(realpath -m "${OUT_PATH}")"
+out_parent="$(cd "${out_parent}" && pwd -P)"
+clean_dir="${out_parent}/$(basename "${OUT_PATH}")"
 zip_path="${clean_dir}.zip"
 
 echo "[package_saves] src_dir=${src_dir}"
@@ -1578,29 +1596,69 @@ mkdir -p "${clean_dir}"
 copied_files=0
 skipped_files=0
 
-should_keep_file() {
+should_keep_endpoint_eval_file() {
   local rel_path="$1"
   local base_name=""
   local dir_name=""
+  local parent_name=""
 
   base_name="$(basename "${rel_path}")"
   dir_name="$(dirname "${rel_path}")"
+  parent_name="$(basename "${dir_name}")"
+
+  if [[ "${parent_name}" != "evals" ]]; then
+    return 1
+  fi
+
+  if [[ "${base_name}" != *_EVAL.json ]]; then
+    return 1
+  fi
+
+  # Keep the main benchmark eval only, not cosine sidecars.
+  if [[ "${base_name}" == "COS_SIM_EVAL.json" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+should_keep_main_hydra_config() {
+  local rel_path="$1"
+
+  if [[ "${rel_path}" != */.hydra/config.yaml ]]; then
+    return 1
+  fi
+
+  case "${rel_path}" in
+    */evals/.hydra/config.yaml|*/checkpoint_evals/*/.hydra/config.yaml|*/checkpoint_evals_utility/*/.hydra/config.yaml|*/checkpoint_evals_merged/*/.hydra/config.yaml)
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+should_keep_file() {
+  local rel_path="$1"
+  local base_name=""
+
+  base_name="$(basename "${rel_path}")"
 
   if [[ "${base_name}" == *_SUMMARY.json ]]; then
     return 0
   fi
 
-  if [[ "${SAVE_EVAL}" == "1" && "${base_name}" == *_EVAL.json ]]; then
+  if [[ "${SAVE_EVAL}" == "1" ]] && should_keep_endpoint_eval_file "${rel_path}"; then
     return 0
   fi
 
-  # Keep summary tables and merged trajectory summaries from checkpoint + utility evals.
-  if [[ "${base_name}" == "summary.tsv" || "${base_name}" == "trajectory_metrics.json" ]]; then
+  # Keep merged trajectory summaries from checkpoint + utility evals.
+  if [[ "${base_name}" == "trajectory_metrics.json" ]]; then
     return 0
   fi
 
-  # Keep Hydra configs for reproducibility.
-  if [[ "${dir_name}" == */.hydra ]] && [[ "${base_name}" == *.yaml || "${base_name}" == *.yml ]]; then
+  # Keep only the run-level resolved Hydra config for reproducibility.
+  if should_keep_main_hydra_config "${rel_path}"; then
     return 0
   fi
 
@@ -5630,7 +5688,7 @@ This runbook is for the DualCF v2 iteration:
 - percentile-calibrate routing offline
 - use hybrid retain attribution
 - run DUET `rare -> popular -> merged`
-- save / evaluate half-epoch checkpoints
+- save / evaluate an explicit epoch-2 checkpoint plus the final endpoint
 
 The validation profile below is the workspace-tested small-model setup:
 
@@ -5694,9 +5752,11 @@ export GRAD_ACCUM=${GRAD_ACCUM:-2}
 export NUM_EPOCHS=${NUM_EPOCHS:-1}
 export EVAL_BATCH_SIZE=${EVAL_BATCH_SIZE:-32}
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-1}
-export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-1}
-export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-12}
-export UTILITY_ROOT=${UTILITY_ROOT:-${REPO_ROOT}/artifacts/evals/utility_1k_v1}
+export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-0}
+export CHECKPOINT_EPOCHS=${CHECKPOINT_EPOCHS:-2}
+export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-2}
+export UTILITY=${UTILITY:-3k}
+export UTILITY_ROOT=${UTILITY_ROOT:-${REPO_ROOT}/artifacts/evals/utility_3k_v1}
 export BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-${DATA_ROOT}/saves/eval/utility_baselines}
 export RUN_UTILITY_EVAL=${RUN_UTILITY_EVAL:-1}
 export EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
@@ -5744,7 +5804,7 @@ So the run directories land under:
 - `${OUTPUT_ROOT}/<task_name>`
 
 The direct AdaPop launchers now use the same train -> endpoint eval ->
-checkpoint eval -> Utility-1K -> cleanup flow as the other DUET / RWKU
+checkpoint eval -> utility panel -> cleanup flow as the other DUET / RWKU
 baselines. If you need to override the dynamic popularity curve shape, export
 `BETA_A` and `BETA_B` before launching `scripts/duet/ada_pop_duet.sh` or
 `scripts/rwku/ada_pop_rwku.sh`.
@@ -5756,13 +5816,17 @@ For `LoKU`, importance files also move out of the repo and default to:
 
 Half-epoch note for the `NUM_EPOCHS=1` validation profile:
 
+Explicit checkpoint note for the `NUM_EPOCHS=1` validation profile:
+
 - keep `MAX_STEPS=0`
-- launchers compute `save_steps = ceil(steps_per_epoch / 2)`
-- expect one `checkpoint-*` around half an epoch plus the final run directory
+- keep `CHECKPOINT_EPOCHS=2`
+- expect only the final run directory at `NUM_EPOCHS=1`
+- when you switch back to `NUM_EPOCHS=5`, expect one intermediate
+  `checkpoint-*` around epoch 2 plus the final run directory
 
-## Utility-1K panel
+## Utility-3K panel
 
-Build the fixed general-knowledge panel once per machine and reuse it for every
+Build the default general-knowledge panel once per machine and reuse it for every
 method, seed, and checkpoint run.
 
 ```bash
@@ -5771,10 +5835,11 @@ mkdir -p "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
 python src/tools/build_utility_1k_panel.py \
   --output-dir "${UTILITY_ROOT}" \
   --seed 1337 \
-  --mmlu-pro 400 \
-  --truthfulqa-bin 200 \
-  --arc 200 \
-  --winogrande 200
+  --mmlu-pro 1200 \
+  --truthfulqa-bin 600 \
+  --arc 600 \
+  --winogrande 600 \
+  --arc-split test
 ```
 
 If you already have a forget-target alias file, rebuild the panel with:
@@ -5783,11 +5848,27 @@ If you already have a forget-target alias file, rebuild the panel with:
 python src/tools/build_utility_1k_panel.py \
   --output-dir "${UTILITY_ROOT}" \
   --seed 1337 \
+  --mmlu-pro 1200 \
+  --truthfulqa-bin 600 \
+  --arc 600 \
+  --winogrande 600 \
+  --arc-split test \
+  --exclude-targets-file /data/home/vkropoti/unlearning/evals/forget_target_aliases.txt
+```
+
+For matched legacy reruns, switch back explicitly:
+
+```bash
+export UTILITY=1k
+export UTILITY_ROOT=${REPO_ROOT}/artifacts/evals/utility_1k_v1
+
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
   --mmlu-pro 400 \
   --truthfulqa-bin 200 \
   --arc 200 \
-  --winogrande 200 \
-  --exclude-targets-file /data/home/vkropoti/unlearning/evals/forget_target_aliases.txt
+  --winogrande 200
 ```
 
 ## vLLM generator
@@ -6004,11 +6085,12 @@ scripts/duet/run_dualcf_ablation_v2.sh
 
 Every method variant above uses the same trajectory-saving behavior:
 
-- half-epoch `checkpoint-*` saves when `CHECKPOINT_EVERY_HALF_EPOCH=1`
+- one intermediate `checkpoint-*` save when `CHECKPOINT_EPOCHS=2` and
+  `NUM_EPOCHS >= 2`
 - endpoint eval into `run_dir/evals`
 - training trace in `run_dir/dualcf_trace.jsonl`
 - top-level adapter safetensor cleanup after endpoint eval
-- the same post-hoc checkpoint evaluator for forget/locality plus Utility-1K
+- the same post-hoc checkpoint evaluator for forget/locality plus the selected utility panel
   when `RUN_UTILITY_EVAL=1`
 
 ## RWKU training
@@ -6087,7 +6169,7 @@ Each script writes:
 
 - per-checkpoint eval folders under `checkpoint_evals/`
 - `checkpoint_evals/summary.tsv`
-- per-checkpoint Utility-1K eval folders under `checkpoint_evals_utility/`
+- per-checkpoint utility eval folders under `checkpoint_evals_utility/`
 - `checkpoint_evals_utility/summary.tsv`
 - `checkpoint_evals_merged/summary.tsv`
 - `checkpoint_evals_merged/trajectory_metrics.json`
@@ -6095,8 +6177,10 @@ Each script writes:
 If the top-level run directory was already cleaned by
 `DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1`, the checkpoint-eval scripts skip
 reloading that endpoint adapter and reuse the existing `run_dir/evals`
-summary instead. Utility evaluation will then use the highest surviving
-checkpoint as the endpoint proxy.
+summary instead. Utility evaluation will reuse an existing
+`checkpoint_evals_utility/final` result when present; otherwise the final
+utility row is skipped because the epoch-2 checkpoint is not treated as a
+final-model proxy.
 
 By default, the checkpoint-eval scripts also delete
 `checkpoint-*/adapter_model.safetensors` after successful trajectory eval.
@@ -12842,6 +12926,183 @@ setup(
 
 </content>
 
+<content full_path="compare_saves_clean_sizes.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bash compare_saves_clean_sizes.sh [--path_to_saves_clean PATH]
+
+Examples:
+  bash compare_saves_clean_sizes.sh
+
+  bash compare_saves_clean_sizes.sh \
+    --path_to_saves_clean /data/home/vkropoti/unlearning/zips_for_gpu/saves-clean
+
+Notes:
+  - Compares packaged `saves-clean` footprint across `.hydra/*`, `*.json`, and `*.tsv`.
+  - Reports any remaining files outside those buckets under `other`.
+EOF
+}
+
+PATH_TO_SAVES_CLEAN="./saves-clean"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --path_to_saves_clean)
+      PATH_TO_SAVES_CLEAN="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "${PATH_TO_SAVES_CLEAN}" ]]; then
+  echo "Error: --path_to_saves_clean must not be empty." >&2
+  exit 1
+fi
+
+if [[ ! -d "${PATH_TO_SAVES_CLEAN}" ]]; then
+  echo "Error: saves-clean path does not exist: ${PATH_TO_SAVES_CLEAN}" >&2
+  exit 1
+fi
+
+root_dir="$(cd "${PATH_TO_SAVES_CLEAN}" && pwd -P)"
+
+json_bytes=0
+json_files=0
+hydra_bytes=0
+hydra_files=0
+tsv_bytes=0
+tsv_files=0
+other_bytes=0
+other_files=0
+
+file_size_bytes() {
+  local file_path="$1"
+  wc -c < "${file_path}" | tr -d '[:space:]'
+}
+
+format_bytes() {
+  local total_bytes="$1"
+  awk -v total_bytes="${total_bytes}" '
+    BEGIN {
+      split("B KiB MiB GiB TiB PiB", units, " ")
+      size = total_bytes + 0
+      unit = 1
+      while (size >= 1024 && unit < 6) {
+        size /= 1024
+        unit += 1
+      }
+      if (unit == 1) {
+        printf "%d %s", size, units[unit]
+      } else {
+        printf "%.2f %s", size, units[unit]
+      }
+    }
+  '
+}
+
+while IFS= read -r -d '' file_path; do
+  rel_path="${file_path#${root_dir}/}"
+  size_bytes="$(file_size_bytes "${file_path}")"
+
+  # `.hydra` is a directory bucket; JSON and TSV stay extension-based.
+  if [[ "${rel_path}" == */.hydra/* ]]; then
+    hydra_bytes=$((hydra_bytes + size_bytes))
+    hydra_files=$((hydra_files + 1))
+    continue
+  fi
+
+  if [[ "${rel_path}" == *.json ]]; then
+    json_bytes=$((json_bytes + size_bytes))
+    json_files=$((json_files + 1))
+    continue
+  fi
+
+  if [[ "${rel_path}" == *.tsv ]]; then
+    tsv_bytes=$((tsv_bytes + size_bytes))
+    tsv_files=$((tsv_files + 1))
+    continue
+  fi
+
+  other_bytes=$((other_bytes + size_bytes))
+  other_files=$((other_files + 1))
+done < <(find "${root_dir}" -type f -print0)
+
+print_bucket() {
+  local label="$1"
+  local files="$2"
+  local bytes="$3"
+
+  printf '%-8s files=%-8s bytes=%-12s human=%s\n' \
+    "${label}" \
+    "${files}" \
+    "${bytes}" \
+    "$(format_bytes "${bytes}")"
+}
+
+echo "[compare_saves_clean_sizes] root_dir=${root_dir}"
+print_bucket ".hydra" "${hydra_files}" "${hydra_bytes}"
+print_bucket "json" "${json_files}" "${json_bytes}"
+print_bucket "tsv" "${tsv_files}" "${tsv_bytes}"
+print_bucket "other" "${other_files}" "${other_bytes}"
+
+largest_bucket=".hydra"
+largest_bytes="${hydra_bytes}"
+runner_up_bytes=-1
+has_tie=0
+
+for bucket_spec in "json:${json_bytes}" "tsv:${tsv_bytes}"; do
+  bucket_name="${bucket_spec%%:*}"
+  bucket_bytes="${bucket_spec#*:}"
+
+  if (( bucket_bytes > largest_bytes )); then
+    runner_up_bytes="${largest_bytes}"
+    largest_bucket="${bucket_name}"
+    largest_bytes="${bucket_bytes}"
+    has_tie=0
+    continue
+  fi
+
+  if (( bucket_bytes == largest_bytes )); then
+    has_tie=1
+    continue
+  fi
+
+  if (( bucket_bytes > runner_up_bytes )); then
+    runner_up_bytes="${bucket_bytes}"
+  fi
+done
+
+if (( hydra_bytes > runner_up_bytes && hydra_bytes < largest_bytes )); then
+  runner_up_bytes="${hydra_bytes}"
+fi
+
+if (( has_tie == 1 )); then
+  echo "[compare_saves_clean_sizes] larger_bucket=tie diff_bytes=0 diff_human=0 B"
+else
+  if (( runner_up_bytes < 0 )); then
+    runner_up_bytes=0
+  fi
+
+  diff_bytes=$((largest_bytes - runner_up_bytes))
+  echo "[compare_saves_clean_sizes] larger_bucket=${largest_bucket} diff_bytes=${diff_bytes} diff_human=$(format_bytes "${diff_bytes}")"
+fi
+
+</content>
+
 <content full_path="check_saves.py">
 #!/usr/bin/env python3
 """Check DualCF campaign saves created by run_campaign_one_lr.sh."""
@@ -13678,7 +13939,7 @@ Scope:
 - `Llama-3.1-8B-Instruct` only
 - DualCF v2 ablations plus matched baselines
 - DUET `rare -> popular -> merged`
-- Utility-1K built once and evaluated automatically during each run
+- Utility-3K built once and evaluated automatically during each run
 - RWKU kept as phase 2 until DUET is stable
 - sequential end-to-end shell blocks for one box; no per-GPU sharding in this file yet
 
@@ -13696,7 +13957,8 @@ export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
 export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
 export ARTIFACT_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf
 export OUTPUT_ROOT=/data/home/vkropoti/unlearning/saves/unlearn
-export UTILITY_ROOT=/data/home/vkropoti/unlearning/evals/utility_1k_v1
+export UTILITY=${UTILITY:-3k}
+export UTILITY_ROOT=${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utility_3k_v1}
 export BASELINE_CACHE_ROOT=/data/home/vkropoti/unlearning/saves/eval/utility_baselines
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR" \
   "$ARTIFACT_ROOT" "$OUTPUT_ROOT" "$UTILITY_ROOT" "$BASELINE_CACHE_ROOT"
@@ -13740,13 +14002,14 @@ export LRS="${LRS:-5e-6 1e-5 5e-5 1e-4}"
 
 # trajectory behavior
 export NUM_EPOCHS=5
-export CHECKPOINT_EVERY_HALF_EPOCH=1
-export SAVE_TOTAL_LIMIT=12
+export CHECKPOINT_EVERY_HALF_EPOCH=0
+export CHECKPOINT_EPOCHS=2
+export SAVE_TOTAL_LIMIT=2
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=1
 export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL=1
 
 # default production cadence:
-# train -> endpoint eval -> checkpoint eval -> Utility-1K -> cleanup -> next run
+# train -> endpoint eval -> checkpoint eval -> utility panel -> cleanup -> next run
 export RUN_CHECKPOINT_EVAL=1
 export RUN_UTILITY_EVAL=1
 export EVAL_RUN_BASE_MODEL=0
@@ -13756,13 +14019,17 @@ export UTILITY_APPLY_CHAT_TEMPLATE=true
 
 All DUET and RWKU launchers now write task directories directly under
 `${OUTPUT_ROOT}` and skip rerunning finished jobs unless `FORCE_RERUN=1`.
+The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
+plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now includes `ada_pop` in its default
 `METHOD_VARIANTS`, so the campaign path covers DualCF plus GA / AdaPop / NPO /
 SimNPO / NPO-SAM / LoKU / SimpleCE without a separate wrapper edit. The
 standalone AdaPop launchers also accept `BETA_A` and `BETA_B` overrides for the
 dynamic popularity curve while keeping the same checkpoint / cleanup cadence as
-the other baselines.
+the other baselines. The wrapper also accepts an optional fourth positional
+argument for `SEED`; when set, runs get a matching `_seed<SEED>` suffix. It now
+defaults to `UTILITY=3k`; set `UTILITY=1k` to keep the old Utility-1K panel.
 
 ## Hardware profile
 
@@ -13790,13 +14057,30 @@ export ATTR_FORGET_MAX_STEPS=0
 # export ATTR_RETAIN_BATCH_SIZE=2
 ```
 
-## Utility-1K panel
+## Utility-3K panel
 
-Build the fixed general-knowledge panel once per machine and reuse it for every
-training run and checkpoint sweep.
+Build the default general-knowledge panel once per machine and reuse it for
+every training run and checkpoint sweep.
 
 ```bash
 mkdir -p "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
+
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
+  --mmlu-pro 1200 \
+  --truthfulqa-bin 600 \
+  --arc 600 \
+  --winogrande 600 \
+  --arc-split test
+```
+
+If you need the older panel for a matched rerun, switch both the selector and
+the root:
+
+```bash
+export UTILITY=1k
+export UTILITY_ROOT=/data/home/vkropoti/unlearning/evals/utility_1k_v1
 
 python src/tools/build_utility_1k_panel.py \
   --output-dir "${UTILITY_ROOT}" \
@@ -14081,6 +14365,12 @@ bash -lc 'set -o pipefail; bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 all
 wait
 ```
 
+Omitting the fourth positional arg keeps the default `SEED=42`. For explicit
+multi-seed runs, call
+`bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE SEED`.
+The wrapper also supports serial multi-seed execution through
+`SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE`.
+
 This runs on each H100, in order:
 
 - `duet_rare`
@@ -14094,6 +14384,12 @@ four commands.
 ## Additional SimpleCE Runs
 
 Also ran these standalone `simple_ce` campaigns:
+
+Default launcher tuple for these runs is now:
+
+- `CF_WEIGHTS=0.5`
+- `RETAIN_WEIGHTS=1`
+- `GAMMAS=0`
 
 ```bash
 METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
@@ -14110,6 +14406,28 @@ METHOD_VARIANTS=simple_ce \
 CF_WEIGHTS="0.5 1 2" \
 RETAIN_WEIGHTS=1 \
 GAMMAS="0 1 2" \
+bash scripts/dualcf/run_campaign_one_lr.sh 4 1e-4 all
+```
+
+## Additional AdaPop Runs
+
+Also ran these standalone `ada_pop` campaigns:
+
+```bash
+METHOD_VARIANTS=ada_pop bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+
+METHOD_VARIANTS=ada_pop bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-5 all
+
+METHOD_VARIANTS=ada_pop \
+GAMMAS="1.0" \
+ALPHA_CONST="none 0.5 1.0" \
+BETA_CONST="none 0.5 1.0" \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 5e-5 all
+
+METHOD_VARIANTS=ada_pop \
+GAMMAS="1.0" \
+ALPHA_CONST="none 0.5 1.0" \
+BETA_CONST="none 0.5 1.0" \
 bash scripts/dualcf/run_campaign_one_lr.sh 4 1e-4 all
 ```
 
@@ -14133,6 +14451,20 @@ bash package_saves.sh \
   --path_to_saves "${OUTPUT_ROOT%/unlearn}" \
   --out_path /home/vkropoti/diploma/open-unlearning/saves-clean \
   --save_eval 0
+```
+
+## Multi-seed Example
+
+Run the same campaign serially for multiple seeds:
+
+```bash
+SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+```
+
+If you want only the full DualCF variant for each seed:
+
+```bash
+SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
 ```
 
 </content>
@@ -15922,13 +16254,56 @@ Updates:
   - `--save_eval 0|1`
 - `--save_eval 0` keeps only summary artifacts:
   - `*_SUMMARY.json`
-  - `summary.tsv`
   - `trajectory_metrics.json`
-  - `.hydra/*.yaml`
-- `--save_eval 1` additionally keeps `*_EVAL.json`
+  - top-level run `.hydra/config.yaml`
+- `--save_eval 1` additionally keeps only endpoint benchmark eval JSON files:
+  - `evals/*_EVAL.json`
+  - excluding cosine sidecars such as `COS_SIM_EVAL.json`
+- the packager no longer keeps:
+  - `summary.tsv`
+  - eval-sidecar `.hydra/*.yaml`
+  - checkpoint `*_EVAL.json`
 - the script writes both:
   - the cleaned output directory at `--out_path`
   - the zip archive at `--out_path.zip`
+
+## Structured saves now rebuild from packaged JSON summaries when TSVs are absent (2026-03-24)
+
+Changed files:
+
+- `src/tools/build_structured_saves.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+
+Updates:
+
+- `build_structured_saves.py` now falls back to packaged JSON summaries when
+  `checkpoint_evals_merged/summary.tsv` is absent
+- the fallback rebuilds merged checkpoint rows from:
+  - `checkpoint_evals/*/DUET_SUMMARY.json`
+  - `checkpoint_evals_utility/*/LMEval_SUMMARY.json`
+  - `checkpoint_evals_merged/trajectory_metrics.json` when present
+- the params export now tolerates missing `.hydra/overrides.yaml`
+- the sanity-check exporter now falls back from `evals/.hydra/config.yaml` to
+  the run-level `.hydra/config.yaml`, which matches the slimmer packaged-save
+  layout
+
+## Saves-clean footprint helper for `.hydra`, JSON, and TSV (2026-03-24)
+
+Changed files:
+
+- `compare_saves_clean_sizes.sh`
+
+Updates:
+
+- added a small shell helper for packaged `saves-clean` trees
+- it accepts `--path_to_saves_clean` and defaults to `./saves-clean`
+- it reports file counts plus total bytes for:
+  - `.hydra/*`
+  - `*.json`
+  - `*.tsv`
+  - `other` files outside those buckets
+- it prints which bucket is larger so packaged-save cleanup decisions can be
+  made from actual footprint instead of guesswork
 
 ## Structured post-run metric tables for packaged saves (2026-03-16)
 
@@ -16051,6 +16426,191 @@ python src/tools/build_results_combine_tables.py \
   --output-simplece-file results-combine/simplece_tables.txt \
   --output-simplece-slides-tex results-combine/simplece_tables_slides.tex
 ```
+
+## 2026-03-25 Explicit Epoch-2 Checkpoints, Resume Safety, and Seed Plumbing
+
+Files:
+
+- `src/trainer/__init__.py`
+- `src/trainer/callbacks/__init__.py`
+- `src/trainer/callbacks/save_on_epochs.py`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/duet/ga_duet.sh`
+- `scripts/duet/npo_duet.sh`
+- `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/simnpo_duet.sh`
+- `scripts/duet/simple_ce_duet.sh`
+- `scripts/duet/ada_pop_duet.sh`
+- `scripts/duet/loku_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/rwku/ga_rwku.sh`
+- `scripts/rwku/npo_rwku.sh`
+- `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/simnpo_rwku.sh`
+- `scripts/rwku/simple_ce_rwku.sh`
+- `scripts/rwku/ada_pop_rwku.sh`
+- `scripts/rwku/loku_rwku.sh`
+- `scripts/duet/eval_checkpoints_duet.sh`
+- `scripts/rwku/eval_checkpoints_rwku.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- replaced launcher-driven half-epoch checkpoint saving with an explicit
+  epoch-targeted save path:
+  - the wrapper now defaults to:
+    - `NUM_EPOCHS=5`
+    - `CHECKPOINT_EVERY_HALF_EPOCH=0`
+    - `CHECKPOINT_EPOCHS=2`
+    - `SAVE_TOTAL_LIMIT=2`
+  - intermediate saves are now driven by `trainer.save_on_epochs=[2]`
+  - the epoch-5 endpoint remains the normal top-level `trainer.save_model(...)`
+    output instead of a duplicate `checkpoint-*`
+- added `SaveOnEpochsCallback` and wired it in `load_trainer(...)` alongside
+  the existing trace callback registration
+- hardened the callback for resume safety:
+  - when Trainer state already shows resumed progress, it reconstructs completed
+    targets from existing `checkpoint-*/trainer_state.json`
+  - fresh reruns into the same `run_dir` do not infer completion from stale
+    checkpoints, so `FORCE_RERUN=1` still produces a new epoch-2 save
+- updated every DUET / RWKU launcher used by
+  `scripts/dualcf/run_campaign_one_lr.sh` so they now:
+  - prefer `CHECKPOINT_EPOCHS` over half-epoch `save_steps` math
+  - pass `++trainer.args.seed=${TRAIN_SEED}` and
+    `++trainer.args.data_seed=${DATA_SEED}`
+  - append `RUN_TAG_EXTRA=seed<SEED>` to `task_name`
+  - accept optional `FULL_DETERMINISM=1`, which injects
+    `++trainer.args.full_determinism=true`
+- `SimpleCE` launcher defaults are now aligned to the selected production tuple:
+  - `CF_WEIGHTS=0.5`
+  - `RETAIN_WEIGHTS=1`
+  - `GAMMAS=0`
+- extended the campaign wrapper so it now:
+  - accepts `[SEED]` as a fourth positional argument
+  - supports serial multi-seed execution through
+    `SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE`
+  - exports `TRAIN_SEED`, `DATA_SEED`, `PYTHONHASHSEED`,
+    `CUBLAS_WORKSPACE_CONFIG`, and `FULL_DETERMINISM`
+  - includes the seed tag in LoKU tmp artifact naming as well
+  - defaults to `UTILITY=3k` / `utility_3k_v1`, while
+    `UTILITY=1k` keeps the legacy Utility-1K panel and task wiring
+- checkpoint / utility sweeps now stop re-evaluating the top-level final
+  adapter:
+  - final forget / holdout metrics are reused from `run_dir/evals`
+  - utility sweeps still evaluate:
+    - `base_model_orig`
+    - every surviving `checkpoint-*`
+    - `final`
+  - if top-level final weights were already cleaned, utility sweeps reuse an
+    existing `checkpoint_evals_utility/final` result when present instead of
+    pretending the last checkpoint is the final model
+- added stale-cache cleanup for forced reruns:
+  - `eval_checkpoints_duet.sh` and `eval_checkpoints_rwku.sh` now remove:
+    - `checkpoint_evals/`
+    - `checkpoint_evals_utility/`
+    - `checkpoint_evals_merged/`
+    when `FORCE_RERUN=1`, so cached `final` utility rows cannot leak into fresh
+    runs
+- LoKU cleanup guards now treat either half-epoch mode or explicit
+  `CHECKPOINT_EPOCHS` as a checkpoint-eval workflow, so FILA artifacts are not
+  removed too early
+
+Validation:
+
+- completed locally:
+  - `python -m compileall src/trainer src/tools/checkpoint_summary_utils.py src/tools/summarize_checkpoint_metrics.py src/tools/merge_checkpoint_utility_summaries.py`
+  - `bash -n` on the wrapper, all touched DUET / RWKU launchers, both
+    checkpoint eval scripts, and `scripts/utility/eval_checkpoints_utility.sh`
+  - direct callback logic smoke via a file-level import of
+    `src/trainer/callbacks/save_on_epochs.py`
+    - `1.99 -> False`
+    - `2.0 -> True`
+    - `4.999 -> False`
+    - `5.0 -> False`
+  - rerun-vs-resume callback smoke with an existing
+    `checkpoint-*/trainer_state.json`
+    - `fresh_rerun_at2 -> True`
+    - `resume_at2 -> False`
+- not completed in this turn:
+  - end-to-end DUET or RWKU train / eval smoke
+  - multi-seed campaign rerun on real artifacts
+
+Remaining caveat:
+
+- `check_saves.py` was not made seed-aware here. If multiple seeds are written
+  into the same parent saves tree, the checker can still treat them as
+  duplicates or extras. The lowest-risk workaround is one campaign root per
+  seed.
+
+## 2026-03-25 Utility-3K Default With Utility-1K Fallback
+
+Files:
+
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `configs/eval/lm_eval_utility_3k.yaml`
+- `configs/experiment/eval/utility_3k/default.yaml`
+- `configs/lm_eval_tasks/utility_3k/_base_mc.yaml`
+- `configs/lm_eval_tasks/utility_3k/_utility_3k.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_mmlu_pro_1200.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_truthfulqa_bin_600.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_arc_600.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_winogrande_600.yaml`
+- `configs/lm_eval_tasks/utility_3k/utils.py`
+- `src/tools/build_utility_1k_panel.py`
+- `src/tools/summarize_utility_metrics.py`
+- `src/tools/merge_checkpoint_utility_summaries.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- added a parallel `Utility-3K` lm-eval stack without mutating the existing
+  `Utility-1K` configs:
+  - `utility_mmlu_pro_1200`
+  - `utility_truthfulqa_bin_600`
+  - `utility_arc_600`
+  - `utility_winogrande_600`
+- `scripts/dualcf/run_campaign_one_lr.sh` now defaults to `UTILITY=3k`
+  while preserving `UTILITY=1k` as the opt-in legacy path
+- the wrapper now infers the utility mode from explicit overrides such as
+  `UTILITY_ROOT`, `UTILITY_EVAL_EXPERIMENT`, or `UTILITY_TASK_CONFIG_ROOT`, so
+  existing manual env overrides can still select the intended panel cleanly
+- `scripts/utility/eval_checkpoints_utility.sh` is no longer pinned to:
+  - `configs/lm_eval_tasks/utility_1k`
+  - `eval/utility_1k/default.yaml`
+  - the four `*_400/*_200` JSONL filenames
+- the checkpoint utility runner now:
+  - picks task defs from the selected utility config root
+  - rewrites local `data_files` paths to the chosen `UTILITY_ROOT`
+  - validates the required JSONLs by reading the selected task YAMLs
+  - tags eval runs with `utility3k` or `utility1k` accordingly
+- `build_utility_1k_panel.py` now infers `panel_name` from the selected total
+  count, so a 3K build no longer writes a manifest labeled `utility_1k`
+- utility summary / merge / structured-save reporting now discover utility
+  columns dynamically from summary keys or TSV headers, so both 1K and 3K
+  panels continue to flow through:
+  - `checkpoint_evals_utility/summary.tsv`
+  - `checkpoint_evals_merged/summary.tsv`
+  - structured-save metric TSVs
+  - combined LaTeX table builders
+
+Validation:
+
+- completed locally:
+  - `bash -n scripts/dualcf/run_campaign_one_lr.sh scripts/utility/eval_checkpoints_utility.sh`
+  - `python -m compileall src/tools/build_utility_1k_panel.py src/tools/summarize_utility_metrics.py src/tools/merge_checkpoint_utility_summaries.py src/tools/build_structured_saves.py src/tools/build_results_combine_tables.py`
+  - synthetic 3K utility-summary smoke for:
+    - `src/tools/summarize_utility_metrics.py`
+    - `src/tools/merge_checkpoint_utility_summaries.py`
+- not completed in this turn:
+  - real-panel `src/eval.py` endpoint eval against `configs/eval/lm_eval_utility_3k.yaml`
+  - end-to-end DUET or RWKU checkpoint utility sweep with actual 3K JSONLs
 
 </content>
 
@@ -18685,6 +19245,91 @@ task: utility_truthfulqa_bin_200
 include: _base_mc.yaml
 dataset_kwargs:
   data_files: artifacts/evals/utility_1k_v1/utility_truthfulqa_bin_200.jsonl
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/_utility_3k.yaml">
+group: utility_3k
+task:
+  - utility_mmlu_pro_1200
+  - utility_truthfulqa_bin_600
+  - utility_arc_600
+  - utility_winogrande_600
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/utility_mmlu_pro_1200.yaml">
+task: utility_mmlu_pro_1200
+include: _base_mc.yaml
+dataset_kwargs:
+  data_files: artifacts/evals/utility_3k_v1/utility_mmlu_pro_1200.jsonl
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/utility_winogrande_600.yaml">
+task: utility_winogrande_600
+include: _base_mc.yaml
+dataset_kwargs:
+  data_files: artifacts/evals/utility_3k_v1/utility_winogrande_600.jsonl
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/_base_mc.yaml">
+dataset_path: json
+dataset_name: null
+training_split: null
+validation_split: train
+test_split: null
+
+output_type: multiple_choice
+
+doc_to_text: !function utils.doc_to_text
+doc_to_choice: !function utils.doc_to_choice
+doc_to_target: !function utils.doc_to_target
+
+metric_list:
+  - metric: acc
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/utils.py">
+LETTERS = list("ABCDEFGHIJ")
+
+
+def doc_to_text(doc):
+    lines = [
+        "Choose the correct option. Reply with the option letter only.",
+        "",
+        f"Question: {doc['question']}",
+    ]
+    for index, choice in enumerate(doc["choices"]):
+        lines.append(f"{LETTERS[index]}. {choice}")
+    lines.append("Answer:")
+    return "\n".join(lines)
+
+
+def doc_to_choice(doc):
+    return LETTERS[: len(doc["choices"])]
+
+
+def doc_to_target(doc):
+    return int(doc["gold_idx"])
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/utility_truthfulqa_bin_600.yaml">
+task: utility_truthfulqa_bin_600
+include: _base_mc.yaml
+dataset_kwargs:
+  data_files: artifacts/evals/utility_3k_v1/utility_truthfulqa_bin_600.jsonl
+
+</content>
+
+<content full_path="configs/lm_eval_tasks/utility_3k/utility_arc_600.yaml">
+task: utility_arc_600
+include: _base_mc.yaml
+dataset_kwargs:
+  data_files: artifacts/evals/utility_3k_v1/utility_arc_600.jsonl
 
 </content>
 
@@ -22842,6 +23487,17 @@ task_name: ???
 
 </content>
 
+<content full_path="configs/experiment/eval/utility_3k/default.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /eval: lm_eval_utility_3k
+
+task_name: ???
+
+</content>
+
 <content full_path="configs/experiment/eval/rwku/default.yaml">
 # @package _global_
 
@@ -22934,6 +23590,27 @@ metrics: {}
 overwrite: false
 data_split: News
 retain_logs_path: null
+</content>
+
+<content full_path="configs/eval/lm_eval_utility_3k.yaml">
+# @package eval.lm_eval
+
+handler: LMEvalEvaluator
+output_dir: ${paths.output_dir}
+overwrite: true
+include_subtask_metrics: true
+
+include_path: configs/lm_eval_tasks/utility_3k
+
+tasks:
+  - utility_3k
+
+simple_evaluate_args:
+  batch_size: 16
+  num_fewshot: 0
+  apply_chat_template: true
+  system_instruction: null
+
 </content>
 
 <content full_path="configs/eval/duet.yaml">
@@ -25632,6 +26309,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -25703,6 +26390,9 @@ for split in "${forget_retain_splits[@]}"; do
                                     for lora_dropout in "${lora_dropouts[@]}"; do
                                         dropout_tag=${lora_dropout//./p}
                                         task_name=duet_${base_model}_${forget_label}_npo_sam_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_rho${rho_tag}_ad${adapt_tag}
+                                        if [[ -n "${run_tag_extra}" ]]; then
+                                            task_name="${task_name}_${run_tag_extra}"
+                                        fi
                                         run_dir=${output_root}/${task_name}
                                         eval_dir=${run_dir}/evals
                                         summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -25718,7 +26408,14 @@ for split in "${forget_retain_splits[@]}"; do
                                         if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                             mkdir -p "${run_dir}"
                                             extra_schedule_args=()
-                                            if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                            if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                                extra_schedule_args+=(
+                                                    ++trainer.args.save_strategy=no
+                                                    ++trainer.args.save_total_limit=${save_total_limit}
+                                                    ++trainer.args.save_safetensors=true
+                                                    ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                                )
+                                            elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                                 num_rows=$(resolve_num_rows "${forget_split}")
                                                 global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                                 steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -25753,6 +26450,8 @@ for split in "${forget_retain_splits[@]}"; do
                                                 model.lora_config.r=${lora_r}
                                                 model.lora_config.lora_alpha=${lora_alpha}
                                                 model.lora_config.lora_dropout=${lora_dropout}
+                                                ++trainer.args.seed=${TRAIN_SEED:-42}
+                                                ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                                 trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                                 trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                                 trainer.args.num_train_epochs=${num_train_epochs}
@@ -25773,6 +26472,9 @@ for split in "${forget_retain_splits[@]}"; do
                                             )
                                             if [[ "${max_steps}" != "0" ]]; then
                                                 train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                            fi
+                                            if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                                train_cmd+=(++trainer.args.full_determinism=true)
                                             fi
                                             python "${train_cmd[@]}"
                                         fi
@@ -26604,6 +27306,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -26680,6 +27392,9 @@ for split in "${forget_retain_splits[@]}"; do
                             for lora_dropout in "${lora_dropouts[@]}"; do
                                 dropout_tag=${lora_dropout//./p}
                                 task_name=duet_${base_model}_${forget_label}_ada_pop_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_${atag}_${btag}${beta_a_tag}${beta_b_tag}_gamma${gamma_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -26695,7 +27410,14 @@ for split in "${forget_retain_splits[@]}"; do
                                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
                                     extra_schedule_args=()
-                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(
+                                            ++trainer.args.save_strategy=no
+                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                            ++trainer.args.save_safetensors=true
+                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                        )
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                         num_rows=$(resolve_num_rows "${forget_split}")
                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -26730,6 +27452,8 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
+                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -26745,6 +27469,9 @@ for split in "${forget_retain_splits[@]}"; do
                                     )
                                     if [[ "${max_steps}" != "0" ]]; then
                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                        train_cmd+=(++trainer.args.full_determinism=true)
                                     fi
                                     python "${train_cmd[@]}"
                                 fi
@@ -26870,6 +27597,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -26897,6 +27634,9 @@ for split in "${forget_retain_splits[@]}"; do
                 for lora_dropout in "${lora_dropouts[@]}"; do
                     dropout_tag=${lora_dropout//./p}
                     task_name=duet_${base_model}_${forget_label}_ga_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}
+                    if [[ -n "${run_tag_extra}" ]]; then
+                        task_name="${task_name}_${run_tag_extra}"
+                    fi
                     run_dir=${output_root}/${task_name}
                     eval_dir=${run_dir}/evals
                     summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -26912,7 +27652,14 @@ for split in "${forget_retain_splits[@]}"; do
                     if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                         mkdir -p "${run_dir}"
                         extra_schedule_args=()
-                        if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                        if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                            extra_schedule_args+=(
+                                ++trainer.args.save_strategy=no
+                                ++trainer.args.save_total_limit=${save_total_limit}
+                                ++trainer.args.save_safetensors=true
+                                ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                            )
+                        elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                             num_rows=$(resolve_num_rows "${forget_split}")
                             global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                             steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -26947,6 +27694,8 @@ for split in "${forget_retain_splits[@]}"; do
                             model.lora_config.r=${lora_r}
                             model.lora_config.lora_alpha=${lora_alpha}
                             model.lora_config.lora_dropout=${lora_dropout}
+                            ++trainer.args.seed=${TRAIN_SEED:-42}
+                            ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                             trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                             trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                             trainer.args.num_train_epochs=${num_train_epochs}
@@ -26959,6 +27708,9 @@ for split in "${forget_retain_splits[@]}"; do
                         )
                         if [[ "${max_steps}" != "0" ]]; then
                             train_cmd+=(+trainer.args.max_steps=${max_steps})
+                        fi
+                        if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                            train_cmd+=(++trainer.args.full_determinism=true)
                         fi
                         python "${train_cmd[@]}"
                     fi
@@ -27101,6 +27853,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -27168,8 +27930,8 @@ delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
 delete_fila_base_after_eval="${DELETE_FILA_BASE_AFTER_EVAL:-0}"
 run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
-if [[ "${checkpoint_every_half_epoch}" == "1" && "${delete_fila_base_after_eval}" == "1" ]]; then
-    echo "[duet][LoKU] CHECKPOINT_EVERY_HALF_EPOCH=1 requires keeping FILA base_model for later checkpoint eval; overriding DELETE_FILA_BASE_AFTER_EVAL=0"
+if [[ ( "${checkpoint_every_half_epoch}" == "1" || -n "${checkpoint_epochs_csv}" ) && "${delete_fila_base_after_eval}" == "1" ]]; then
+    echo "[duet][LoKU] Intermediate checkpoints require keeping FILA base_model for later checkpoint eval; overriding DELETE_FILA_BASE_AFTER_EVAL=0"
     delete_fila_base_after_eval=0
 fi
 
@@ -27330,6 +28092,9 @@ for split in "${forget_retain_splits[@]}"; do
                             for lora_dropout in "${lora_dropouts[@]}"; do
                                 dropout_tag=${lora_dropout//./p}
                                 task_name=duet_${base_model}_${forget_label}_loku_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_ihla${ihl_tag}_alpha${alpha_tag}_gamma${gamma_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -27349,7 +28114,14 @@ for split in "${forget_retain_splits[@]}"; do
                                     mkdir -p "${run_dir}"
                                     mkdir -p "$(dirname "${base_residual_dir}")"
                                     extra_schedule_args=()
-                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(
+                                            ++trainer.args.save_strategy=no
+                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                            ++trainer.args.save_safetensors=true
+                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                        )
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                         num_rows=$(resolve_num_rows "${forget_split}")
                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -27385,6 +28157,8 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
+                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -27411,6 +28185,9 @@ for split in "${forget_retain_splits[@]}"; do
                                     )
                                     if [[ "${max_steps}" != "0" ]]; then
                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                        train_cmd+=(++trainer.args.full_determinism=true)
                                     fi
                                     python "${train_cmd[@]}"
                                 fi
@@ -27841,6 +28618,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -27892,6 +28679,9 @@ for split in "${forget_retain_splits[@]}"; do
                             for lora_dropout in "${lora_dropouts[@]}"; do
                                 dropout_tag=${lora_dropout//./p}
                                 task_name=duet_${base_model}_${forget_label}_npo_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -27907,7 +28697,14 @@ for split in "${forget_retain_splits[@]}"; do
                                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
                                     extra_schedule_args=()
-                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(
+                                            ++trainer.args.save_strategy=no
+                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                            ++trainer.args.save_safetensors=true
+                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                        )
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                         num_rows=$(resolve_num_rows "${forget_split}")
                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -27942,6 +28739,8 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
+                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -27958,6 +28757,9 @@ for split in "${forget_retain_splits[@]}"; do
                                     )
                                     if [[ "${max_steps}" != "0" ]]; then
                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                        train_cmd+=(++trainer.args.full_determinism=true)
                                     fi
                                     python "${train_cmd[@]}"
                                 fi
@@ -28193,6 +28995,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 cf_dataset_path="${CF_DATASET_PATH:-json}"
 cf_dataset_data_files="${CF_DATASET_DATA_FILES:-null}"
@@ -28359,6 +29171,9 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                     fi
 
                                                                                                     task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}_${difficulty_tag}_${attribution_tag}
+                                                                                                    if [[ -n "${run_tag_extra}" ]]; then
+                                                                                                        task_name="${task_name}_${run_tag_extra}"
+                                                                                                    fi
                                                                                                     run_dir=${output_root}/${task_name}
                                                                                                     eval_dir=${run_dir}/evals
                                                                                                     summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -28374,7 +29189,14 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                     if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                                                                                         mkdir -p "${run_dir}"
                                                                                                         extra_schedule_args=()
-                                                                                                        if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                                                                                        if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                                                                                            extra_schedule_args+=(
+                                                                                                                ++trainer.args.save_strategy=no
+                                                                                                                ++trainer.args.save_total_limit=${save_total_limit}
+                                                                                                                ++trainer.args.save_safetensors=true
+                                                                                                                ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                                                                                            )
+                                                                                                        elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                                                                                             num_rows=$(resolve_num_rows "${cf_dataset_path}" "${cf_dataset_split}" "${cf_dataset_data_files}")
                                                                                                             global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                                                                                             steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -28441,6 +29263,8 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             model.lora_config.r=${lora_r}
                                                                                                             model.lora_config.lora_alpha=${lora_alpha}
                                                                                                             model.lora_config.lora_dropout=${lora_dropout}
+                                                                                                            ++trainer.args.seed=${TRAIN_SEED:-42}
+                                                                                                            ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                                                                                             trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                                                                                             trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                                                                                             trainer.args.num_train_epochs=${num_train_epochs}
@@ -28454,6 +29278,9 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                         )
                                                                                                         if [[ "${max_steps}" != "0" ]]; then
                                                                                                             train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                                                                                        fi
+                                                                                                        if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                                                                                            train_cmd+=(++trainer.args.full_determinism=true)
                                                                                                         fi
                                                                                                         python "${train_cmd[@]}"
                                                                                                     fi
@@ -28984,13 +29811,20 @@ if has_loadable_base_model "${RESOLVED_BASE_MODEL_PATH}"; then
   LORA_BASE_MODEL_SUBFOLDER_VALUE=""
 fi
 
+if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+  rm -rf \
+    "${RUN_DIR}/checkpoint_evals" \
+    "${RUN_DIR}/checkpoint_evals_utility" \
+    "${RUN_DIR}/checkpoint_evals_merged"
+fi
+
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
-if has_loadable_weights "${RUN_DIR}"; then
-  CKPTS+=("${RUN_DIR}")
-elif [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
-  echo "[duet][ckpt-eval] Skipping top-level run_dir re-eval because weights were cleaned after endpoint eval: ${RUN_DIR}"
+if [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
+  echo "[duet][ckpt-eval] Reusing endpoint final summary from ${RUN_DIR}/evals"
+elif has_loadable_weights "${RUN_DIR}"; then
+  echo "[duet][ckpt-eval] Endpoint summary missing at ${RUN_DIR}/evals/DUET_SUMMARY.json; final row will be omitted until endpoint eval runs."
 else
-  echo "[duet][ckpt-eval] Skipping top-level run_dir because no loadable weights were found: ${RUN_DIR}"
+  echo "[duet][ckpt-eval] No endpoint summary and no endpoint adapter weights found: ${RUN_DIR}"
 fi
 
 for ckpt in "${CKPTS[@]}"; do
@@ -29187,6 +30021,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 cf_dataset_path="${CF_DATASET_PATH:-json}"
 cf_dataset_data_files="${CF_DATASET_DATA_FILES:-null}"
@@ -29204,15 +30048,15 @@ raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"; raw_lrs="${raw_lrs//\"/}"; raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_retain_weights="${RETAIN_WEIGHTS:-${ALPHAS:-1.0}}"
+raw_retain_weights="${RETAIN_WEIGHTS:-${ALPHAS:-1}}"
 raw_retain_weights="${raw_retain_weights//,/ }"; raw_retain_weights="${raw_retain_weights//\"/}"; raw_retain_weights="${raw_retain_weights//\'/}"
 read -r -a retain_weights <<< "${raw_retain_weights}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-0}"
 raw_gammas="${raw_gammas//,/ }"; raw_gammas="${raw_gammas//\"/}"; raw_gammas="${raw_gammas//\'/}"
 read -r -a gammas <<< "${raw_gammas}"
 
-raw_cf_weights="${CF_WEIGHTS:-1.0}"
+raw_cf_weights="${CF_WEIGHTS:-0.5}"
 raw_cf_weights="${raw_cf_weights//,/ }"; raw_cf_weights="${raw_cf_weights//\"/}"; raw_cf_weights="${raw_cf_weights//\'/}"
 read -r -a cf_weights <<< "${raw_cf_weights}"
 
@@ -29247,6 +30091,9 @@ for split in "${forget_retain_splits[@]}"; do
                             for lora_dropout in "${lora_dropouts[@]}"; do
                                 dropout_tag=${lora_dropout//./p}
                                 task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_cf${cf_weight_tag}_ret${retain_weight_tag}_gamma${gamma_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -29262,7 +30109,14 @@ for split in "${forget_retain_splits[@]}"; do
                                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
                                     extra_schedule_args=()
-                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(
+                                            ++trainer.args.save_strategy=no
+                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                            ++trainer.args.save_safetensors=true
+                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                        )
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                         num_rows=$(resolve_num_rows "${cf_dataset_path}" "${cf_dataset_split}" "${cf_dataset_data_files}")
                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -29301,6 +30155,8 @@ for split in "${forget_retain_splits[@]}"; do
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
+                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -29318,6 +30174,9 @@ for split in "${forget_retain_splits[@]}"; do
                                     )
                                     if [[ "${max_steps}" != "0" ]]; then
                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                        train_cmd+=(++trainer.args.full_determinism=true)
                                     fi
                                     python "${train_cmd[@]}"
                                 fi
@@ -29818,6 +30677,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -29877,6 +30746,9 @@ for split in "${forget_retain_splits[@]}"; do
                                 for lora_dropout in "${lora_dropouts[@]}"; do
                                     dropout_tag=${lora_dropout//./p}
                                     task_name=duet_${base_model}_${forget_label}_simnpo_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_delta${delta_tag}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}
+                                    if [[ -n "${run_tag_extra}" ]]; then
+                                        task_name="${task_name}_${run_tag_extra}"
+                                    fi
                                     run_dir=${output_root}/${task_name}
                                     eval_dir=${run_dir}/evals
                                     summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -29892,7 +30764,14 @@ for split in "${forget_retain_splits[@]}"; do
                                     if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                         mkdir -p "${run_dir}"
                                         extra_schedule_args=()
-                                        if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                        if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                            extra_schedule_args+=(
+                                                ++trainer.args.save_strategy=no
+                                                ++trainer.args.save_total_limit=${save_total_limit}
+                                                ++trainer.args.save_safetensors=true
+                                                ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                            )
+                                        elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                             num_rows=$(resolve_num_rows "${forget_split}")
                                             global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                             steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -29927,6 +30806,8 @@ for split in "${forget_retain_splits[@]}"; do
                                             model.lora_config.r=${lora_r}
                                             model.lora_config.lora_alpha=${lora_alpha}
                                             model.lora_config.lora_dropout=${lora_dropout}
+                                            ++trainer.args.seed=${TRAIN_SEED:-42}
+                                            ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                             trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                             trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                             trainer.args.num_train_epochs=${num_train_epochs}
@@ -29944,6 +30825,9 @@ for split in "${forget_retain_splits[@]}"; do
                                         )
                                         if [[ "${max_steps}" != "0" ]]; then
                                             train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                        fi
+                                        if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                            train_cmd+=(++trainer.args.full_determinism=true)
                                         fi
                                         python "${train_cmd[@]}"
                                     fi
@@ -30896,14 +31780,15 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/dualcf/run_campaign_one_lr.sh GPU_ID LR [PHASE]
+  bash scripts/dualcf/run_campaign_one_lr.sh GPU_ID LR [PHASE] [SEED]
 
 Examples:
-  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_rare
-  bash scripts/dualcf/run_campaign_one_lr.sh 1 1e-5 duet_popular
-  bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 duet_merged
-  bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 rwku
-  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_split_first
+  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_rare 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 1 1e-5 duet_popular 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 duet_merged 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 rwku 42
+  bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_split_first 43
+  SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
 
 Phases:
   duet_rare         Run DUET rare only.
@@ -30916,11 +31801,14 @@ Phases:
 
 Defaults:
   PHASE defaults to duet_rare.
+  SEED defaults to TRAIN_SEED or 42.
+  SEEDS runs the wrapper serially once per listed seed.
+  UTILITY defaults to 3k. Set UTILITY=1k to reuse the old panel.
   The script expects artifacts to already exist under ARTIFACT_ROOT.
 EOF
 }
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
+if [[ $# -lt 2 || $# -gt 4 ]]; then
   usage >&2
   exit 1
 fi
@@ -30928,8 +31816,35 @@ fi
 GPU_ID=$1
 LR=$2
 PHASE=${3:-${PHASE:-duet_rare}}
+self_path=$(realpath "$0")
 
-script_dir=$(dirname "$(realpath "$0")")
+if [[ -n "${SEEDS:-}" && $# -gt 3 ]]; then
+  echo "[dualcf][campaign] Pass either SEEDS or the 4th positional SEED, not both." >&2
+  exit 1
+fi
+
+if [[ -n "${SEEDS:-}" ]]; then
+  raw_train_seeds="${SEEDS}"
+  raw_train_seeds="${raw_train_seeds//,/ }"
+  raw_train_seeds="${raw_train_seeds//\"/}"
+  raw_train_seeds="${raw_train_seeds//\'/}"
+  read -r -a train_seeds <<< "${raw_train_seeds}"
+
+  if [[ ${#train_seeds[@]} -eq 0 ]]; then
+    echo "[dualcf][campaign] SEEDS was set but no seeds were parsed." >&2
+    exit 1
+  fi
+
+  for seed in "${train_seeds[@]}"; do
+    echo "[dualcf][campaign] starting seed=${seed} gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
+    SEEDS="" bash "${self_path}" "${GPU_ID}" "${LR}" "${PHASE}" "${seed}"
+  done
+  exit 0
+fi
+
+TRAIN_SEED=${4:-${TRAIN_SEED:-42}}
+
+script_dir=$(dirname "${self_path}")
 repo_root=$(realpath "${script_dir}/../..")
 
 require_file() {
@@ -30962,6 +31877,81 @@ resolve_existing_dir() {
   fi
 
   printf '%s\n' "${raw_path}"
+}
+
+resolve_utility_mode() {
+  if [[ -n "${UTILITY:-}" ]]; then
+    printf '%s\n' "${UTILITY}"
+    return 0
+  fi
+
+  case "${UTILITY_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_EVAL_EXPERIMENT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_TASK_CONFIG_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  printf '3k\n'
+}
+
+configure_utility_panel_env() {
+  local utility_mode="$1"
+  local default_utility_root=""
+  local default_task_config_root=""
+  local default_eval_experiment=""
+  local default_task_name_suffix=""
+
+  case "${utility_mode}" in
+    1k)
+      default_utility_root="/data/home/vkropoti/unlearning/evals/utility_1k_v1"
+      default_task_config_root="${REPO_ROOT}/configs/lm_eval_tasks/utility_1k"
+      default_eval_experiment="eval/utility_1k/default.yaml"
+      default_task_name_suffix="utility1k"
+      ;;
+    3k)
+      default_utility_root="/data/home/vkropoti/unlearning/evals/utility_3k_v1"
+      default_task_config_root="${REPO_ROOT}/configs/lm_eval_tasks/utility_3k"
+      default_eval_experiment="eval/utility_3k/default.yaml"
+      default_task_name_suffix="utility3k"
+      ;;
+    *)
+      echo "[dualcf][campaign] Unsupported UTILITY=${utility_mode}. Use 1k or 3k." >&2
+      exit 1
+      ;;
+  esac
+
+  export UTILITY="${utility_mode}"
+  export UTILITY_ROOT="${UTILITY_ROOT:-${default_utility_root}}"
+  export UTILITY_TASK_CONFIG_ROOT="${UTILITY_TASK_CONFIG_ROOT:-${default_task_config_root}}"
+  export UTILITY_EVAL_EXPERIMENT="${UTILITY_EVAL_EXPERIMENT:-${default_eval_experiment}}"
+  export UTILITY_TASK_NAME_SUFFIX="${UTILITY_TASK_NAME_SUFFIX:-${default_task_name_suffix}}"
 }
 
 cleanup_loku_wrapper_tmp_dirs() {
@@ -31012,7 +32002,7 @@ configure_method_variant_env() {
   # Keep LoKU's internal EXIT trap from deleting debug artifacts on failure.
   # The wrapper removes these temp dirs only after the LoKU method returns
   # successfully, which is after train + endpoint eval + checkpoint eval +
-  # Utility-1K eval.
+  # Utility eval.
   export DELETE_IMPORTANCE_AFTER_RUN="${LOKU_DELETE_IMPORTANCE_AFTER_RUN:-0}"
   export DELETE_FILA_BASE_AFTER_EVAL="${LOKU_DELETE_FILA_BASE_AFTER_EVAL:-0}"
   export DELETE_RUN_BASE_MODEL_AFTER_EVAL="${LOKU_DELETE_RUN_BASE_MODEL_AFTER_EVAL:-1}"
@@ -31085,16 +32075,23 @@ export VENV_PATH="${VENV_PATH:-/data/home/vkropoti/unlearning-venv}"
 cd "${REPO_ROOT}"
 source "${VENV_PATH}/bin/activate"
 
+configure_utility_panel_env "$(resolve_utility_mode)"
+
 export HF_HOME="${HF_HOME:-/data/home/vkropoti/unlearning/.hf_home}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-/data/home/vkropoti/unlearning/.hf_datasets_cache}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/data/home/vkropoti/unlearning/.triton}"
 export ARTIFACT_ROOT="${ARTIFACT_ROOT:-/data/home/vkropoti/unlearning/artifacts/dualcf}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/data/home/vkropoti/unlearning/saves/unlearn}"
-export UTILITY_ROOT="${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utility_1k_v1}"
 export BASELINE_CACHE_ROOT="${BASELINE_CACHE_ROOT:-/data/home/vkropoti/unlearning/saves/eval/utility_baselines}"
 export LOKU_IMPORTANCE_TMP_DIR="${LOKU_IMPORTANCE_TMP_DIR:-/data/home/vkropoti/unlearning/importance_tmp}"
 export LOKU_FILA_BASE_TMP_DIR="${LOKU_FILA_BASE_TMP_DIR:-/data/home/vkropoti/unlearning/fila_base_tmp}"
-export LOKU_RUN_TAG="${LOKU_RUN_TAG:-gpu${GPU_ID}_lr${LR}_phase_${PHASE}}"
+export TRAIN_SEED
+export DATA_SEED="${DATA_SEED:-${TRAIN_SEED}}"
+export PYTHONHASHSEED="${PYTHONHASHSEED:-${TRAIN_SEED}}"
+export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
+export FULL_DETERMINISM="${FULL_DETERMINISM:-0}"
+export RUN_TAG_EXTRA="${RUN_TAG_EXTRA:-seed${TRAIN_SEED}}"
+export LOKU_RUN_TAG="${LOKU_RUN_TAG:-gpu${GPU_ID}_lr${LR}_phase_${PHASE}_${RUN_TAG_EXTRA}}"
 mkdir -p "${HF_HOME}" "${HF_DATASETS_CACHE}" "${TRITON_CACHE_DIR}" \
   "${ARTIFACT_ROOT}" "${OUTPUT_ROOT}" "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}" \
   "${LOKU_IMPORTANCE_TMP_DIR}" "${LOKU_FILA_BASE_TMP_DIR}"
@@ -31133,8 +32130,9 @@ export RISK_FORGET_SCALES="${RISK_FORGET_SCALES:-0.5}"
 
 export LRS="${LR}"
 export NUM_EPOCHS="${NUM_EPOCHS:-5}"
-export CHECKPOINT_EVERY_HALF_EPOCH="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
-export SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-12}"
+export CHECKPOINT_EVERY_HALF_EPOCH="${CHECKPOINT_EVERY_HALF_EPOCH:-0}"
+export CHECKPOINT_EPOCHS="${CHECKPOINT_EPOCHS:-2}"
+export SAVE_TOTAL_LIMIT="${SAVE_TOTAL_LIMIT:-2}"
 export DELETE_MODEL_SAFETENSORS_AFTER_EVAL="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-1}"
 export DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL="${DELETE_CHECKPOINT_ADAPTER_SAFETENSORS_AFTER_EVAL:-1}"
 export RUN_CHECKPOINT_EVAL="${RUN_CHECKPOINT_EVAL:-1}"
@@ -31156,7 +32154,10 @@ METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce ga ada_pop 
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
+echo "[dualcf][campaign] seed=${TRAIN_SEED} data_seed=${DATA_SEED}"
+echo "[dualcf][campaign] full_determinism=${FULL_DETERMINISM}"
 echo "[dualcf][campaign] method_variants=${METHOD_VARIANTS}"
+echo "[dualcf][campaign] utility=${UTILITY} utility_root=${UTILITY_ROOT}"
 echo "[dualcf][campaign] duet_local_sft_base=${DUET_LOCAL_SFT_BASE}"
 
 duet_rare_artifact="${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl"
@@ -34259,13 +35260,20 @@ elif [[ -d "${RUN_DIR}/base_model" ]]; then
   echo "[rwku][ckpt-eval] Found ${RUN_DIR}/base_model but it is missing config/weights; falling back to ${RESOLVED_BASE_MODEL_PATH}"
 fi
 
+if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+  rm -rf \
+    "${RUN_DIR}/checkpoint_evals" \
+    "${RUN_DIR}/checkpoint_evals_utility" \
+    "${RUN_DIR}/checkpoint_evals_merged"
+fi
+
 mapfile -t CKPTS < <(find "${RUN_DIR}" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V)
-if has_loadable_weights "${RUN_DIR}"; then
-  CKPTS+=("${RUN_DIR}")
-elif [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
-  echo "[rwku][ckpt-eval] Skipping top-level run_dir re-eval because weights were cleaned after endpoint eval: ${RUN_DIR}"
+if [[ -f "${RUN_DIR}/evals/DUET_SUMMARY.json" ]]; then
+  echo "[rwku][ckpt-eval] Reusing endpoint final summary from ${RUN_DIR}/evals"
+elif has_loadable_weights "${RUN_DIR}"; then
+  echo "[rwku][ckpt-eval] Endpoint summary missing at ${RUN_DIR}/evals/DUET_SUMMARY.json; final row will be omitted until endpoint eval runs."
 else
-  echo "[rwku][ckpt-eval] Skipping top-level run_dir because no loadable weights were found: ${RUN_DIR}"
+  echo "[rwku][ckpt-eval] No endpoint summary and no endpoint adapter weights found: ${RUN_DIR}"
 fi
 
 for ckpt in "${CKPTS[@]}"; do
@@ -34432,6 +35440,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -34485,6 +35503,9 @@ for lr in "${lrs[@]}"; do
                             for lora_dropout in "${lora_dropouts[@]}"; do
                                 dropout_tag=${lora_dropout//./p}
                                 task_name=rwku_${base_model}_${forget_split}_simnpo_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_delta${delta_tag}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
                                 run_dir=${output_root}/${task_name}
                                 eval_dir=${run_dir}/evals
                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -34500,7 +35521,14 @@ for lr in "${lrs[@]}"; do
                                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                     mkdir -p "${run_dir}"
                                     extra_schedule_args=()
-                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(
+                                            ++trainer.args.save_strategy=no
+                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                            ++trainer.args.save_safetensors=true
+                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                        )
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                         num_rows=$(resolve_num_rows "${forget_split}")
                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -34535,6 +35563,8 @@ for lr in "${lrs[@]}"; do
                                         model.lora_config.r=${lora_r}
                                         model.lora_config.lora_alpha=${lora_alpha}
                                         model.lora_config.lora_dropout=${lora_dropout}
+                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -34551,6 +35581,9 @@ for lr in "${lrs[@]}"; do
                                     )
                                     if [[ "${max_steps}" != "0" ]]; then
                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                    fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                        train_cmd+=(++trainer.args.full_determinism=true)
                                     fi
                                     python "${train_cmd[@]}"
                                 fi
@@ -35062,20 +36095,30 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"; raw_lrs="${raw_lrs//\"/}"; raw_lrs="${raw_lrs//\'/}"
 read -r -a lrs <<< "${raw_lrs}"
 
-raw_retain_weights="${RETAIN_WEIGHTS:-${ALPHAS:-1.0}}"
+raw_retain_weights="${RETAIN_WEIGHTS:-${ALPHAS:-1}}"
 raw_retain_weights="${raw_retain_weights//,/ }"; raw_retain_weights="${raw_retain_weights//\"/}"; raw_retain_weights="${raw_retain_weights//\'/}"
 read -r -a retain_weights <<< "${raw_retain_weights}"
 
-raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${GAMMAS:-0}"
 raw_gammas="${raw_gammas//,/ }"; raw_gammas="${raw_gammas//\"/}"; raw_gammas="${raw_gammas//\'/}"
 read -r -a gammas <<< "${raw_gammas}"
 
-raw_cf_weights="${CF_WEIGHTS:-1.0}"
+raw_cf_weights="${CF_WEIGHTS:-0.5}"
 raw_cf_weights="${raw_cf_weights//,/ }"; raw_cf_weights="${raw_cf_weights//\"/}"; raw_cf_weights="${raw_cf_weights//\'/}"
 read -r -a cf_weights <<< "${raw_cf_weights}"
 
@@ -35099,6 +36142,9 @@ for lr in "${lrs[@]}"; do
                         for lora_dropout in "${lora_dropouts[@]}"; do
                             dropout_tag=${lora_dropout//./p}
                             task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_cf${cf_weight_tag}_ret${retain_weight_tag}_gamma${gamma_tag}
+                            if [[ -n "${run_tag_extra}" ]]; then
+                                task_name="${task_name}_${run_tag_extra}"
+                            fi
                             run_dir=${output_root}/${task_name}
                             eval_dir=${run_dir}/evals
                             summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -35114,7 +36160,14 @@ for lr in "${lrs[@]}"; do
                             if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                 mkdir -p "${run_dir}"
                                 extra_schedule_args=()
-                                if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                    extra_schedule_args+=(
+                                        ++trainer.args.save_strategy=no
+                                        ++trainer.args.save_total_limit=${save_total_limit}
+                                        ++trainer.args.save_safetensors=true
+                                        ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                    )
+                                elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                     num_rows=$(resolve_num_rows "${cf_dataset_path}" "${cf_dataset_name}" "${cf_dataset_split}" "${cf_dataset_data_files}")
                                     global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                     steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -35154,6 +36207,8 @@ for lr in "${lrs[@]}"; do
                                     model.lora_config.r=${lora_r}
                                     model.lora_config.lora_alpha=${lora_alpha}
                                     model.lora_config.lora_dropout=${lora_dropout}
+                                    ++trainer.args.seed=${TRAIN_SEED:-42}
+                                    ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                     trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                     trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                     trainer.args.num_train_epochs=${num_train_epochs}
@@ -35170,6 +36225,9 @@ for lr in "${lrs[@]}"; do
                                 )
                                 if [[ "${max_steps}" != "0" ]]; then
                                     train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                fi
+                                if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                    train_cmd+=(++trainer.args.full_determinism=true)
                                 fi
                                 python "${train_cmd[@]}"
                             fi
@@ -35290,6 +36348,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -35357,8 +36425,8 @@ delete_importance_after_run="${DELETE_IMPORTANCE_AFTER_RUN:-0}"
 delete_fila_base_after_eval="${DELETE_FILA_BASE_AFTER_EVAL:-0}"
 run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
-if [[ "${checkpoint_every_half_epoch}" == "1" && "${delete_fila_base_after_eval}" == "1" ]]; then
-    echo "[rwku][LoKU] CHECKPOINT_EVERY_HALF_EPOCH=1 requires keeping FILA base_model for later checkpoint eval; overriding DELETE_FILA_BASE_AFTER_EVAL=0"
+if [[ ( "${checkpoint_every_half_epoch}" == "1" || -n "${checkpoint_epochs_csv}" ) && "${delete_fila_base_after_eval}" == "1" ]]; then
+    echo "[rwku][LoKU] Intermediate checkpoints require keeping FILA base_model for later checkpoint eval; overriding DELETE_FILA_BASE_AFTER_EVAL=0"
     delete_fila_base_after_eval=0
 fi
 
@@ -35512,6 +36580,9 @@ for lr in "${lrs[@]}"; do
                         for lora_dropout in "${lora_dropouts[@]}"; do
                             dropout_tag=${lora_dropout//./p}
                             task_name=rwku_${base_model}_${forget_label}_loku_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_ihla${ihl_tag}_alpha${alpha_tag}_gamma${gamma_tag}
+                            if [[ -n "${run_tag_extra}" ]]; then
+                                task_name="${task_name}_${run_tag_extra}"
+                            fi
                             run_dir=${output_root}/${task_name}
                             eval_dir=${run_dir}/evals
                             summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -35531,7 +36602,14 @@ for lr in "${lrs[@]}"; do
                                 mkdir -p "${run_dir}"
                                 mkdir -p "$(dirname "${base_residual_dir}")"
                                 extra_schedule_args=()
-                                if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                    extra_schedule_args+=(
+                                        ++trainer.args.save_strategy=no
+                                        ++trainer.args.save_total_limit=${save_total_limit}
+                                        ++trainer.args.save_safetensors=true
+                                        ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                    )
+                                elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                     num_rows=$(resolve_num_rows "${forget_split}")
                                     global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                     steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -35567,6 +36645,8 @@ for lr in "${lrs[@]}"; do
                                     model.lora_config.r=${lora_r}
                                     model.lora_config.lora_alpha=${lora_alpha}
                                     model.lora_config.lora_dropout=${lora_dropout}
+                                    ++trainer.args.seed=${TRAIN_SEED:-42}
+                                    ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                     trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                     trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                     trainer.args.num_train_epochs=${num_train_epochs}
@@ -35592,6 +36672,9 @@ for lr in "${lrs[@]}"; do
                                 )
                                 if [[ "${max_steps}" != "0" ]]; then
                                     train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                fi
+                                if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                    train_cmd+=(++trainer.args.full_determinism=true)
                                 fi
                                 python "${train_cmd[@]}"
                             fi
@@ -35717,6 +36800,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -35738,6 +36831,9 @@ for lr in "${lrs[@]}"; do
             for lora_dropout in "${lora_dropouts[@]}"; do
                 dropout_tag=${lora_dropout//./p}
                 task_name=rwku_${base_model}_${forget_split}_ga_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}
+                if [[ -n "${run_tag_extra}" ]]; then
+                    task_name="${task_name}_${run_tag_extra}"
+                fi
                 run_dir=${output_root}/${task_name}
                 eval_dir=${run_dir}/evals
                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -35753,7 +36849,14 @@ for lr in "${lrs[@]}"; do
                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                     mkdir -p "${run_dir}"
                     extra_schedule_args=()
-                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                        extra_schedule_args+=(
+                            ++trainer.args.save_strategy=no
+                            ++trainer.args.save_total_limit=${save_total_limit}
+                            ++trainer.args.save_safetensors=true
+                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                        )
+                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                         num_rows=$(resolve_num_rows "${forget_split}")
                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -35788,6 +36891,8 @@ for lr in "${lrs[@]}"; do
                         model.lora_config.r=${lora_r}
                         model.lora_config.lora_alpha=${lora_alpha}
                         model.lora_config.lora_dropout=${lora_dropout}
+                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -35799,6 +36904,9 @@ for lr in "${lrs[@]}"; do
                     )
                     if [[ "${max_steps}" != "0" ]]; then
                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                    fi
+                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                        train_cmd+=(++trainer.args.full_determinism=true)
                     fi
                     python "${train_cmd[@]}"
                 fi
@@ -36045,6 +37153,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -36115,6 +37233,9 @@ for lr in "${lrs[@]}"; do
                         for lora_dropout in "${lora_dropouts[@]}"; do
                             dropout_tag=${lora_dropout//./p}
                             task_name=rwku_${base_model}_${forget_split}_ada_pop_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_${atag}_${btag}${beta_a_tag}${beta_b_tag}_gamma${gamma_tag}
+                            if [[ -n "${run_tag_extra}" ]]; then
+                                task_name="${task_name}_${run_tag_extra}"
+                            fi
                             run_dir=${output_root}/${task_name}
                             eval_dir=${run_dir}/evals
                             summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -36130,7 +37251,14 @@ for lr in "${lrs[@]}"; do
                             if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                 mkdir -p "${run_dir}"
                                 extra_schedule_args=()
-                                if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                    extra_schedule_args+=(
+                                        ++trainer.args.save_strategy=no
+                                        ++trainer.args.save_total_limit=${save_total_limit}
+                                        ++trainer.args.save_safetensors=true
+                                        ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                    )
+                                elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                     num_rows=$(resolve_num_rows "${forget_split}")
                                     global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                     steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -36165,6 +37293,8 @@ for lr in "${lrs[@]}"; do
                                     model.lora_config.r=${lora_r}
                                     model.lora_config.lora_alpha=${lora_alpha}
                                     model.lora_config.lora_dropout=${lora_dropout}
+                                    ++trainer.args.seed=${TRAIN_SEED:-42}
+                                    ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                     trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                     trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                     trainer.args.num_train_epochs=${num_train_epochs}
@@ -36179,6 +37309,9 @@ for lr in "${lrs[@]}"; do
                                 )
                                 if [[ "${max_steps}" != "0" ]]; then
                                     train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                fi
+                                if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                    train_cmd+=(++trainer.args.full_determinism=true)
                                 fi
                                 python "${train_cmd[@]}"
                             fi
@@ -36588,6 +37721,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -36653,6 +37796,9 @@ for lr in "${lrs[@]}"; do
                                 for lora_dropout in "${lora_dropouts[@]}"; do
                                     dropout_tag=${lora_dropout//./p}
                                     task_name=rwku_${base_model}_${forget_split}_npo_sam_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_rho${rho_tag}_ad${adapt_tag}
+                                    if [[ -n "${run_tag_extra}" ]]; then
+                                        task_name="${task_name}_${run_tag_extra}"
+                                    fi
                                     run_dir=${output_root}/${task_name}
                                     eval_dir=${run_dir}/evals
                                     summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -36668,7 +37814,14 @@ for lr in "${lrs[@]}"; do
                                     if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                         mkdir -p "${run_dir}"
                                         extra_schedule_args=()
-                                        if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                        if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                            extra_schedule_args+=(
+                                                ++trainer.args.save_strategy=no
+                                                ++trainer.args.save_total_limit=${save_total_limit}
+                                                ++trainer.args.save_safetensors=true
+                                                ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                            )
+                                        elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                             num_rows=$(resolve_num_rows "${forget_split}")
                                             global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                             steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -36703,6 +37856,8 @@ for lr in "${lrs[@]}"; do
                                             model.lora_config.r=${lora_r}
                                             model.lora_config.lora_alpha=${lora_alpha}
                                             model.lora_config.lora_dropout=${lora_dropout}
+                                            ++trainer.args.seed=${TRAIN_SEED:-42}
+                                            ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                             trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                             trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                             trainer.args.num_train_epochs=${num_train_epochs}
@@ -36722,6 +37877,9 @@ for lr in "${lrs[@]}"; do
                                         )
                                         if [[ "${max_steps}" != "0" ]]; then
                                             train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                        fi
+                                        if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                            train_cmd+=(++trainer.args.full_determinism=true)
                                         fi
                                         python "${train_cmd[@]}"
                                     fi
@@ -36869,6 +38027,16 @@ gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"; raw_lrs="${raw_lrs//\"/}"; raw_lrs="${raw_lrs//\'/}"
@@ -37012,6 +38180,9 @@ for lr in "${lrs[@]}"; do
                                                                                                 fi
 
                                                                                                 task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}_${difficulty_tag}_${attribution_tag}
+                                                                                                if [[ -n "${run_tag_extra}" ]]; then
+                                                                                                    task_name="${task_name}_${run_tag_extra}"
+                                                                                                fi
                                                                                                 run_dir=${output_root}/${task_name}
                                                                                                 eval_dir=${run_dir}/evals
                                                                                                 summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -37027,7 +38198,14 @@ for lr in "${lrs[@]}"; do
                                                                                                 if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                                                                                     mkdir -p "${run_dir}"
                                                                                                     extra_schedule_args=()
-                                                                                                    if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                                                                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                                                                                        extra_schedule_args+=(
+                                                                                                            ++trainer.args.save_strategy=no
+                                                                                                            ++trainer.args.save_total_limit=${save_total_limit}
+                                                                                                            ++trainer.args.save_safetensors=true
+                                                                                                            ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                                                                                        )
+                                                                                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                                                                                         num_rows=$(resolve_num_rows "${cf_dataset_path}" "${cf_dataset_name}" "${cf_dataset_split}" "${cf_dataset_data_files}")
                                                                                                         global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                                                                                         steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -37095,6 +38273,8 @@ for lr in "${lrs[@]}"; do
                                                                                                         model.lora_config.r=${lora_r}
                                                                                                         model.lora_config.lora_alpha=${lora_alpha}
                                                                                                         model.lora_config.lora_dropout=${lora_dropout}
+                                                                                                        ++trainer.args.seed=${TRAIN_SEED:-42}
+                                                                                                        ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                                                                                         trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                                                                                         trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                                                                                         trainer.args.num_train_epochs=${num_train_epochs}
@@ -37107,6 +38287,9 @@ for lr in "${lrs[@]}"; do
                                                                                                     )
                                                                                                     if [[ "${max_steps}" != "0" ]]; then
                                                                                                         train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                                                                                    fi
+                                                                                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                                                                                        train_cmd+=(++trainer.args.full_determinism=true)
                                                                                                     fi
                                                                                                     python "${train_cmd[@]}"
                                                                                                 fi
@@ -37225,6 +38408,16 @@ num_train_epochs=${NUM_EPOCHS:-2}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
 
 raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
 raw_lrs="${raw_lrs//,/ }"
@@ -37270,6 +38463,9 @@ for lr in "${lrs[@]}"; do
                         for lora_dropout in "${lora_dropouts[@]}"; do
                             dropout_tag=${lora_dropout//./p}
                             task_name=rwku_${base_model}_${forget_split}_npo_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}
+                            if [[ -n "${run_tag_extra}" ]]; then
+                                task_name="${task_name}_${run_tag_extra}"
+                            fi
                             run_dir=${output_root}/${task_name}
                             eval_dir=${run_dir}/evals
                             summary_path=${eval_dir}/DUET_SUMMARY.json
@@ -37285,7 +38481,14 @@ for lr in "${lrs[@]}"; do
                             if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
                                 mkdir -p "${run_dir}"
                                 extra_schedule_args=()
-                                if [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                    extra_schedule_args+=(
+                                        ++trainer.args.save_strategy=no
+                                        ++trainer.args.save_total_limit=${save_total_limit}
+                                        ++trainer.args.save_safetensors=true
+                                        ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                    )
+                                elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
                                     num_rows=$(resolve_num_rows "${forget_split}")
                                     global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
                                     steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
@@ -37320,6 +38523,8 @@ for lr in "${lrs[@]}"; do
                                     model.lora_config.r=${lora_r}
                                     model.lora_config.lora_alpha=${lora_alpha}
                                     model.lora_config.lora_dropout=${lora_dropout}
+                                    ++trainer.args.seed=${TRAIN_SEED:-42}
+                                    ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
                                     trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
                                     trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
                                     trainer.args.num_train_epochs=${num_train_epochs}
@@ -37335,6 +38540,9 @@ for lr in "${lrs[@]}"; do
                                 )
                                 if [[ "${max_steps}" != "0" ]]; then
                                     train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                fi
+                                if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                    train_cmd+=(++trainer.args.full_determinism=true)
                                 fi
                                 python "${train_cmd[@]}"
                             fi
@@ -37416,13 +38624,96 @@ LORA_BASE_MODEL_SUBFOLDER=${LORA_BASE_MODEL_SUBFOLDER:-${BASE_MODEL_SUBFOLDER}}
 BASE_TOKENIZER_SUBFOLDER=${BASE_TOKENIZER_SUBFOLDER:-}
 LORA_TOKENIZER_SUBFOLDER=${LORA_TOKENIZER_SUBFOLDER:-${BASE_TOKENIZER_SUBFOLDER}}
 
-UTILITY_ROOT=${UTILITY_ROOT:-${repo_root}/artifacts/evals/utility_1k_v1}
 UTILITY_EVAL_BATCH_SIZE=${UTILITY_EVAL_BATCH_SIZE:-64}
 UTILITY_NUM_FEWSHOT=${UTILITY_NUM_FEWSHOT:-0}
 UTILITY_APPLY_CHAT_TEMPLATE=${UTILITY_APPLY_CHAT_TEMPLATE:-true}
 UTILITY_SYSTEM_INSTRUCTION=${UTILITY_SYSTEM_INSTRUCTION:-null}
 EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
 BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-}
+
+resolve_utility_mode() {
+  if [[ -n "${UTILITY:-}" ]]; then
+    printf '%s\n' "${UTILITY}"
+    return 0
+  fi
+
+  case "${UTILITY_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_EVAL_EXPERIMENT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_TASK_CONFIG_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  printf '3k\n'
+}
+
+configure_utility_env() {
+  local utility_mode="$1"
+  local default_utility_root=""
+  local default_task_config_root=""
+  local default_eval_experiment=""
+  local default_task_name_suffix=""
+
+  case "${utility_mode}" in
+    1k)
+      default_utility_root="${repo_root}/artifacts/evals/utility_1k_v1"
+      default_task_config_root="${repo_root}/configs/lm_eval_tasks/utility_1k"
+      default_eval_experiment="eval/utility_1k/default.yaml"
+      default_task_name_suffix="utility1k"
+      ;;
+    3k)
+      default_utility_root="${repo_root}/artifacts/evals/utility_3k_v1"
+      default_task_config_root="${repo_root}/configs/lm_eval_tasks/utility_3k"
+      default_eval_experiment="eval/utility_3k/default.yaml"
+      default_task_name_suffix="utility3k"
+      ;;
+    *)
+      echo "[utility][ckpt-eval] Unsupported UTILITY=${utility_mode}. Use 1k or 3k." >&2
+      exit 1
+      ;;
+  esac
+
+  UTILITY="${utility_mode}"
+  UTILITY_ROOT="${UTILITY_ROOT:-${default_utility_root}}"
+  UTILITY_TASK_CONFIG_ROOT="${UTILITY_TASK_CONFIG_ROOT:-${default_task_config_root}}"
+  UTILITY_EVAL_EXPERIMENT="${UTILITY_EVAL_EXPERIMENT:-${default_eval_experiment}}"
+  UTILITY_TASK_NAME_SUFFIX="${UTILITY_TASK_NAME_SUFFIX:-${default_task_name_suffix}}"
+}
+
+resolve_under_repo() {
+  local raw_path="$1"
+  if [[ "${raw_path}" = /* ]]; then
+    realpath -m "${raw_path}"
+    return 0
+  fi
+  realpath -m "${repo_root}/${raw_path}"
+}
 
 normalize_model_config_name() {
   local raw="${1:-}"
@@ -37450,15 +38741,35 @@ render_task_configs() {
   local template_dir="$1"
   local output_dir="$2"
   local utility_root="$3"
-  local escaped_root=""
-  escaped_root=$(printf '%s' "${utility_root}" | sed 's/[&|]/\\&/g')
 
   rm -rf "${output_dir}"
   mkdir -p "${output_dir}"
   cp "${template_dir}/utils.py" "${output_dir}/utils.py"
   for yaml_path in "${template_dir}"/*.yaml; do
-    sed "s|artifacts/evals/utility_1k_v1|${escaped_root}|g" "${yaml_path}" > "${output_dir}/$(basename "${yaml_path}")"
+    local target_path="${output_dir}/$(basename "${yaml_path}")"
+    if ! grep -q 'data_files:' "${yaml_path}"; then
+      cp "${yaml_path}" "${target_path}"
+      continue
+    fi
+
+    local data_file_name=""
+    data_file_name=$(awk '/data_files:/ {print $2}' "${yaml_path}" | xargs basename)
+    awk -v utility_root="${utility_root}" -v data_file_name="${data_file_name}" '
+      $1 == "data_files:" {
+        print "  data_files: " utility_root "/" data_file_name
+        next
+      }
+      { print }
+    ' "${yaml_path}" > "${target_path}"
   done
+}
+
+collect_required_panel_files() {
+  local template_dir="$1"
+  local yaml_path=""
+  while IFS= read -r yaml_path; do
+    awk '/data_files:/ {print $2}' "${yaml_path}" | xargs basename
+  done < <(find "${template_dir}" -maxdepth 1 -type f -name '*.yaml' ! -name '_*.yaml' | sort)
 }
 
 copy_tree_contents() {
@@ -37504,12 +38815,12 @@ evaluate_label() {
   mkdir -p "${out_dir}"
 
   local task_name
-  task_name="$(basename "${RUN_DIR}")_${label}_utility1k"
+  task_name="$(basename "${RUN_DIR}")_${label}_${UTILITY_TASK_NAME_SUFFIX}"
 
   local cmd=(
     python
     src/eval.py
-    experiment=eval/utility_1k/default.yaml
+    experiment="${UTILITY_EVAL_EXPERIMENT}"
     model="${model_cfg}"
     task_name="${task_name}"
     model.model_args.pretrained_model_name_or_path="${model_path}"
@@ -37542,7 +38853,9 @@ evaluate_label() {
 
 BASE_MODEL_CFG=$(normalize_model_config_name "${BASE_MODEL_CFG_RAW}")
 LORA_MODEL_CFG=$(normalize_model_config_name "${LORA_MODEL_CFG_RAW}")
+configure_utility_env "$(resolve_utility_mode)"
 UTILITY_ROOT=$(realpath -m "${UTILITY_ROOT}")
+UTILITY_TASK_CONFIG_ROOT=$(resolve_under_repo "${UTILITY_TASK_CONFIG_ROOT}")
 LORA_MODEL_SUBFOLDER_VALUE=${LORA_BASE_MODEL_SUBFOLDER}
 
 if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then
@@ -37551,13 +38864,21 @@ if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then
   LORA_MODEL_SUBFOLDER_VALUE=""
 fi
 
-for required_file in \
-  "${UTILITY_ROOT}/utility_mmlu_pro_400.jsonl" \
-  "${UTILITY_ROOT}/utility_truthfulqa_bin_200.jsonl" \
-  "${UTILITY_ROOT}/utility_arc_200.jsonl" \
-  "${UTILITY_ROOT}/utility_winogrande_200.jsonl"; do
+if [[ ! -d "${UTILITY_TASK_CONFIG_ROOT}" ]]; then
+  echo "[utility][ckpt-eval] Missing utility task config root: ${UTILITY_TASK_CONFIG_ROOT}" >&2
+  exit 1
+fi
+
+mapfile -t REQUIRED_PANEL_FILES < <(collect_required_panel_files "${UTILITY_TASK_CONFIG_ROOT}")
+if [[ ${#REQUIRED_PANEL_FILES[@]} -eq 0 ]]; then
+  echo "[utility][ckpt-eval] No utility task files were discovered under ${UTILITY_TASK_CONFIG_ROOT}" >&2
+  exit 1
+fi
+
+for required_file in "${REQUIRED_PANEL_FILES[@]}"; do
+  required_file="${UTILITY_ROOT}/${required_file}"
   if [[ ! -f "${required_file}" ]]; then
-    echo "[utility][ckpt-eval] Missing Utility-1K panel file: ${required_file}" >&2
+    echo "[utility][ckpt-eval] Missing utility panel file: ${required_file}" >&2
     exit 1
   fi
 done
@@ -37565,7 +38886,7 @@ done
 summary_root="${RUN_DIR}/checkpoint_evals_utility"
 mkdir -p "${summary_root}"
 rendered_task_dir="${summary_root}/_task_defs"
-render_task_configs "${repo_root}/configs/lm_eval_tasks/utility_1k" "${rendered_task_dir}" "${UTILITY_ROOT}"
+render_task_configs "${UTILITY_TASK_CONFIG_ROOT}" "${rendered_task_dir}" "${UTILITY_ROOT}"
 
 evaluate_label \
   "base_model_orig" \
@@ -37617,13 +38938,10 @@ if has_loadable_weights "${RUN_DIR}"; then
     "0" \
     "${LORA_MODEL_SUBFOLDER_VALUE}" \
     "${LORA_TOKENIZER_SUBFOLDER}"
-elif [[ ${#CKPTS[@]} -gt 0 ]]; then
-  last_label=$(basename "${CKPTS[-1]}")
-  echo "[utility][ckpt-eval] Final adapter weights were removed; using ${last_label} as the endpoint proxy."
-  rm -rf "${summary_root}/final"
-  copy_tree_contents "${summary_root}/${last_label}" "${summary_root}/final"
+elif [[ -f "${summary_root}/final/LMEval_SUMMARY.json" ]]; then
+  echo "[utility][ckpt-eval] Reusing existing final utility results from ${summary_root}/final"
 else
-  echo "[utility][ckpt-eval] Skipping final utility eval because no top-level weights were found in ${RUN_DIR}."
+  echo "[utility][ckpt-eval] Skipping final utility eval because no top-level weights or cached final utility summary were found in ${RUN_DIR}."
 fi
 
 python src/tools/summarize_utility_metrics.py \
@@ -42093,7 +43411,7 @@ def collect_eval_summaries(
 
 <content full_path="src/tools/summarize_utility_metrics.py">
 #!/usr/bin/env python3
-"""Summarize Utility-1K checkpoint evaluation metrics."""
+"""Summarize checkpoint utility evaluation metrics."""
 
 from __future__ import annotations
 
@@ -42106,12 +43424,13 @@ from pathlib import Path
 from checkpoint_summary_utils import collect_eval_summaries
 
 
-TASK_KEY_MAP = {
-    "utility_mmlu_pro_400": "mmlu_pro_400_acc",
-    "utility_truthfulqa_bin_200": "truthfulqa_bin_200_acc",
-    "utility_arc_200": "arc_200_acc",
-    "utility_winogrande_200": "winogrande_200_acc",
+BENCHMARK_ORDER = {
+    "mmlu_pro": 0,
+    "truthfulqa_bin": 1,
+    "arc": 2,
+    "winogrande": 3,
 }
+UTILITY_TASK_RE = re.compile(r"^(utility_(mmlu_pro|truthfulqa_bin|arc|winogrande)_\d+)/acc$")
 TASK_COUNT_RE = re.compile(r"_(\d+)$")
 
 
@@ -42137,11 +43456,32 @@ def parse_metric(summary: dict[str, object], task_name: str) -> float | None:
     return float(value)
 
 
+def discover_task_specs(summary: dict[str, object]) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+    for metric_name in summary:
+        match = UTILITY_TASK_RE.fullmatch(metric_name)
+        if match is None:
+            continue
+
+        task_name = match.group(1)
+        specs.append(
+            {
+                "task_name": task_name,
+                "benchmark": match.group(2),
+                "column_name": f"{task_name.removeprefix('utility_')}_acc",
+            }
+        )
+
+    specs.sort(key=lambda spec: (BENCHMARK_ORDER[spec["benchmark"]], spec["task_name"]))
+    return specs
+
+
 def main() -> None:
     args = parse_args()
     run_dir = Path(args.run_dir)
     rows = []
     base_utility: float | None = None
+    discovered_task_specs: dict[str, dict[str, str]] = {}
 
     for row in collect_eval_summaries(
         run_dir=run_dir,
@@ -42151,6 +43491,10 @@ def main() -> None:
         with Path(row["summary_path"]).open("r", encoding="utf-8") as handle:
             metrics = json.load(handle)
 
+        row_task_specs = discover_task_specs(metrics)
+        for spec in row_task_specs:
+            discovered_task_specs.setdefault(spec["task_name"], spec)
+
         output_row = {
             "label": row["label"],
             "step": row["step"],
@@ -42159,12 +43503,12 @@ def main() -> None:
         weighted_sum = 0.0
         total_weight = 0
 
-        for task_name, column_name in TASK_KEY_MAP.items():
-            metric_value = parse_metric(metrics, task_name)
-            output_row[column_name] = metric_value
+        for spec in row_task_specs:
+            metric_value = parse_metric(metrics, spec["task_name"])
+            output_row[spec["column_name"]] = metric_value
             if metric_value is None:
                 continue
-            weight = task_weight(task_name)
+            weight = task_weight(spec["task_name"])
             weighted_sum += metric_value * weight
             total_weight += weight
 
@@ -42183,14 +43527,15 @@ def main() -> None:
 
     output_path = Path(args.output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    ordered_task_specs = sorted(
+        discovered_task_specs.values(),
+        key=lambda spec: (BENCHMARK_ORDER[spec["benchmark"]], spec["task_name"]),
+    )
     fieldnames = [
         "label",
         "step",
         "epoch",
-        "mmlu_pro_400_acc",
-        "truthfulqa_bin_200_acc",
-        "arc_200_acc",
-        "winogrande_200_acc",
+        *[spec["column_name"] for spec in ordered_task_specs],
         "utility_avg",
         "utility_delta_vs_base",
     ]
@@ -43331,7 +44676,7 @@ if __name__ == "__main__":
 
 <content full_path="src/tools/build_utility_1k_panel.py">
 #!/usr/bin/env python3
-"""Build a fixed local Utility-1K panel from multiple-choice benchmarks."""
+"""Build a fixed local utility panel from multiple-choice benchmarks."""
 
 from __future__ import annotations
 
@@ -43354,6 +44699,12 @@ DEFAULT_TRUTHFULQA_PATH = "EleutherAI/truthful_qa_binary"
 DEFAULT_ARC_PATH = "allenai/ai2_arc"
 DEFAULT_WINOGRANDE_PATH = "allenai/winogrande"
 DEFAULT_TRUTHFULQA_CONFIG = "multiple_choice"
+
+
+def infer_panel_name(total_examples: int) -> str:
+    if total_examples > 0 and total_examples % 1000 == 0:
+        return f"utility_{total_examples // 1000}k"
+    return f"utility_{total_examples}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -43802,9 +45153,16 @@ def main() -> None:
         "excluded_due_overlap": winogrande_excluded,
     }
 
+    total_examples = (
+        len(sampled_mmlu_rows)
+        + len(sampled_truthfulqa_rows)
+        + len(sampled_arc_rows)
+        + len(sampled_winogrande_rows)
+    )
+
     manifest = {
         "seed": args.seed,
-        "panel_name": "utility_1k",
+        "panel_name": infer_panel_name(total_examples),
         "panel_version": output_dir.name,
         "counts": {
             "mmlu_pro": len(sampled_mmlu_rows),
@@ -45454,7 +46812,7 @@ from typing import Any
 
 import yaml
 
-from checkpoint_summary_utils import collect_eval_summaries
+from checkpoint_summary_utils import checkpoint_sort_key, collect_eval_summaries
 
 
 META_COLUMNS = {"label", "checkpoint", "step", "epoch"}
@@ -45465,10 +46823,6 @@ PREFERRED_METRIC_ORDER = [
     "holdout_qa_cos_sim",
     "utility_avg",
     "utility_delta_vs_base",
-    "mmlu_pro_400_acc",
-    "truthfulqa_bin_200_acc",
-    "arc_200_acc",
-    "winogrande_200_acc",
 ]
 METHOD_ORDER = [
     "full",
@@ -45489,6 +46843,15 @@ METHOD_RE = re.compile(
     r"_(dual_cf|dpo_cf|simple_ce|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+UTILITY_BENCHMARK_ORDER = {
+    "mmlu_pro": 0,
+    "truthfulqa_bin": 1,
+    "arc": 2,
+    "winogrande": 3,
+}
+UTILITY_COLUMN_RE = re.compile(r"^(mmlu_pro|truthfulqa_bin|arc|winogrande)_\d+_acc$")
+UTILITY_TASK_RE = re.compile(r"^(utility_(mmlu_pro|truthfulqa_bin|arc|winogrande)_\d+)/acc$")
+UTILITY_TASK_COUNT_RE = re.compile(r"_(\d+)$")
 
 
 class NoAliasSafeDumper(yaml.SafeDumper):
@@ -45560,6 +46923,13 @@ def parse_int(value: str | None) -> int | None:
     if value in {None, "", "None"}:
         return None
     return int(float(value))
+
+
+def coalesce(*values: Any) -> Any:
+    for value in values:
+        if value not in {None, "", "None"}:
+            return value
+    return None
 
 
 def load_tsv_rows(path: Path) -> list[dict[str, Any]]:
@@ -45734,6 +47104,11 @@ def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
         if key not in META_COLUMNS and value is not None
     }
     ordered = [metric for metric in PREFERRED_METRIC_ORDER if metric in metric_keys]
+    utility_metric_keys = sorted(
+        (metric for metric in metric_keys if UTILITY_COLUMN_RE.fullmatch(metric)),
+        key=utility_metric_sort_key,
+    )
+    ordered.extend(metric for metric in utility_metric_keys if metric not in ordered)
     ordered.extend(sorted(metric_keys - set(ordered)))
     return ordered
 
@@ -45764,6 +47139,161 @@ def collect_cosine_rows(run_dir: Path) -> list[dict[str, Any]]:
             merged_row[key] = float(value) if value is not None else None
         rows.append(merged_row)
     return rows
+
+
+def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
+    match = UTILITY_COLUMN_RE.fullmatch(metric_name)
+    if match is None:
+        return (len(UTILITY_BENCHMARK_ORDER), metric_name)
+    return (UTILITY_BENCHMARK_ORDER[match.group(1)], metric_name)
+
+
+def utility_task_weight(task_name: str) -> int:
+    match = UTILITY_TASK_COUNT_RE.search(task_name)
+    if match is None:
+        raise ValueError(f"Could not infer sample count from task name: {task_name}")
+    return int(match.group(1))
+
+
+def parse_summary_metric(summary: dict[str, Any], metric_name: str) -> float | None:
+    value = summary.get(metric_name)
+    if value is None:
+        return None
+    return float(value)
+
+
+def parse_utility_metric(summary: dict[str, Any], task_name: str) -> float | None:
+    value = summary.get(f"{task_name}/acc")
+    if value is None:
+        return None
+    return float(value)
+
+
+def discover_utility_task_specs(summary: dict[str, Any]) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+    for metric_name in summary:
+        match = UTILITY_TASK_RE.fullmatch(metric_name)
+        if match is None:
+            continue
+
+        task_name = match.group(1)
+        specs.append(
+            {
+                "task_name": task_name,
+                "benchmark": match.group(2),
+                "column_name": f"{task_name.removeprefix('utility_')}_acc",
+            }
+        )
+
+    specs.sort(key=lambda spec: (UTILITY_BENCHMARK_ORDER[spec["benchmark"]], spec["task_name"]))
+    return specs
+
+
+def collect_checkpoint_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in collect_eval_summaries(
+        run_dir=run_dir,
+        eval_root_name="checkpoint_evals",
+        summary_name="DUET_SUMMARY.json",
+    ):
+        metrics = load_json(Path(row["summary_path"]))
+        rows.append(
+            {
+                "label": row["label"],
+                "checkpoint": row["label"],
+                "step": row["step"],
+                "epoch": row["epoch"],
+                "forget_qa_rouge": parse_summary_metric(metrics, "forget_qa_rouge"),
+                "holdout_qa_rouge": parse_summary_metric(metrics, "holdout_qa_rouge"),
+            }
+        )
+    return rows
+
+
+def collect_utility_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    base_utility: float | None = None
+
+    for row in collect_eval_summaries(
+        run_dir=run_dir,
+        eval_root_name="checkpoint_evals_utility",
+        summary_name="LMEval_SUMMARY.json",
+    ):
+        metrics = load_json(Path(row["summary_path"]))
+        task_specs = discover_utility_task_specs(metrics)
+        output_row = {
+            "label": row["label"],
+            "checkpoint": row["label"],
+            "step": row["step"],
+            "epoch": row["epoch"],
+        }
+        weighted_sum = 0.0
+        total_weight = 0
+
+        for spec in task_specs:
+            metric_value = parse_utility_metric(metrics, spec["task_name"])
+            output_row[spec["column_name"]] = metric_value
+            if metric_value is None:
+                continue
+            weight = utility_task_weight(spec["task_name"])
+            weighted_sum += metric_value * weight
+            total_weight += weight
+
+        utility_avg = weighted_sum / total_weight if total_weight else None
+        output_row["utility_avg"] = utility_avg
+
+        if row["label"] == "base_model_orig":
+            base_utility = utility_avg
+        output_row["utility_delta_vs_base"] = (
+            utility_avg - base_utility
+            if utility_avg is not None and base_utility is not None
+            else None
+        )
+        rows.append(output_row)
+
+    return rows
+
+
+def collect_merged_rows(run_dir: Path) -> list[dict[str, Any]]:
+    merged_summary_path = run_dir / "checkpoint_evals_merged" / "summary.tsv"
+    if merged_summary_path.exists():
+        return load_tsv_rows(merged_summary_path)
+
+    checkpoint_rows = collect_checkpoint_rows_from_json(run_dir)
+    utility_rows = collect_utility_rows_from_json(run_dir)
+    utility_metric_names = [
+        metric
+        for metric in collect_metric_keys(utility_rows)
+        if metric not in {"utility_avg", "utility_delta_vs_base"}
+    ]
+    merged_by_label: dict[str, dict[str, Any]] = {}
+
+    for row in checkpoint_rows:
+        merged_by_label[row["label"]] = dict(row)
+
+    for row in utility_rows:
+        label = str(row["label"])
+        merged = merged_by_label.setdefault(
+            label,
+            {
+                "label": label,
+                "checkpoint": label,
+                "step": None,
+                "epoch": None,
+                "forget_qa_rouge": None,
+                "holdout_qa_rouge": None,
+            },
+        )
+        merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
+        merged["step"] = coalesce(merged.get("step"), row.get("step"))
+        merged["epoch"] = coalesce(merged.get("epoch"), row.get("epoch"))
+        for key in (*utility_metric_names, "utility_avg", "utility_delta_vs_base"):
+            merged[key] = row.get(key)
+
+    return sorted(
+        merged_by_label.values(),
+        key=lambda row: checkpoint_sort_key(str(row["label"]), row.get("step")),
+    )
 
 
 def build_params_payload(
@@ -45825,9 +47355,21 @@ def build_params_payload(
         "hydra_config": config,
         "source_files": {
             "config_yaml": str(run_dir / ".hydra" / "config.yaml"),
-            "overrides_yaml": str(run_dir / ".hydra" / "overrides.yaml"),
-            "merged_summary_tsv": str(run_dir / "checkpoint_evals_merged" / "summary.tsv"),
-            "trajectory_metrics_json": str(run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json"),
+            "overrides_yaml": (
+                str(run_dir / ".hydra" / "overrides.yaml")
+                if (run_dir / ".hydra" / "overrides.yaml").exists()
+                else None
+            ),
+            "merged_summary_tsv": (
+                str(run_dir / "checkpoint_evals_merged" / "summary.tsv")
+                if (run_dir / "checkpoint_evals_merged" / "summary.tsv").exists()
+                else None
+            ),
+            "trajectory_metrics_json": (
+                str(run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json")
+                if (run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json").exists()
+                else None
+            ),
         },
     }
 
@@ -45862,15 +47404,16 @@ def main() -> None:
     for run_dir in run_dirs:
         config_path = run_dir / ".hydra" / "config.yaml"
         overrides_path = run_dir / ".hydra" / "overrides.yaml"
-        merged_summary_path = run_dir / "checkpoint_evals_merged" / "summary.tsv"
         trajectory_path = run_dir / "checkpoint_evals_merged" / "trajectory_metrics.json"
 
-        if not config_path.exists() or not overrides_path.exists() or not merged_summary_path.exists():
+        if not config_path.exists():
             continue
 
         config = load_yaml(config_path)
-        overrides = load_yaml(overrides_path) or []
-        merged_rows = load_tsv_rows(merged_summary_path)
+        overrides = (load_yaml(overrides_path) or []) if overrides_path.exists() else []
+        merged_rows = collect_merged_rows(run_dir)
+        if not merged_rows:
+            continue
         cosine_rows = collect_cosine_rows(run_dir)
         trajectory_metrics = load_json(trajectory_path) if trajectory_path.exists() else {}
 
@@ -47089,16 +48632,12 @@ from pathlib import Path
 SPLITS = ["duet_rare", "duet_popular", "duet_merged", "rwku"]
 LRS = ["1e-4", "5e-5"]
 EPOCH_SPECS = [("2.0", "2"), ("5.0", "5")]
-METRICS = [
+FIXED_METRICS = [
     ("forget_qa_rouge", "F"),
     ("holdout_qa_rouge", "H"),
     ("forget_qa_cos_sim", "FC"),
     ("holdout_qa_cos_sim", "HC"),
     ("utility_avg", "U"),
-    ("mmlu_pro_400_acc", "M"),
-    ("truthfulqa_bin_200_acc", "T"),
-    ("winogrande_200_acc", "W"),
-    ("arc_200_acc", "A"),
 ]
 METRIC_DIRECTION = {
     "forget_qa_rouge": r"$\downarrow$",
@@ -47106,10 +48645,19 @@ METRIC_DIRECTION = {
     "forget_qa_cos_sim": r"$\downarrow$",
     "holdout_qa_cos_sim": r"$\uparrow$",
     "utility_avg": r"$\uparrow$",
-    "mmlu_pro_400_acc": r"$\uparrow$",
-    "truthfulqa_bin_200_acc": r"$\uparrow$",
-    "winogrande_200_acc": r"$\uparrow$",
-    "arc_200_acc": r"$\uparrow$",
+}
+UTILITY_METRIC_RE = re.compile(r"^(mmlu_pro|truthfulqa_bin|winogrande|arc)_\d+_acc$")
+UTILITY_METRIC_ORDER = {
+    "mmlu_pro": 0,
+    "truthfulqa_bin": 1,
+    "winogrande": 2,
+    "arc": 3,
+}
+UTILITY_METRIC_ABBREV = {
+    "mmlu_pro": "M",
+    "truthfulqa_bin": "T",
+    "winogrande": "W",
+    "arc": "A",
 }
 COMBINED_ROW_SPECS = [
     ("old", "full", "Full-old", "blue!10"),
@@ -47190,8 +48738,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_metric_rows(table_path: Path) -> dict[str, dict[str, str]]:
+def load_metric_rows(table_path: Path, *, missing_ok: bool = False) -> dict[str, dict[str, str]]:
     if not table_path.exists():
+        if missing_ok:
+            return {}
         raise FileNotFoundError(f"Missing metric table: {table_path}")
 
     rows: dict[str, dict[str, str]] = {}
@@ -47205,10 +48755,47 @@ def load_metric_rows(table_path: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
-def load_table_bundle(root: Path, split: str, lr: str) -> dict[str, dict[str, dict[str, str]]]:
+def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
+    match = UTILITY_METRIC_RE.fullmatch(metric_name)
+    if match is None:
+        return (len(UTILITY_METRIC_ORDER), metric_name)
+    return (UTILITY_METRIC_ORDER[match.group(1)], metric_name)
+
+
+def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
+    utility_metric_names: set[str] = set()
+    for root in roots:
+        for split in SPLITS:
+            for lr in LRS:
+                split_lr_dir = root / split / lr
+                if not split_lr_dir.exists():
+                    continue
+                for table_path in split_lr_dir.glob("*_acc.tsv"):
+                    metric_name = table_path.stem
+                    if UTILITY_METRIC_RE.fullmatch(metric_name):
+                        utility_metric_names.add(metric_name)
+
+    metrics = list(FIXED_METRICS)
+    for metric_name in sorted(utility_metric_names, key=utility_metric_sort_key):
+        match = UTILITY_METRIC_RE.fullmatch(metric_name)
+        assert match is not None
+        metrics.append((metric_name, UTILITY_METRIC_ABBREV[match.group(1)]))
+    return metrics
+
+
+def load_table_bundle(
+    root: Path,
+    split: str,
+    lr: str,
+    metrics: list[tuple[str, str]],
+) -> dict[str, dict[str, dict[str, str]]]:
     bundle: dict[str, dict[str, dict[str, str]]] = {}
-    for metric_name, _metric_abbrev in METRICS:
-        bundle[metric_name] = load_metric_rows(root / split / lr / f"{metric_name}.tsv")
+    fixed_metric_names = {metric_name for metric_name, _metric_abbrev in FIXED_METRICS}
+    for metric_name, _metric_abbrev in metrics:
+        bundle[metric_name] = load_metric_rows(
+            root / split / lr / f"{metric_name}.tsv",
+            missing_ok=metric_name not in fixed_metric_names,
+        )
     return bundle
 
 
@@ -47222,10 +48809,10 @@ def escape_latex(text: str) -> str:
     return text.replace("_", r"\_")
 
 
-def build_header_cells() -> list[str]:
+def build_header_cells(metrics: list[tuple[str, str]]) -> list[str]:
     cells = ["Method"]
-    for metric_name, metric_abbrev in METRICS:
-        direction = METRIC_DIRECTION[metric_name]
+    for metric_name, metric_abbrev in metrics:
+        direction = METRIC_DIRECTION.get(metric_name, r"$\uparrow$")
         cells.append(f"{metric_abbrev}{direction}")
     return cells
 
@@ -47234,12 +48821,13 @@ def build_row_cells(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    metrics: list[tuple[str, str]],
 ) -> list[str]:
     lines: list[str] = []
     for source_name, source_method, display_name, color in row_specs:
         source_bundle = bundles[source_name]
         value_cells = [display_name]
-        for metric_name, _metric_abbrev in METRICS:
+        for metric_name, _metric_abbrev in metrics:
             method_row = source_bundle[metric_name].get(source_method)
             raw_value = None if method_row is None else method_row.get(epoch_column)
             value_cells.append(format_percent(raw_value))
@@ -47257,9 +48845,11 @@ def build_table(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    metrics: list[tuple[str, str]],
 ) -> str:
-    header_cells = build_header_cells()
-    row_lines = build_row_cells(epoch_column, bundles, row_specs)
+    header_cells = build_header_cells(metrics)
+    row_lines = build_row_cells(epoch_column, bundles, row_specs, metrics)
+    metric_count = len(metrics)
 
     lines = [
         r"\begin{table*}[t]",
@@ -47267,7 +48857,7 @@ def build_table(
         rf"\caption{{{caption}}}",
         rf"\label{{{label}}}",
         r"\resizebox{\textwidth}{!}{%",
-        r"\begin{tabular}{l*{9}{r}}",
+        rf"\begin{{tabular}}{{l*{{{metric_count}}}{{r}}}}",
         r"\toprule",
         " & ".join(header_cells) + r" \\",
         r"\midrule",
@@ -47286,10 +48876,22 @@ def build_slide_frame(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    metrics: list[tuple[str, str]],
     compact: bool = False,
 ) -> str:
-    header_cells = build_header_cells()
-    row_lines = build_row_cells(epoch_column, bundles, row_specs)
+    header_cells = build_header_cells(metrics)
+    row_lines = build_row_cells(epoch_column, bundles, row_specs, metrics)
+    utility_labels = {
+        metric_abbrev
+        for metric_name, metric_abbrev in metrics
+        if metric_name == "utility_avg" or UTILITY_METRIC_RE.fullmatch(metric_name)
+    }
+    utility_label_text = " / ".join(
+        metric_abbrev
+        for _metric_name, metric_abbrev in metrics
+        if metric_abbrev in utility_labels
+    )
+    metric_count = len(metrics)
 
     table_font = r"\scriptsize"
     tabcolsep = "3.6pt"
@@ -47306,7 +48908,7 @@ def build_slide_frame(
     lines = [
         r"\begin{frame}[t]",
         rf"\frametitle{{{frame_title}}}",
-        r"{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}",
+        rf"{{\tiny Values are percentages. F / FC are lower-is-better; H / HC / {utility_label_text} are higher-is-better.}}",
         r"",
         r"{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}",
         r"",
@@ -47316,7 +48918,7 @@ def build_slide_frame(
         rf"\setlength{{\tabcolsep}}{{{tabcolsep}}}",
         rf"\renewcommand{{\arraystretch}}{{{arraystretch}}}",
         rf"\begin{{adjustbox}}{{max width=\textwidth,max totalheight={max_totalheight},center}}",
-        r"\begin{tabular}{l*{9}{r}}",
+        rf"\begin{{tabular}}{{l*{{{metric_count}}}{{r}}}}",
         r"\toprule",
         " & ".join(header_cells) + r" \\",
         r"\midrule",
@@ -47462,8 +49064,16 @@ def simple_ce_display_name(method_name: str, variant_tag: str | None = None) -> 
     return f"{prefix} cf={cf_value} ret={ret_value} gamma={gamma_value}"
 
 
-def build_bundles(root_map: dict[str, Path], split: str, lr: str) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
-    return {source_name: load_table_bundle(root, split, lr) for source_name, root in root_map.items()}
+def build_bundles(
+    root_map: dict[str, Path],
+    split: str,
+    lr: str,
+    metrics: list[tuple[str, str]],
+) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
+    return {
+        source_name: load_table_bundle(root, split, lr, metrics)
+        for source_name, root in root_map.items()
+    }
 
 
 def build_combined_row_specs(
@@ -47496,8 +49106,9 @@ def load_simplece_row_specs(
     source_specs: list[tuple[str, Path, str | None, str]],
     split: str,
     lr: str,
+    metrics: list[tuple[str, str]],
 ) -> list[tuple[str, str, str, str]]:
-    first_metric = METRICS[0][0]
+    first_metric = FIXED_METRICS[0][0]
     methods_by_source: dict[str, set[str]] = {}
     all_methods: set[str] = set()
     for source_name, root, _variant_tag, _color in source_specs:
@@ -47520,12 +49131,17 @@ def build_output_text(
     header_comment: str,
     row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
     bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
+    metrics: list[tuple[str, str]],
     caption_prefix: str,
     label_prefix: str,
 ) -> str:
+    abbreviations = [
+        f"{metric_abbrev}={metric_name}"
+        for metric_name, metric_abbrev in metrics
+    ]
     sections = [
         header_comment,
-        "% Abbreviations: F=forget_qa_rouge, H=holdout_qa_rouge, FC=forget_qa_cos_sim, HC=holdout_qa_cos_sim, U=utility_avg, M=MMLU-Pro, T=TruthfulQA, W=Winogrande, A=ARC.",
+        "% Abbreviations: " + ", ".join(abbreviations) + ".",
         "% Each table is epoch-specific and uses either epoch 2 or epoch 5.",
         "",
     ]
@@ -47550,6 +49166,7 @@ def build_output_text(
                         epoch_column=epoch_column,
                         bundles=bundles,
                         row_specs=row_specs,
+                        metrics=metrics,
                     )
                 )
                 first_table = False
@@ -47561,6 +49178,7 @@ def build_frames(
     *,
     row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
     bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
+    metrics: list[tuple[str, str]],
     title_prefix: str,
     compact: bool = False,
 ) -> list[str]:
@@ -47576,6 +49194,7 @@ def build_frames(
                         epoch_column=epoch_column,
                         bundles=bundles,
                         row_specs=row_specs,
+                        metrics=metrics,
                         compact=compact,
                     )
                 )
@@ -47609,6 +49228,7 @@ def main() -> None:
         combined_roots["simplece_new"] = simnpo_root
     if simplece_old_root is not None:
         combined_roots["simplece_old"] = simplece_old_root
+    metrics = discover_metrics(list(combined_roots.values()))
 
     combined_row_specs_by_split_lr = {
         (split, lr): build_combined_row_specs(simnpo_root, simplece_old_root)
@@ -47621,7 +49241,9 @@ def main() -> None:
         for lr in LRS
     }
     combined_bundles_by_split_lr = {
-        (split, lr): build_bundles(combined_roots, split, lr) for split in SPLITS for lr in LRS
+        (split, lr): build_bundles(combined_roots, split, lr, metrics)
+        for split in SPLITS
+        for lr in LRS
     }
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -47629,6 +49251,7 @@ def main() -> None:
         header_comment="% Combined tables generated by src/tools/build_results_combine_tables.py",
         row_specs_by_split_lr=combined_row_specs_by_split_lr,
         bundles_by_split_lr=combined_bundles_by_split_lr,
+        metrics=metrics,
         caption_prefix="Combined old/new results",
         label_prefix="combined",
     )
@@ -47639,6 +49262,7 @@ def main() -> None:
         combined_frames = build_frames(
             row_specs_by_split_lr=combined_slide_row_specs_by_split_lr,
             bundles_by_split_lr=combined_bundles_by_split_lr,
+            metrics=metrics,
             title_prefix="Combined Tables",
             compact=True,
         )
@@ -47671,22 +49295,25 @@ def main() -> None:
                 "simplece_new": simnpo_root,
             }
         simplece_row_specs_by_split_lr = {
-            (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr)
+            (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr, metrics)
             for split in SPLITS
             for lr in LRS
         }
         simplece_slide_row_specs_by_split_lr = {
-            (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr)
+            (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr, metrics)
             for split in SPLITS
             for lr in LRS
         }
         simplece_bundles_by_split_lr = {
-            (split, lr): build_bundles(simplece_root_map, split, lr) for split in SPLITS for lr in LRS
+            (split, lr): build_bundles(simplece_root_map, split, lr, metrics)
+            for split in SPLITS
+            for lr in LRS
         }
         simplece_output_text = build_output_text(
             header_comment="% SimpleCE-only tables generated by src/tools/build_results_combine_tables.py",
             row_specs_by_split_lr=simplece_row_specs_by_split_lr,
             bundles_by_split_lr=simplece_bundles_by_split_lr,
+            metrics=metrics,
             caption_prefix="SimpleCE ablations",
             label_prefix="simplece",
         )
@@ -47697,6 +49324,7 @@ def main() -> None:
             simplece_frames = build_frames(
                 row_specs_by_split_lr=simplece_slide_row_specs_by_split_lr,
                 bundles_by_split_lr=simplece_bundles_by_split_lr,
+                metrics=metrics,
                 title_prefix="SimpleCE Ablations",
             )
             simplece_slides_tex = build_slides_tex(
@@ -48023,11 +49651,14 @@ def choose_indices(indices: list[str], count: int, seed_key: str) -> list[str]:
 
 
 def load_eval_sidecar(eval_dir: Path) -> dict[str, Any]:
-    config_path = eval_dir / ".hydra" / "config.yaml"
-    if config_path.exists():
-        data = load_yaml(config_path)
-        if isinstance(data, dict):
-            return data
+    for config_path in (
+        eval_dir / ".hydra" / "config.yaml",
+        eval_dir.parent / ".hydra" / "config.yaml",
+    ):
+        if config_path.exists():
+            data = load_yaml(config_path)
+            if isinstance(data, dict):
+                return data
     return {}
 
 
@@ -48499,7 +50130,7 @@ if __name__ == "__main__":
 
 <content full_path="src/tools/merge_checkpoint_utility_summaries.py">
 #!/usr/bin/env python3
-"""Merge forget/locality checkpoint metrics with Utility-1K summaries."""
+"""Merge forget/locality checkpoint metrics with utility summaries."""
 
 from __future__ import annotations
 
@@ -48527,10 +50158,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_tsv(path: Path) -> list[dict[str, Any]]:
+def load_tsv(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        return list(reader)
+        return list(reader.fieldnames or []), list(reader)
 
 
 def parse_float(value: str | None) -> float | None:
@@ -48574,8 +50205,13 @@ def compute_auc(rows: list[dict[str, Any]]) -> float | None:
 
 def main() -> None:
     args = parse_args()
-    checkpoint_rows = load_tsv(Path(args.checkpoint_summary))
-    utility_rows = load_tsv(Path(args.utility_summary))
+    _checkpoint_fieldnames, checkpoint_rows = load_tsv(Path(args.checkpoint_summary))
+    utility_fieldnames, utility_rows = load_tsv(Path(args.utility_summary))
+    utility_metric_fields = [
+        field
+        for field in utility_fieldnames
+        if field not in {"label", "checkpoint", "step", "epoch", "utility_avg", "utility_delta_vs_base"}
+    ]
 
     merged_by_label: dict[str, dict[str, Any]] = {}
     for row in checkpoint_rows:
@@ -48605,14 +50241,7 @@ def main() -> None:
         merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
         merged["step"] = coalesce(merged.get("step"), parse_int(row.get("step")))
         merged["epoch"] = coalesce(merged.get("epoch"), parse_float(row.get("epoch")))
-        for key in (
-            "mmlu_pro_400_acc",
-            "truthfulqa_bin_200_acc",
-            "arc_200_acc",
-            "winogrande_200_acc",
-            "utility_avg",
-            "utility_delta_vs_base",
-        ):
+        for key in (*utility_metric_fields, "utility_avg", "utility_delta_vs_base"):
             merged[key] = parse_float(row.get(key))
 
     merged_rows = sorted(
@@ -48629,10 +50258,7 @@ def main() -> None:
         "epoch",
         "forget_qa_rouge",
         "holdout_qa_rouge",
-        "mmlu_pro_400_acc",
-        "truthfulqa_bin_200_acc",
-        "arc_200_acc",
-        "winogrande_200_acc",
+        *utility_metric_fields,
         "utility_avg",
         "utility_delta_vs_base",
     ]
@@ -49585,7 +51211,7 @@ from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
 from trainer.unlearn.loku import LoKU
 from trainer.unlearn.dual_cf import DualCF
-from trainer.callbacks import JsonlTraceCallback
+from trainer.callbacks import JsonlTraceCallback, SaveOnEpochsCallback
 
 
 import logging
@@ -49650,6 +51276,9 @@ def load_trainer(
     )
     if bool(trainer_cfg.get("trace_jsonl", False)):
         trainer.add_callback(JsonlTraceCallback())
+    save_on_epochs = trainer_cfg.get("save_on_epochs", None)
+    if save_on_epochs:
+        trainer.add_callback(SaveOnEpochsCallback(list(save_on_epochs)))
     logger.info(
         f"{trainer_handler_name} Trainer loaded, output_dir: {trainer_args.output_dir}"
     )
@@ -53347,8 +54976,90 @@ class JsonlTraceCallback(TrainerCallback):
 
 <content full_path="src/trainer/callbacks/__init__.py">
 from trainer.callbacks.jsonl_trace import JsonlTraceCallback
+from trainer.callbacks.save_on_epochs import SaveOnEpochsCallback
 
-__all__ = ["JsonlTraceCallback"]
+__all__ = ["JsonlTraceCallback", "SaveOnEpochsCallback"]
+
+</content>
+
+<content full_path="src/trainer/callbacks/save_on_epochs.py">
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from transformers import TrainerCallback
+
+
+class SaveOnEpochsCallback(TrainerCallback):
+    """Request checkpoint saves when training crosses specific epoch values."""
+
+    def __init__(self, save_epochs):
+        self.save_epochs = sorted({float(epoch) for epoch in (save_epochs or [])})
+        self._done = set()
+
+    def _mark_completed_from_existing_checkpoints(self, output_dir: str) -> None:
+        checkpoint_root = Path(output_dir)
+        if not checkpoint_root.exists():
+            return
+
+        for checkpoint_dir in sorted(checkpoint_root.glob("checkpoint-*")):
+            state_path = checkpoint_dir / "trainer_state.json"
+            if not state_path.exists():
+                continue
+
+            try:
+                payload = json.loads(state_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            epoch = payload.get("epoch")
+            if epoch is None:
+                continue
+
+            epoch = float(epoch)
+            for target_epoch in self.save_epochs:
+                if epoch + 1e-8 >= target_epoch:
+                    self._done.add(round(target_epoch, 8))
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._done.clear()
+
+        # Only infer completed targets from existing checkpoints when Trainer
+        # state already indicates a resumed run. Fresh FORCE_RERUN retrains can
+        # reuse the same output dir, so blindly scanning checkpoint-* would
+        # incorrectly suppress the new intermediate save.
+        if state.global_step > 0 or float(state.epoch or 0.0) > 0.0:
+            self._mark_completed_from_existing_checkpoints(args.output_dir)
+
+        current_epoch = float(state.epoch or 0.0)
+        for epoch in self.save_epochs:
+            if current_epoch + 1e-8 >= epoch:
+                self._done.add(round(epoch, 8))
+        return control
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.epoch is None:
+            return control
+
+        current_epoch = float(state.epoch)
+        final_epoch = float(args.num_train_epochs)
+
+        for epoch in self.save_epochs:
+            epoch_key = round(epoch, 8)
+
+            # Keep the top-level endpoint save on the normal trainer.save_model() path.
+            if epoch >= final_epoch - 1e-8:
+                continue
+
+            if epoch_key in self._done:
+                continue
+
+            if current_epoch + 1e-8 >= epoch:
+                control.should_save = True
+                self._done.add(epoch_key)
+
+        return control
 
 </content>
 

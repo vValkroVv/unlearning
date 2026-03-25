@@ -21,13 +21,96 @@ LORA_BASE_MODEL_SUBFOLDER=${LORA_BASE_MODEL_SUBFOLDER:-${BASE_MODEL_SUBFOLDER}}
 BASE_TOKENIZER_SUBFOLDER=${BASE_TOKENIZER_SUBFOLDER:-}
 LORA_TOKENIZER_SUBFOLDER=${LORA_TOKENIZER_SUBFOLDER:-${BASE_TOKENIZER_SUBFOLDER}}
 
-UTILITY_ROOT=${UTILITY_ROOT:-${repo_root}/artifacts/evals/utility_1k_v1}
 UTILITY_EVAL_BATCH_SIZE=${UTILITY_EVAL_BATCH_SIZE:-64}
 UTILITY_NUM_FEWSHOT=${UTILITY_NUM_FEWSHOT:-0}
 UTILITY_APPLY_CHAT_TEMPLATE=${UTILITY_APPLY_CHAT_TEMPLATE:-true}
 UTILITY_SYSTEM_INSTRUCTION=${UTILITY_SYSTEM_INSTRUCTION:-null}
 EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
 BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-}
+
+resolve_utility_mode() {
+  if [[ -n "${UTILITY:-}" ]]; then
+    printf '%s\n' "${UTILITY}"
+    return 0
+  fi
+
+  case "${UTILITY_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_EVAL_EXPERIMENT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_TASK_CONFIG_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  printf '3k\n'
+}
+
+configure_utility_env() {
+  local utility_mode="$1"
+  local default_utility_root=""
+  local default_task_config_root=""
+  local default_eval_experiment=""
+  local default_task_name_suffix=""
+
+  case "${utility_mode}" in
+    1k)
+      default_utility_root="${repo_root}/artifacts/evals/utility_1k_v1"
+      default_task_config_root="${repo_root}/configs/lm_eval_tasks/utility_1k"
+      default_eval_experiment="eval/utility_1k/default.yaml"
+      default_task_name_suffix="utility1k"
+      ;;
+    3k)
+      default_utility_root="${repo_root}/artifacts/evals/utility_3k_v1"
+      default_task_config_root="${repo_root}/configs/lm_eval_tasks/utility_3k"
+      default_eval_experiment="eval/utility_3k/default.yaml"
+      default_task_name_suffix="utility3k"
+      ;;
+    *)
+      echo "[utility][ckpt-eval] Unsupported UTILITY=${utility_mode}. Use 1k or 3k." >&2
+      exit 1
+      ;;
+  esac
+
+  UTILITY="${utility_mode}"
+  UTILITY_ROOT="${UTILITY_ROOT:-${default_utility_root}}"
+  UTILITY_TASK_CONFIG_ROOT="${UTILITY_TASK_CONFIG_ROOT:-${default_task_config_root}}"
+  UTILITY_EVAL_EXPERIMENT="${UTILITY_EVAL_EXPERIMENT:-${default_eval_experiment}}"
+  UTILITY_TASK_NAME_SUFFIX="${UTILITY_TASK_NAME_SUFFIX:-${default_task_name_suffix}}"
+}
+
+resolve_under_repo() {
+  local raw_path="$1"
+  if [[ "${raw_path}" = /* ]]; then
+    realpath -m "${raw_path}"
+    return 0
+  fi
+  realpath -m "${repo_root}/${raw_path}"
+}
 
 normalize_model_config_name() {
   local raw="${1:-}"
@@ -55,15 +138,35 @@ render_task_configs() {
   local template_dir="$1"
   local output_dir="$2"
   local utility_root="$3"
-  local escaped_root=""
-  escaped_root=$(printf '%s' "${utility_root}" | sed 's/[&|]/\\&/g')
 
   rm -rf "${output_dir}"
   mkdir -p "${output_dir}"
   cp "${template_dir}/utils.py" "${output_dir}/utils.py"
   for yaml_path in "${template_dir}"/*.yaml; do
-    sed "s|artifacts/evals/utility_1k_v1|${escaped_root}|g" "${yaml_path}" > "${output_dir}/$(basename "${yaml_path}")"
+    local target_path="${output_dir}/$(basename "${yaml_path}")"
+    if ! grep -q 'data_files:' "${yaml_path}"; then
+      cp "${yaml_path}" "${target_path}"
+      continue
+    fi
+
+    local data_file_name=""
+    data_file_name=$(awk '/data_files:/ {print $2}' "${yaml_path}" | xargs basename)
+    awk -v utility_root="${utility_root}" -v data_file_name="${data_file_name}" '
+      $1 == "data_files:" {
+        print "  data_files: " utility_root "/" data_file_name
+        next
+      }
+      { print }
+    ' "${yaml_path}" > "${target_path}"
   done
+}
+
+collect_required_panel_files() {
+  local template_dir="$1"
+  local yaml_path=""
+  while IFS= read -r yaml_path; do
+    awk '/data_files:/ {print $2}' "${yaml_path}" | xargs basename
+  done < <(find "${template_dir}" -maxdepth 1 -type f -name '*.yaml' ! -name '_*.yaml' | sort)
 }
 
 copy_tree_contents() {
@@ -109,12 +212,12 @@ evaluate_label() {
   mkdir -p "${out_dir}"
 
   local task_name
-  task_name="$(basename "${RUN_DIR}")_${label}_utility1k"
+  task_name="$(basename "${RUN_DIR}")_${label}_${UTILITY_TASK_NAME_SUFFIX}"
 
   local cmd=(
     python
     src/eval.py
-    experiment=eval/utility_1k/default.yaml
+    experiment="${UTILITY_EVAL_EXPERIMENT}"
     model="${model_cfg}"
     task_name="${task_name}"
     model.model_args.pretrained_model_name_or_path="${model_path}"
@@ -147,7 +250,9 @@ evaluate_label() {
 
 BASE_MODEL_CFG=$(normalize_model_config_name "${BASE_MODEL_CFG_RAW}")
 LORA_MODEL_CFG=$(normalize_model_config_name "${LORA_MODEL_CFG_RAW}")
+configure_utility_env "$(resolve_utility_mode)"
 UTILITY_ROOT=$(realpath -m "${UTILITY_ROOT}")
+UTILITY_TASK_CONFIG_ROOT=$(resolve_under_repo "${UTILITY_TASK_CONFIG_ROOT}")
 LORA_MODEL_SUBFOLDER_VALUE=${LORA_BASE_MODEL_SUBFOLDER}
 
 if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then
@@ -156,13 +261,21 @@ if has_loadable_base_model "${LORA_BASE_MODEL_PATH}"; then
   LORA_MODEL_SUBFOLDER_VALUE=""
 fi
 
-for required_file in \
-  "${UTILITY_ROOT}/utility_mmlu_pro_400.jsonl" \
-  "${UTILITY_ROOT}/utility_truthfulqa_bin_200.jsonl" \
-  "${UTILITY_ROOT}/utility_arc_200.jsonl" \
-  "${UTILITY_ROOT}/utility_winogrande_200.jsonl"; do
+if [[ ! -d "${UTILITY_TASK_CONFIG_ROOT}" ]]; then
+  echo "[utility][ckpt-eval] Missing utility task config root: ${UTILITY_TASK_CONFIG_ROOT}" >&2
+  exit 1
+fi
+
+mapfile -t REQUIRED_PANEL_FILES < <(collect_required_panel_files "${UTILITY_TASK_CONFIG_ROOT}")
+if [[ ${#REQUIRED_PANEL_FILES[@]} -eq 0 ]]; then
+  echo "[utility][ckpt-eval] No utility task files were discovered under ${UTILITY_TASK_CONFIG_ROOT}" >&2
+  exit 1
+fi
+
+for required_file in "${REQUIRED_PANEL_FILES[@]}"; do
+  required_file="${UTILITY_ROOT}/${required_file}"
   if [[ ! -f "${required_file}" ]]; then
-    echo "[utility][ckpt-eval] Missing Utility-1K panel file: ${required_file}" >&2
+    echo "[utility][ckpt-eval] Missing utility panel file: ${required_file}" >&2
     exit 1
   fi
 done
@@ -170,7 +283,7 @@ done
 summary_root="${RUN_DIR}/checkpoint_evals_utility"
 mkdir -p "${summary_root}"
 rendered_task_dir="${summary_root}/_task_defs"
-render_task_configs "${repo_root}/configs/lm_eval_tasks/utility_1k" "${rendered_task_dir}" "${UTILITY_ROOT}"
+render_task_configs "${UTILITY_TASK_CONFIG_ROOT}" "${rendered_task_dir}" "${UTILITY_ROOT}"
 
 evaluate_label \
   "base_model_orig" \

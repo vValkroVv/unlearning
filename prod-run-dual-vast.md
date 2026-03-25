@@ -73,7 +73,8 @@ export DELETE_MODEL_SAFETENSORS_AFTER_EVAL=${DELETE_MODEL_SAFETENSORS_AFTER_EVAL
 export CHECKPOINT_EVERY_HALF_EPOCH=${CHECKPOINT_EVERY_HALF_EPOCH:-0}
 export CHECKPOINT_EPOCHS=${CHECKPOINT_EPOCHS:-2}
 export SAVE_TOTAL_LIMIT=${SAVE_TOTAL_LIMIT:-2}
-export UTILITY_ROOT=${UTILITY_ROOT:-${REPO_ROOT}/artifacts/evals/utility_1k_v1}
+export UTILITY=${UTILITY:-3k}
+export UTILITY_ROOT=${UTILITY_ROOT:-${REPO_ROOT}/artifacts/evals/utility_3k_v1}
 export BASELINE_CACHE_ROOT=${BASELINE_CACHE_ROOT:-${DATA_ROOT}/saves/eval/utility_baselines}
 export RUN_UTILITY_EVAL=${RUN_UTILITY_EVAL:-1}
 export EVAL_RUN_BASE_MODEL=${EVAL_RUN_BASE_MODEL:-0}
@@ -121,7 +122,7 @@ So the run directories land under:
 - `${OUTPUT_ROOT}/<task_name>`
 
 The direct AdaPop launchers now use the same train -> endpoint eval ->
-checkpoint eval -> Utility-1K -> cleanup flow as the other DUET / RWKU
+checkpoint eval -> utility panel -> cleanup flow as the other DUET / RWKU
 baselines. If you need to override the dynamic popularity curve shape, export
 `BETA_A` and `BETA_B` before launching `scripts/duet/ada_pop_duet.sh` or
 `scripts/rwku/ada_pop_rwku.sh`.
@@ -141,9 +142,9 @@ Explicit checkpoint note for the `NUM_EPOCHS=1` validation profile:
 - when you switch back to `NUM_EPOCHS=5`, expect one intermediate
   `checkpoint-*` around epoch 2 plus the final run directory
 
-## Utility-1K panel
+## Utility-3K panel
 
-Build the fixed general-knowledge panel once per machine and reuse it for every
+Build the default general-knowledge panel once per machine and reuse it for every
 method, seed, and checkpoint run.
 
 ```bash
@@ -152,10 +153,11 @@ mkdir -p "${UTILITY_ROOT}" "${BASELINE_CACHE_ROOT}"
 python src/tools/build_utility_1k_panel.py \
   --output-dir "${UTILITY_ROOT}" \
   --seed 1337 \
-  --mmlu-pro 400 \
-  --truthfulqa-bin 200 \
-  --arc 200 \
-  --winogrande 200
+  --mmlu-pro 1200 \
+  --truthfulqa-bin 600 \
+  --arc 600 \
+  --winogrande 600 \
+  --arc-split test
 ```
 
 If you already have a forget-target alias file, rebuild the panel with:
@@ -164,11 +166,27 @@ If you already have a forget-target alias file, rebuild the panel with:
 python src/tools/build_utility_1k_panel.py \
   --output-dir "${UTILITY_ROOT}" \
   --seed 1337 \
+  --mmlu-pro 1200 \
+  --truthfulqa-bin 600 \
+  --arc 600 \
+  --winogrande 600 \
+  --arc-split test \
+  --exclude-targets-file /data/home/vkropoti/unlearning/evals/forget_target_aliases.txt
+```
+
+For matched legacy reruns, switch back explicitly:
+
+```bash
+export UTILITY=1k
+export UTILITY_ROOT=${REPO_ROOT}/artifacts/evals/utility_1k_v1
+
+python src/tools/build_utility_1k_panel.py \
+  --output-dir "${UTILITY_ROOT}" \
+  --seed 1337 \
   --mmlu-pro 400 \
   --truthfulqa-bin 200 \
   --arc 200 \
-  --winogrande 200 \
-  --exclude-targets-file /data/home/vkropoti/unlearning/evals/forget_target_aliases.txt
+  --winogrande 200
 ```
 
 ## vLLM generator
@@ -390,7 +408,7 @@ Every method variant above uses the same trajectory-saving behavior:
 - endpoint eval into `run_dir/evals`
 - training trace in `run_dir/dualcf_trace.jsonl`
 - top-level adapter safetensor cleanup after endpoint eval
-- the same post-hoc checkpoint evaluator for forget/locality plus Utility-1K
+- the same post-hoc checkpoint evaluator for forget/locality plus the selected utility panel
   when `RUN_UTILITY_EVAL=1`
 
 ## RWKU training
@@ -469,7 +487,7 @@ Each script writes:
 
 - per-checkpoint eval folders under `checkpoint_evals/`
 - `checkpoint_evals/summary.tsv`
-- per-checkpoint Utility-1K eval folders under `checkpoint_evals_utility/`
+- per-checkpoint utility eval folders under `checkpoint_evals_utility/`
 - `checkpoint_evals_utility/summary.tsv`
 - `checkpoint_evals_merged/summary.tsv`
 - `checkpoint_evals_merged/trajectory_metrics.json`

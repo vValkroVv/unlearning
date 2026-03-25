@@ -1,0 +1,4 @@
+task: utility_winogrande_600
+include: _base_mc.yaml
+dataset_kwargs:
+  data_files: artifacts/evals/utility_3k_v1/utility_winogrande_600.jsonl

@@ -25,10 +25,6 @@ PREFERRED_METRIC_ORDER = [
     "holdout_qa_cos_sim",
     "utility_avg",
     "utility_delta_vs_base",
-    "mmlu_pro_400_acc",
-    "truthfulqa_bin_200_acc",
-    "arc_200_acc",
-    "winogrande_200_acc",
 ]
 METHOD_ORDER = [
     "full",
@@ -49,12 +45,14 @@ METHOD_RE = re.compile(
     r"_(dual_cf|dpo_cf|simple_ce|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
-UTILITY_TASK_KEY_MAP = {
-    "utility_mmlu_pro_400": "mmlu_pro_400_acc",
-    "utility_truthfulqa_bin_200": "truthfulqa_bin_200_acc",
-    "utility_arc_200": "arc_200_acc",
-    "utility_winogrande_200": "winogrande_200_acc",
+UTILITY_BENCHMARK_ORDER = {
+    "mmlu_pro": 0,
+    "truthfulqa_bin": 1,
+    "arc": 2,
+    "winogrande": 3,
 }
+UTILITY_COLUMN_RE = re.compile(r"^(mmlu_pro|truthfulqa_bin|arc|winogrande)_\d+_acc$")
+UTILITY_TASK_RE = re.compile(r"^(utility_(mmlu_pro|truthfulqa_bin|arc|winogrande)_\d+)/acc$")
 UTILITY_TASK_COUNT_RE = re.compile(r"_(\d+)$")
 
 
@@ -308,6 +306,11 @@ def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
         if key not in META_COLUMNS and value is not None
     }
     ordered = [metric for metric in PREFERRED_METRIC_ORDER if metric in metric_keys]
+    utility_metric_keys = sorted(
+        (metric for metric in metric_keys if UTILITY_COLUMN_RE.fullmatch(metric)),
+        key=utility_metric_sort_key,
+    )
+    ordered.extend(metric for metric in utility_metric_keys if metric not in ordered)
     ordered.extend(sorted(metric_keys - set(ordered)))
     return ordered
 
@@ -340,6 +343,13 @@ def collect_cosine_rows(run_dir: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
+    match = UTILITY_COLUMN_RE.fullmatch(metric_name)
+    if match is None:
+        return (len(UTILITY_BENCHMARK_ORDER), metric_name)
+    return (UTILITY_BENCHMARK_ORDER[match.group(1)], metric_name)
+
+
 def utility_task_weight(task_name: str) -> int:
     match = UTILITY_TASK_COUNT_RE.search(task_name)
     if match is None:
@@ -359,6 +369,26 @@ def parse_utility_metric(summary: dict[str, Any], task_name: str) -> float | Non
     if value is None:
         return None
     return float(value)
+
+
+def discover_utility_task_specs(summary: dict[str, Any]) -> list[dict[str, str]]:
+    specs: list[dict[str, str]] = []
+    for metric_name in summary:
+        match = UTILITY_TASK_RE.fullmatch(metric_name)
+        if match is None:
+            continue
+
+        task_name = match.group(1)
+        specs.append(
+            {
+                "task_name": task_name,
+                "benchmark": match.group(2),
+                "column_name": f"{task_name.removeprefix('utility_')}_acc",
+            }
+        )
+
+    specs.sort(key=lambda spec: (UTILITY_BENCHMARK_ORDER[spec["benchmark"]], spec["task_name"]))
+    return specs
 
 
 def collect_checkpoint_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
@@ -392,6 +422,7 @@ def collect_utility_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
         summary_name="LMEval_SUMMARY.json",
     ):
         metrics = load_json(Path(row["summary_path"]))
+        task_specs = discover_utility_task_specs(metrics)
         output_row = {
             "label": row["label"],
             "checkpoint": row["label"],
@@ -401,12 +432,12 @@ def collect_utility_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
         weighted_sum = 0.0
         total_weight = 0
 
-        for task_name, column_name in UTILITY_TASK_KEY_MAP.items():
-            metric_value = parse_utility_metric(metrics, task_name)
-            output_row[column_name] = metric_value
+        for spec in task_specs:
+            metric_value = parse_utility_metric(metrics, spec["task_name"])
+            output_row[spec["column_name"]] = metric_value
             if metric_value is None:
                 continue
-            weight = utility_task_weight(task_name)
+            weight = utility_task_weight(spec["task_name"])
             weighted_sum += metric_value * weight
             total_weight += weight
 
@@ -432,6 +463,11 @@ def collect_merged_rows(run_dir: Path) -> list[dict[str, Any]]:
 
     checkpoint_rows = collect_checkpoint_rows_from_json(run_dir)
     utility_rows = collect_utility_rows_from_json(run_dir)
+    utility_metric_names = [
+        metric
+        for metric in collect_metric_keys(utility_rows)
+        if metric not in {"utility_avg", "utility_delta_vs_base"}
+    ]
     merged_by_label: dict[str, dict[str, Any]] = {}
 
     for row in checkpoint_rows:
@@ -453,14 +489,7 @@ def collect_merged_rows(run_dir: Path) -> list[dict[str, Any]]:
         merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
         merged["step"] = coalesce(merged.get("step"), row.get("step"))
         merged["epoch"] = coalesce(merged.get("epoch"), row.get("epoch"))
-        for key in (
-            "mmlu_pro_400_acc",
-            "truthfulqa_bin_200_acc",
-            "arc_200_acc",
-            "winogrande_200_acc",
-            "utility_avg",
-            "utility_delta_vs_base",
-        ):
+        for key in (*utility_metric_names, "utility_avg", "utility_delta_vs_base"):
             merged[key] = row.get(key)
 
     return sorted(

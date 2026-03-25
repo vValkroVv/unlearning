@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge forget/locality checkpoint metrics with Utility-1K summaries."""
+"""Merge forget/locality checkpoint metrics with utility summaries."""
 
 from __future__ import annotations
 
@@ -27,10 +27,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_tsv(path: Path) -> list[dict[str, Any]]:
+def load_tsv(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
-        return list(reader)
+        return list(reader.fieldnames or []), list(reader)
 
 
 def parse_float(value: str | None) -> float | None:
@@ -74,8 +74,13 @@ def compute_auc(rows: list[dict[str, Any]]) -> float | None:
 
 def main() -> None:
     args = parse_args()
-    checkpoint_rows = load_tsv(Path(args.checkpoint_summary))
-    utility_rows = load_tsv(Path(args.utility_summary))
+    _checkpoint_fieldnames, checkpoint_rows = load_tsv(Path(args.checkpoint_summary))
+    utility_fieldnames, utility_rows = load_tsv(Path(args.utility_summary))
+    utility_metric_fields = [
+        field
+        for field in utility_fieldnames
+        if field not in {"label", "checkpoint", "step", "epoch", "utility_avg", "utility_delta_vs_base"}
+    ]
 
     merged_by_label: dict[str, dict[str, Any]] = {}
     for row in checkpoint_rows:
@@ -105,14 +110,7 @@ def main() -> None:
         merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
         merged["step"] = coalesce(merged.get("step"), parse_int(row.get("step")))
         merged["epoch"] = coalesce(merged.get("epoch"), parse_float(row.get("epoch")))
-        for key in (
-            "mmlu_pro_400_acc",
-            "truthfulqa_bin_200_acc",
-            "arc_200_acc",
-            "winogrande_200_acc",
-            "utility_avg",
-            "utility_delta_vs_base",
-        ):
+        for key in (*utility_metric_fields, "utility_avg", "utility_delta_vs_base"):
             merged[key] = parse_float(row.get(key))
 
     merged_rows = sorted(
@@ -129,10 +127,7 @@ def main() -> None:
         "epoch",
         "forget_qa_rouge",
         "holdout_qa_rouge",
-        "mmlu_pro_400_acc",
-        "truthfulqa_bin_200_acc",
-        "arc_200_acc",
-        "winogrande_200_acc",
+        *utility_metric_fields,
         "utility_avg",
         "utility_delta_vs_base",
     ]

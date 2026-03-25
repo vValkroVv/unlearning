@@ -2012,11 +2012,19 @@ Updates:
   - append `RUN_TAG_EXTRA=seed<SEED>` to `task_name`
   - accept optional `FULL_DETERMINISM=1`, which injects
     `++trainer.args.full_determinism=true`
+- `SimpleCE` launcher defaults are now aligned to the selected production tuple:
+  - `CF_WEIGHTS=0.5`
+  - `RETAIN_WEIGHTS=1`
+  - `GAMMAS=0`
 - extended the campaign wrapper so it now:
   - accepts `[SEED]` as a fourth positional argument
+  - supports serial multi-seed execution through
+    `SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh GPU LR PHASE`
   - exports `TRAIN_SEED`, `DATA_SEED`, `PYTHONHASHSEED`,
     `CUBLAS_WORKSPACE_CONFIG`, and `FULL_DETERMINISM`
   - includes the seed tag in LoKU tmp artifact naming as well
+  - defaults to `UTILITY=3k` / `utility_3k_v1`, while
+    `UTILITY=1k` keeps the legacy Utility-1K panel and task wiring
 - checkpoint / utility sweeps now stop re-evaluating the top-level final
   adapter:
   - final forget / holdout metrics are reused from `run_dir/evals`
@@ -2064,3 +2072,70 @@ Remaining caveat:
   into the same parent saves tree, the checker can still treat them as
   duplicates or extras. The lowest-risk workaround is one campaign root per
   seed.
+
+## 2026-03-25 Utility-3K Default With Utility-1K Fallback
+
+Files:
+
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `scripts/utility/eval_checkpoints_utility.sh`
+- `configs/eval/lm_eval_utility_3k.yaml`
+- `configs/experiment/eval/utility_3k/default.yaml`
+- `configs/lm_eval_tasks/utility_3k/_base_mc.yaml`
+- `configs/lm_eval_tasks/utility_3k/_utility_3k.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_mmlu_pro_1200.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_truthfulqa_bin_600.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_arc_600.yaml`
+- `configs/lm_eval_tasks/utility_3k/utility_winogrande_600.yaml`
+- `configs/lm_eval_tasks/utility_3k/utils.py`
+- `src/tools/build_utility_1k_panel.py`
+- `src/tools/summarize_utility_metrics.py`
+- `src/tools/merge_checkpoint_utility_summaries.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- added a parallel `Utility-3K` lm-eval stack without mutating the existing
+  `Utility-1K` configs:
+  - `utility_mmlu_pro_1200`
+  - `utility_truthfulqa_bin_600`
+  - `utility_arc_600`
+  - `utility_winogrande_600`
+- `scripts/dualcf/run_campaign_one_lr.sh` now defaults to `UTILITY=3k`
+  while preserving `UTILITY=1k` as the opt-in legacy path
+- the wrapper now infers the utility mode from explicit overrides such as
+  `UTILITY_ROOT`, `UTILITY_EVAL_EXPERIMENT`, or `UTILITY_TASK_CONFIG_ROOT`, so
+  existing manual env overrides can still select the intended panel cleanly
+- `scripts/utility/eval_checkpoints_utility.sh` is no longer pinned to:
+  - `configs/lm_eval_tasks/utility_1k`
+  - `eval/utility_1k/default.yaml`
+  - the four `*_400/*_200` JSONL filenames
+- the checkpoint utility runner now:
+  - picks task defs from the selected utility config root
+  - rewrites local `data_files` paths to the chosen `UTILITY_ROOT`
+  - validates the required JSONLs by reading the selected task YAMLs
+  - tags eval runs with `utility3k` or `utility1k` accordingly
+- `build_utility_1k_panel.py` now infers `panel_name` from the selected total
+  count, so a 3K build no longer writes a manifest labeled `utility_1k`
+- utility summary / merge / structured-save reporting now discover utility
+  columns dynamically from summary keys or TSV headers, so both 1K and 3K
+  panels continue to flow through:
+  - `checkpoint_evals_utility/summary.tsv`
+  - `checkpoint_evals_merged/summary.tsv`
+  - structured-save metric TSVs
+  - combined LaTeX table builders
+
+Validation:
+
+- completed locally:
+  - `bash -n scripts/dualcf/run_campaign_one_lr.sh scripts/utility/eval_checkpoints_utility.sh`
+  - `python -m compileall src/tools/build_utility_1k_panel.py src/tools/summarize_utility_metrics.py src/tools/merge_checkpoint_utility_summaries.py src/tools/build_structured_saves.py src/tools/build_results_combine_tables.py`
+  - synthetic 3K utility-summary smoke for:
+    - `src/tools/summarize_utility_metrics.py`
+    - `src/tools/merge_checkpoint_utility_summaries.py`
+- not completed in this turn:
+  - real-panel `src/eval.py` endpoint eval against `configs/eval/lm_eval_utility_3k.yaml`
+  - end-to-end DUET or RWKU checkpoint utility sweep with actual 3K JSONLs

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a fixed local Utility-1K panel from multiple-choice benchmarks."""
+"""Build a fixed local utility panel from multiple-choice benchmarks."""
 
 from __future__ import annotations
 
@@ -22,6 +22,12 @@ DEFAULT_TRUTHFULQA_PATH = "EleutherAI/truthful_qa_binary"
 DEFAULT_ARC_PATH = "allenai/ai2_arc"
 DEFAULT_WINOGRANDE_PATH = "allenai/winogrande"
 DEFAULT_TRUTHFULQA_CONFIG = "multiple_choice"
+
+
+def infer_panel_name(total_examples: int) -> str:
+    if total_examples > 0 and total_examples % 1000 == 0:
+        return f"utility_{total_examples // 1000}k"
+    return f"utility_{total_examples}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -470,9 +476,16 @@ def main() -> None:
         "excluded_due_overlap": winogrande_excluded,
     }
 
+    total_examples = (
+        len(sampled_mmlu_rows)
+        + len(sampled_truthfulqa_rows)
+        + len(sampled_arc_rows)
+        + len(sampled_winogrande_rows)
+    )
+
     manifest = {
         "seed": args.seed,
-        "panel_name": "utility_1k",
+        "panel_name": infer_panel_name(total_examples),
         "panel_version": output_dir.name,
         "counts": {
             "mmlu_pro": len(sampled_mmlu_rows),

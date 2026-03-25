@@ -1,0 +1,14 @@
+dataset_path: json
+dataset_name: null
+training_split: null
+validation_split: train
+test_split: null
+
+output_type: multiple_choice
+
+doc_to_text: !function utils.doc_to_text
+doc_to_choice: !function utils.doc_to_choice
+doc_to_target: !function utils.doc_to_target
+
+metric_list:
+  - metric: acc

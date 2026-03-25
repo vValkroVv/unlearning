@@ -13,6 +13,7 @@ Examples:
   bash scripts/dualcf/run_campaign_one_lr.sh 2 5e-5 duet_merged 42
   bash scripts/dualcf/run_campaign_one_lr.sh 3 1e-4 rwku 42
   bash scripts/dualcf/run_campaign_one_lr.sh 0 5e-6 duet_split_first 43
+  SEEDS="42 43" bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
 
 Phases:
   duet_rare         Run DUET rare only.
@@ -26,6 +27,8 @@ Phases:
 Defaults:
   PHASE defaults to duet_rare.
   SEED defaults to TRAIN_SEED or 42.
+  SEEDS runs the wrapper serially once per listed seed.
+  UTILITY defaults to 3k. Set UTILITY=1k to reuse the old panel.
   The script expects artifacts to already exist under ARTIFACT_ROOT.
 EOF
 }
@@ -38,9 +41,35 @@ fi
 GPU_ID=$1
 LR=$2
 PHASE=${3:-${PHASE:-duet_rare}}
+self_path=$(realpath "$0")
+
+if [[ -n "${SEEDS:-}" && $# -gt 3 ]]; then
+  echo "[dualcf][campaign] Pass either SEEDS or the 4th positional SEED, not both." >&2
+  exit 1
+fi
+
+if [[ -n "${SEEDS:-}" ]]; then
+  raw_train_seeds="${SEEDS}"
+  raw_train_seeds="${raw_train_seeds//,/ }"
+  raw_train_seeds="${raw_train_seeds//\"/}"
+  raw_train_seeds="${raw_train_seeds//\'/}"
+  read -r -a train_seeds <<< "${raw_train_seeds}"
+
+  if [[ ${#train_seeds[@]} -eq 0 ]]; then
+    echo "[dualcf][campaign] SEEDS was set but no seeds were parsed." >&2
+    exit 1
+  fi
+
+  for seed in "${train_seeds[@]}"; do
+    echo "[dualcf][campaign] starting seed=${seed} gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
+    SEEDS="" bash "${self_path}" "${GPU_ID}" "${LR}" "${PHASE}" "${seed}"
+  done
+  exit 0
+fi
+
 TRAIN_SEED=${4:-${TRAIN_SEED:-42}}
 
-script_dir=$(dirname "$(realpath "$0")")
+script_dir=$(dirname "${self_path}")
 repo_root=$(realpath "${script_dir}/../..")
 
 require_file() {
@@ -73,6 +102,81 @@ resolve_existing_dir() {
   fi
 
   printf '%s\n' "${raw_path}"
+}
+
+resolve_utility_mode() {
+  if [[ -n "${UTILITY:-}" ]]; then
+    printf '%s\n' "${UTILITY}"
+    return 0
+  fi
+
+  case "${UTILITY_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_EVAL_EXPERIMENT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  case "${UTILITY_TASK_CONFIG_ROOT:-}" in
+    *utility_1k*)
+      printf '1k\n'
+      return 0
+      ;;
+    *utility_3k*)
+      printf '3k\n'
+      return 0
+      ;;
+  esac
+
+  printf '3k\n'
+}
+
+configure_utility_panel_env() {
+  local utility_mode="$1"
+  local default_utility_root=""
+  local default_task_config_root=""
+  local default_eval_experiment=""
+  local default_task_name_suffix=""
+
+  case "${utility_mode}" in
+    1k)
+      default_utility_root="/data/home/vkropoti/unlearning/evals/utility_1k_v1"
+      default_task_config_root="${REPO_ROOT}/configs/lm_eval_tasks/utility_1k"
+      default_eval_experiment="eval/utility_1k/default.yaml"
+      default_task_name_suffix="utility1k"
+      ;;
+    3k)
+      default_utility_root="/data/home/vkropoti/unlearning/evals/utility_3k_v1"
+      default_task_config_root="${REPO_ROOT}/configs/lm_eval_tasks/utility_3k"
+      default_eval_experiment="eval/utility_3k/default.yaml"
+      default_task_name_suffix="utility3k"
+      ;;
+    *)
+      echo "[dualcf][campaign] Unsupported UTILITY=${utility_mode}. Use 1k or 3k." >&2
+      exit 1
+      ;;
+  esac
+
+  export UTILITY="${utility_mode}"
+  export UTILITY_ROOT="${UTILITY_ROOT:-${default_utility_root}}"
+  export UTILITY_TASK_CONFIG_ROOT="${UTILITY_TASK_CONFIG_ROOT:-${default_task_config_root}}"
+  export UTILITY_EVAL_EXPERIMENT="${UTILITY_EVAL_EXPERIMENT:-${default_eval_experiment}}"
+  export UTILITY_TASK_NAME_SUFFIX="${UTILITY_TASK_NAME_SUFFIX:-${default_task_name_suffix}}"
 }
 
 cleanup_loku_wrapper_tmp_dirs() {
@@ -123,7 +227,7 @@ configure_method_variant_env() {
   # Keep LoKU's internal EXIT trap from deleting debug artifacts on failure.
   # The wrapper removes these temp dirs only after the LoKU method returns
   # successfully, which is after train + endpoint eval + checkpoint eval +
-  # Utility-1K eval.
+  # Utility eval.
   export DELETE_IMPORTANCE_AFTER_RUN="${LOKU_DELETE_IMPORTANCE_AFTER_RUN:-0}"
   export DELETE_FILA_BASE_AFTER_EVAL="${LOKU_DELETE_FILA_BASE_AFTER_EVAL:-0}"
   export DELETE_RUN_BASE_MODEL_AFTER_EVAL="${LOKU_DELETE_RUN_BASE_MODEL_AFTER_EVAL:-1}"
@@ -196,12 +300,13 @@ export VENV_PATH="${VENV_PATH:-/data/home/vkropoti/unlearning-venv}"
 cd "${REPO_ROOT}"
 source "${VENV_PATH}/bin/activate"
 
+configure_utility_panel_env "$(resolve_utility_mode)"
+
 export HF_HOME="${HF_HOME:-/data/home/vkropoti/unlearning/.hf_home}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-/data/home/vkropoti/unlearning/.hf_datasets_cache}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/data/home/vkropoti/unlearning/.triton}"
 export ARTIFACT_ROOT="${ARTIFACT_ROOT:-/data/home/vkropoti/unlearning/artifacts/dualcf}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-/data/home/vkropoti/unlearning/saves/unlearn}"
-export UTILITY_ROOT="${UTILITY_ROOT:-/data/home/vkropoti/unlearning/evals/utility_1k_v1}"
 export BASELINE_CACHE_ROOT="${BASELINE_CACHE_ROOT:-/data/home/vkropoti/unlearning/saves/eval/utility_baselines}"
 export LOKU_IMPORTANCE_TMP_DIR="${LOKU_IMPORTANCE_TMP_DIR:-/data/home/vkropoti/unlearning/importance_tmp}"
 export LOKU_FILA_BASE_TMP_DIR="${LOKU_FILA_BASE_TMP_DIR:-/data/home/vkropoti/unlearning/fila_base_tmp}"
@@ -277,6 +382,7 @@ echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
 echo "[dualcf][campaign] seed=${TRAIN_SEED} data_seed=${DATA_SEED}"
 echo "[dualcf][campaign] full_determinism=${FULL_DETERMINISM}"
 echo "[dualcf][campaign] method_variants=${METHOD_VARIANTS}"
+echo "[dualcf][campaign] utility=${UTILITY} utility_root=${UTILITY_ROOT}"
 echo "[dualcf][campaign] duet_local_sft_base=${DUET_LOCAL_SFT_BASE}"
 
 duet_rare_artifact="${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl"

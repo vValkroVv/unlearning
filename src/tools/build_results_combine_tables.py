@@ -12,16 +12,12 @@ from pathlib import Path
 SPLITS = ["duet_rare", "duet_popular", "duet_merged", "rwku"]
 LRS = ["1e-4", "5e-5"]
 EPOCH_SPECS = [("2.0", "2"), ("5.0", "5")]
-METRICS = [
+FIXED_METRICS = [
     ("forget_qa_rouge", "F"),
     ("holdout_qa_rouge", "H"),
     ("forget_qa_cos_sim", "FC"),
     ("holdout_qa_cos_sim", "HC"),
     ("utility_avg", "U"),
-    ("mmlu_pro_400_acc", "M"),
-    ("truthfulqa_bin_200_acc", "T"),
-    ("winogrande_200_acc", "W"),
-    ("arc_200_acc", "A"),
 ]
 METRIC_DIRECTION = {
     "forget_qa_rouge": r"$\downarrow$",
@@ -29,10 +25,19 @@ METRIC_DIRECTION = {
     "forget_qa_cos_sim": r"$\downarrow$",
     "holdout_qa_cos_sim": r"$\uparrow$",
     "utility_avg": r"$\uparrow$",
-    "mmlu_pro_400_acc": r"$\uparrow$",
-    "truthfulqa_bin_200_acc": r"$\uparrow$",
-    "winogrande_200_acc": r"$\uparrow$",
-    "arc_200_acc": r"$\uparrow$",
+}
+UTILITY_METRIC_RE = re.compile(r"^(mmlu_pro|truthfulqa_bin|winogrande|arc)_\d+_acc$")
+UTILITY_METRIC_ORDER = {
+    "mmlu_pro": 0,
+    "truthfulqa_bin": 1,
+    "winogrande": 2,
+    "arc": 3,
+}
+UTILITY_METRIC_ABBREV = {
+    "mmlu_pro": "M",
+    "truthfulqa_bin": "T",
+    "winogrande": "W",
+    "arc": "A",
 }
 COMBINED_ROW_SPECS = [
     ("old", "full", "Full-old", "blue!10"),
@@ -113,8 +118,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_metric_rows(table_path: Path) -> dict[str, dict[str, str]]:
+def load_metric_rows(table_path: Path, *, missing_ok: bool = False) -> dict[str, dict[str, str]]:
     if not table_path.exists():
+        if missing_ok:
+            return {}
         raise FileNotFoundError(f"Missing metric table: {table_path}")
 
     rows: dict[str, dict[str, str]] = {}
@@ -128,10 +135,47 @@ def load_metric_rows(table_path: Path) -> dict[str, dict[str, str]]:
     return rows
 
 
-def load_table_bundle(root: Path, split: str, lr: str) -> dict[str, dict[str, dict[str, str]]]:
+def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
+    match = UTILITY_METRIC_RE.fullmatch(metric_name)
+    if match is None:
+        return (len(UTILITY_METRIC_ORDER), metric_name)
+    return (UTILITY_METRIC_ORDER[match.group(1)], metric_name)
+
+
+def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
+    utility_metric_names: set[str] = set()
+    for root in roots:
+        for split in SPLITS:
+            for lr in LRS:
+                split_lr_dir = root / split / lr
+                if not split_lr_dir.exists():
+                    continue
+                for table_path in split_lr_dir.glob("*_acc.tsv"):
+                    metric_name = table_path.stem
+                    if UTILITY_METRIC_RE.fullmatch(metric_name):
+                        utility_metric_names.add(metric_name)
+
+    metrics = list(FIXED_METRICS)
+    for metric_name in sorted(utility_metric_names, key=utility_metric_sort_key):
+        match = UTILITY_METRIC_RE.fullmatch(metric_name)
+        assert match is not None
+        metrics.append((metric_name, UTILITY_METRIC_ABBREV[match.group(1)]))
+    return metrics
+
+
+def load_table_bundle(
+    root: Path,
+    split: str,
+    lr: str,
+    metrics: list[tuple[str, str]],
+) -> dict[str, dict[str, dict[str, str]]]:
     bundle: dict[str, dict[str, dict[str, str]]] = {}
-    for metric_name, _metric_abbrev in METRICS:
-        bundle[metric_name] = load_metric_rows(root / split / lr / f"{metric_name}.tsv")
+    fixed_metric_names = {metric_name for metric_name, _metric_abbrev in FIXED_METRICS}
+    for metric_name, _metric_abbrev in metrics:
+        bundle[metric_name] = load_metric_rows(
+            root / split / lr / f"{metric_name}.tsv",
+            missing_ok=metric_name not in fixed_metric_names,
+        )
     return bundle
 
 
@@ -145,10 +189,10 @@ def escape_latex(text: str) -> str:
     return text.replace("_", r"\_")
 
 
-def build_header_cells() -> list[str]:
+def build_header_cells(metrics: list[tuple[str, str]]) -> list[str]:
     cells = ["Method"]
-    for metric_name, metric_abbrev in METRICS:
-        direction = METRIC_DIRECTION[metric_name]
+    for metric_name, metric_abbrev in metrics:
+        direction = METRIC_DIRECTION.get(metric_name, r"$\uparrow$")
         cells.append(f"{metric_abbrev}{direction}")
     return cells
 
@@ -157,12 +201,13 @@ def build_row_cells(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    metrics: list[tuple[str, str]],
 ) -> list[str]:
     lines: list[str] = []
     for source_name, source_method, display_name, color in row_specs:
         source_bundle = bundles[source_name]
         value_cells = [display_name]
-        for metric_name, _metric_abbrev in METRICS:
+        for metric_name, _metric_abbrev in metrics:
             method_row = source_bundle[metric_name].get(source_method)
             raw_value = None if method_row is None else method_row.get(epoch_column)
             value_cells.append(format_percent(raw_value))
@@ -180,9 +225,11 @@ def build_table(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    metrics: list[tuple[str, str]],
 ) -> str:
-    header_cells = build_header_cells()
-    row_lines = build_row_cells(epoch_column, bundles, row_specs)
+    header_cells = build_header_cells(metrics)
+    row_lines = build_row_cells(epoch_column, bundles, row_specs, metrics)
+    metric_count = len(metrics)
 
     lines = [
         r"\begin{table*}[t]",
@@ -190,7 +237,7 @@ def build_table(
         rf"\caption{{{caption}}}",
         rf"\label{{{label}}}",
         r"\resizebox{\textwidth}{!}{%",
-        r"\begin{tabular}{l*{9}{r}}",
+        rf"\begin{{tabular}}{{l*{{{metric_count}}}{{r}}}}",
         r"\toprule",
         " & ".join(header_cells) + r" \\",
         r"\midrule",
@@ -209,10 +256,22 @@ def build_slide_frame(
     epoch_column: str,
     bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
     row_specs: list[tuple[str, str, str, str]],
+    metrics: list[tuple[str, str]],
     compact: bool = False,
 ) -> str:
-    header_cells = build_header_cells()
-    row_lines = build_row_cells(epoch_column, bundles, row_specs)
+    header_cells = build_header_cells(metrics)
+    row_lines = build_row_cells(epoch_column, bundles, row_specs, metrics)
+    utility_labels = {
+        metric_abbrev
+        for metric_name, metric_abbrev in metrics
+        if metric_name == "utility_avg" or UTILITY_METRIC_RE.fullmatch(metric_name)
+    }
+    utility_label_text = " / ".join(
+        metric_abbrev
+        for _metric_name, metric_abbrev in metrics
+        if metric_abbrev in utility_labels
+    )
+    metric_count = len(metrics)
 
     table_font = r"\scriptsize"
     tabcolsep = "3.6pt"
@@ -229,7 +288,7 @@ def build_slide_frame(
     lines = [
         r"\begin{frame}[t]",
         rf"\frametitle{{{frame_title}}}",
-        r"{\tiny Values are percentages. F / FC are lower-is-better; H / HC / U / M / T / W / A are higher-is-better.}",
+        rf"{{\tiny Values are percentages. F / FC are lower-is-better; H / HC / {utility_label_text} are higher-is-better.}}",
         r"",
         r"{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}",
         r"",
@@ -239,7 +298,7 @@ def build_slide_frame(
         rf"\setlength{{\tabcolsep}}{{{tabcolsep}}}",
         rf"\renewcommand{{\arraystretch}}{{{arraystretch}}}",
         rf"\begin{{adjustbox}}{{max width=\textwidth,max totalheight={max_totalheight},center}}",
-        r"\begin{tabular}{l*{9}{r}}",
+        rf"\begin{{tabular}}{{l*{{{metric_count}}}{{r}}}}",
         r"\toprule",
         " & ".join(header_cells) + r" \\",
         r"\midrule",
@@ -385,8 +444,16 @@ def simple_ce_display_name(method_name: str, variant_tag: str | None = None) -> 
     return f"{prefix} cf={cf_value} ret={ret_value} gamma={gamma_value}"
 
 
-def build_bundles(root_map: dict[str, Path], split: str, lr: str) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
-    return {source_name: load_table_bundle(root, split, lr) for source_name, root in root_map.items()}
+def build_bundles(
+    root_map: dict[str, Path],
+    split: str,
+    lr: str,
+    metrics: list[tuple[str, str]],
+) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
+    return {
+        source_name: load_table_bundle(root, split, lr, metrics)
+        for source_name, root in root_map.items()
+    }
 
 
 def build_combined_row_specs(
@@ -419,8 +486,9 @@ def load_simplece_row_specs(
     source_specs: list[tuple[str, Path, str | None, str]],
     split: str,
     lr: str,
+    metrics: list[tuple[str, str]],
 ) -> list[tuple[str, str, str, str]]:
-    first_metric = METRICS[0][0]
+    first_metric = FIXED_METRICS[0][0]
     methods_by_source: dict[str, set[str]] = {}
     all_methods: set[str] = set()
     for source_name, root, _variant_tag, _color in source_specs:
@@ -443,12 +511,17 @@ def build_output_text(
     header_comment: str,
     row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
     bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
+    metrics: list[tuple[str, str]],
     caption_prefix: str,
     label_prefix: str,
 ) -> str:
+    abbreviations = [
+        f"{metric_abbrev}={metric_name}"
+        for metric_name, metric_abbrev in metrics
+    ]
     sections = [
         header_comment,
-        "% Abbreviations: F=forget_qa_rouge, H=holdout_qa_rouge, FC=forget_qa_cos_sim, HC=holdout_qa_cos_sim, U=utility_avg, M=MMLU-Pro, T=TruthfulQA, W=Winogrande, A=ARC.",
+        "% Abbreviations: " + ", ".join(abbreviations) + ".",
         "% Each table is epoch-specific and uses either epoch 2 or epoch 5.",
         "",
     ]
@@ -473,6 +546,7 @@ def build_output_text(
                         epoch_column=epoch_column,
                         bundles=bundles,
                         row_specs=row_specs,
+                        metrics=metrics,
                     )
                 )
                 first_table = False
@@ -484,6 +558,7 @@ def build_frames(
     *,
     row_specs_by_split_lr: dict[tuple[str, str], list[tuple[str, str, str, str]]],
     bundles_by_split_lr: dict[tuple[str, str], dict[str, dict[str, dict[str, dict[str, str]]]]],
+    metrics: list[tuple[str, str]],
     title_prefix: str,
     compact: bool = False,
 ) -> list[str]:
@@ -499,6 +574,7 @@ def build_frames(
                         epoch_column=epoch_column,
                         bundles=bundles,
                         row_specs=row_specs,
+                        metrics=metrics,
                         compact=compact,
                     )
                 )
@@ -532,6 +608,7 @@ def main() -> None:
         combined_roots["simplece_new"] = simnpo_root
     if simplece_old_root is not None:
         combined_roots["simplece_old"] = simplece_old_root
+    metrics = discover_metrics(list(combined_roots.values()))
 
     combined_row_specs_by_split_lr = {
         (split, lr): build_combined_row_specs(simnpo_root, simplece_old_root)
@@ -544,7 +621,9 @@ def main() -> None:
         for lr in LRS
     }
     combined_bundles_by_split_lr = {
-        (split, lr): build_bundles(combined_roots, split, lr) for split in SPLITS for lr in LRS
+        (split, lr): build_bundles(combined_roots, split, lr, metrics)
+        for split in SPLITS
+        for lr in LRS
     }
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -552,6 +631,7 @@ def main() -> None:
         header_comment="% Combined tables generated by src/tools/build_results_combine_tables.py",
         row_specs_by_split_lr=combined_row_specs_by_split_lr,
         bundles_by_split_lr=combined_bundles_by_split_lr,
+        metrics=metrics,
         caption_prefix="Combined old/new results",
         label_prefix="combined",
     )
@@ -562,6 +642,7 @@ def main() -> None:
         combined_frames = build_frames(
             row_specs_by_split_lr=combined_slide_row_specs_by_split_lr,
             bundles_by_split_lr=combined_bundles_by_split_lr,
+            metrics=metrics,
             title_prefix="Combined Tables",
             compact=True,
         )
@@ -594,22 +675,25 @@ def main() -> None:
                 "simplece_new": simnpo_root,
             }
         simplece_row_specs_by_split_lr = {
-            (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr)
+            (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr, metrics)
             for split in SPLITS
             for lr in LRS
         }
         simplece_slide_row_specs_by_split_lr = {
-            (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr)
+            (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr, metrics)
             for split in SPLITS
             for lr in LRS
         }
         simplece_bundles_by_split_lr = {
-            (split, lr): build_bundles(simplece_root_map, split, lr) for split in SPLITS for lr in LRS
+            (split, lr): build_bundles(simplece_root_map, split, lr, metrics)
+            for split in SPLITS
+            for lr in LRS
         }
         simplece_output_text = build_output_text(
             header_comment="% SimpleCE-only tables generated by src/tools/build_results_combine_tables.py",
             row_specs_by_split_lr=simplece_row_specs_by_split_lr,
             bundles_by_split_lr=simplece_bundles_by_split_lr,
+            metrics=metrics,
             caption_prefix="SimpleCE ablations",
             label_prefix="simplece",
         )
@@ -620,6 +704,7 @@ def main() -> None:
             simplece_frames = build_frames(
                 row_specs_by_split_lr=simplece_slide_row_specs_by_split_lr,
                 bundles_by_split_lr=simplece_bundles_by_split_lr,
+                metrics=metrics,
                 title_prefix="SimpleCE Ablations",
             )
             simplece_slides_tex = build_slides_tex(
