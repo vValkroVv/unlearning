@@ -15,6 +15,8 @@ EPOCH_SPECS = [("2.0", "2"), ("5.0", "5")]
 FIXED_METRICS = [
     ("forget_qa_rouge", "F"),
     ("holdout_qa_rouge", "H"),
+    ("forget_wrong_gen_rate", "FW"),
+    ("holdout_wrong_gen_rate", "HW"),
     ("forget_qa_cos_sim", "FC"),
     ("holdout_qa_cos_sim", "HC"),
     ("utility_avg", "U"),
@@ -22,9 +24,41 @@ FIXED_METRICS = [
 METRIC_DIRECTION = {
     "forget_qa_rouge": r"$\downarrow$",
     "holdout_qa_rouge": r"$\uparrow$",
+    "forget_wrong_gen_rate": r"$\downarrow$",
+    "holdout_wrong_gen_rate": r"$\downarrow$",
     "forget_qa_cos_sim": r"$\downarrow$",
     "holdout_qa_cos_sim": r"$\uparrow$",
     "utility_avg": r"$\uparrow$",
+}
+WRONG_GENERATION_METRIC_NAMES = {"forget_wrong_gen_rate", "holdout_wrong_gen_rate"}
+WRONG_GENERATION_METRIC_MAP = {
+    "forget_qa_rouge": "forget_wrong_gen_rate",
+    "holdout_qa_rouge": "holdout_wrong_gen_rate",
+}
+WRONG_GENERATION_METHOD_MAP = {
+    "dual_cf_full": "full",
+    "dual_cf_d_only": "d_only",
+    "dual_cf_a_only": "a_only",
+    "dpo_cf": "dpo",
+    "ga": "ga",
+    "ada_pop": "ada_pop",
+    "npo": "npo",
+    "npo_sam": "npo_sam",
+    "loku": "loku",
+    "simnpo": "simnpo",
+}
+METRIC_LEGEND_LABELS = {
+    "F": "forget ROUGE",
+    "H": "holdout ROUGE",
+    "FW": "forget wrong-generation rate",
+    "HW": "holdout wrong-generation rate",
+    "FC": "forget cosine similarity",
+    "HC": "holdout cosine similarity",
+    "U": "utility_avg",
+    "M": "MMLU-Pro",
+    "T": "TruthfulQA",
+    "W": "Winogrande",
+    "A": "ARC",
 }
 UTILITY_METRIC_RE = re.compile(r"^(mmlu_pro|truthfulqa_bin|winogrande|arc)_\d+_acc$")
 UTILITY_METRIC_ORDER = {
@@ -96,9 +130,25 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to a Beamer .tex file with one slide per split/LR/epoch table.",
     )
     parser.add_argument(
+        "--wrong-generations-root",
+        type=Path,
+        help=(
+            "Optional path to analyze_wrong_generations.py outputs that contain "
+            "method_stage_summary.tsv for wrong-generation rates."
+        ),
+    )
+    parser.add_argument(
         "--simnpo-root",
         type=Path,
-        help="Optional path to a structured-saves directory that contains simnpo rows and the newer simple_ce rows.",
+        help="Optional path to a structured-saves directory that contains simnpo rows.",
+    )
+    parser.add_argument(
+        "--simplece-new-root",
+        type=Path,
+        help=(
+            "Optional path to a structured-saves directory that contains the newer simple_ce rows. "
+            "Defaults to --simnpo-root when omitted."
+        ),
     )
     parser.add_argument(
         "--simplece-old-root",
@@ -142,7 +192,11 @@ def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
     return (UTILITY_METRIC_ORDER[match.group(1)], metric_name)
 
 
-def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
+def discover_metrics(
+    roots: list[Path],
+    *,
+    include_wrong_generation_metrics: bool,
+) -> list[tuple[str, str]]:
     utility_metric_names: set[str] = set()
     for root in roots:
         for split in SPLITS:
@@ -155,7 +209,11 @@ def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
                     if UTILITY_METRIC_RE.fullmatch(metric_name):
                         utility_metric_names.add(metric_name)
 
-    metrics = list(FIXED_METRICS)
+    metrics = [
+        metric_spec
+        for metric_spec in FIXED_METRICS
+        if include_wrong_generation_metrics or metric_spec[0] not in WRONG_GENERATION_METRIC_NAMES
+    ]
     for metric_name in sorted(utility_metric_names, key=utility_metric_sort_key):
         match = UTILITY_METRIC_RE.fullmatch(metric_name)
         assert match is not None
@@ -163,18 +221,151 @@ def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
     return metrics
 
 
+def normalize_epoch_column(raw_value: str | None) -> str | None:
+    if raw_value in {None, ""}:
+        return None
+    return f"{float(raw_value):.1f}"
+
+
+def infer_wrong_generation_split(benchmark: str, forget_split: str) -> str | None:
+    if benchmark == "rwku":
+        return "rwku"
+    if forget_split == "city_forget_rare_5":
+        return "duet_rare"
+    if forget_split == "city_forget_popular_5":
+        return "duet_popular"
+    if forget_split in {"city_forget_5", "city_forget_rare_5+city_forget_popular_5"}:
+        return "duet_merged"
+    return None
+
+
+def load_wrong_generation_index(
+    wrong_generations_root: Path,
+) -> tuple[dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]], set[str]]:
+    summary_path = wrong_generations_root / "method_stage_summary.tsv"
+
+    index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]] = {}
+    labels: set[str] = set()
+    with summary_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            metric_name = WRONG_GENERATION_METRIC_MAP.get(str(row.get("metric_name") or ""))
+            if metric_name is None:
+                continue
+            split = infer_wrong_generation_split(
+                str(row.get("benchmark") or ""),
+                str(row.get("forget_split") or ""),
+            )
+            epoch_column = normalize_epoch_column(row.get("epoch"))
+            wrong_pct = row.get("wrong_pct")
+            if split is None or epoch_column is None or wrong_pct in {None, ""}:
+                continue
+
+            label = str(row.get("input_root_label") or "")
+            if not label:
+                continue
+            labels.add(label)
+            split_map = index.setdefault(label, {}).setdefault(split, {}).setdefault(
+                str(row.get("lr") or ""),
+                {},
+            )
+            method_key = str(row.get("method_key") or "")
+            method_map = split_map.setdefault(epoch_column, {}).setdefault(method_key, {})
+            method_map[metric_name] = format(float(wrong_pct) / 100.0, ".12g")
+
+    return index, labels
+
+
+def resolve_wrong_generation_label(root: Path, available_labels: set[str]) -> str | None:
+    for candidate in [root.name, *(parent.name for parent in root.parents)]:
+        if candidate and candidate in available_labels:
+            return candidate
+    return None
+
+
+def resolve_wrong_generation_methods(
+    method_key: str,
+    source_methods: set[str],
+) -> list[str]:
+    mapped_method = WRONG_GENERATION_METHOD_MAP.get(method_key)
+    if mapped_method is not None:
+        return [mapped_method] if mapped_method in source_methods else []
+
+    if method_key != "simple_ce":
+        return []
+
+    simple_ce_methods = sorted(
+        (method_name for method_name in source_methods if method_name.startswith("simple_ce")),
+        key=simple_ce_sort_key,
+    )
+    if len(simple_ce_methods) == 1:
+        return simple_ce_methods
+    return []
+
+
+def load_wrong_generation_rows(
+    wrong_generation_index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]],
+    wrong_generation_label: str | None,
+    split: str,
+    lr: str,
+    metric_name: str,
+    source_methods: set[str],
+) -> dict[str, dict[str, str]]:
+    if wrong_generation_label is None:
+        return {}
+
+    rows: dict[str, dict[str, str]] = {}
+    by_epoch = (
+        wrong_generation_index.get(wrong_generation_label, {})
+        .get(split, {})
+        .get(lr, {})
+    )
+    for epoch_column, method_entries in by_epoch.items():
+        for method_key, metric_values in method_entries.items():
+            raw_value = metric_values.get(metric_name)
+            if raw_value is None:
+                continue
+            for resolved_method in resolve_wrong_generation_methods(method_key, source_methods):
+                row = rows.setdefault(resolved_method, {"method": resolved_method})
+                row[epoch_column] = raw_value
+    return rows
+
+
 def load_table_bundle(
     root: Path,
     split: str,
     lr: str,
     metrics: list[tuple[str, str]],
+    *,
+    wrong_generation_index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]
+    | None = None,
+    wrong_generation_label: str | None = None,
 ) -> dict[str, dict[str, dict[str, str]]]:
     bundle: dict[str, dict[str, dict[str, str]]] = {}
-    fixed_metric_names = {metric_name for metric_name, _metric_abbrev in FIXED_METRICS}
+    fixed_metric_names = {
+        metric_name
+        for metric_name, _metric_abbrev in FIXED_METRICS
+        if metric_name not in WRONG_GENERATION_METRIC_NAMES
+    }
     for metric_name, _metric_abbrev in metrics:
+        if metric_name in WRONG_GENERATION_METRIC_NAMES:
+            continue
         bundle[metric_name] = load_metric_rows(
             root / split / lr / f"{metric_name}.tsv",
             missing_ok=metric_name not in fixed_metric_names,
+        )
+
+    source_methods = set(bundle.get("forget_qa_rouge", {}))
+    for metric_name, _metric_abbrev in metrics:
+        if metric_name not in WRONG_GENERATION_METRIC_NAMES:
+            continue
+        bundle[metric_name] = load_wrong_generation_rows(
+            wrong_generation_index or {},
+            wrong_generation_label,
+            split,
+            lr,
+            metric_name,
+            source_methods,
         )
     return bundle
 
@@ -195,6 +386,39 @@ def build_header_cells(metrics: list[tuple[str, str]]) -> list[str]:
         direction = METRIC_DIRECTION.get(metric_name, r"$\uparrow$")
         cells.append(f"{metric_abbrev}{direction}")
     return cells
+
+
+def build_direction_text(metrics: list[tuple[str, str]]) -> str:
+    lower = [metric_abbrev for metric_name, metric_abbrev in metrics if METRIC_DIRECTION.get(metric_name) == r"$\downarrow$"]
+    higher = [
+        metric_abbrev
+        for metric_name, metric_abbrev in metrics
+        if METRIC_DIRECTION.get(metric_name, r"$\uparrow$") == r"$\uparrow$"
+    ]
+    if lower and higher:
+        return (
+            rf"{{\tiny Values are percentages. {' / '.join(lower)} are lower-is-better; "
+            rf"{' / '.join(higher)} are higher-is-better.}}"
+        )
+    if lower:
+        return rf"{{\tiny Values are percentages. {' / '.join(lower)} are lower-is-better.}}"
+    if higher:
+        return rf"{{\tiny Values are percentages. {' / '.join(higher)} are higher-is-better.}}"
+    return r"{\tiny Values are percentages.}"
+
+
+def build_metric_legend(metrics: list[tuple[str, str]]) -> str:
+    legend_parts: list[str] = []
+    seen_abbrevs: set[str] = set()
+    for _metric_name, metric_abbrev in metrics:
+        if metric_abbrev in seen_abbrevs:
+            continue
+        label = METRIC_LEGEND_LABELS.get(metric_abbrev)
+        if label is None:
+            continue
+        legend_parts.append(f"{metric_abbrev} = {label.replace('_', r'\_')}")
+        seen_abbrevs.add(metric_abbrev)
+    return ",\\ ".join(legend_parts)
 
 
 def build_row_cells(
@@ -261,16 +485,6 @@ def build_slide_frame(
 ) -> str:
     header_cells = build_header_cells(metrics)
     row_lines = build_row_cells(epoch_column, bundles, row_specs, metrics)
-    utility_labels = {
-        metric_abbrev
-        for metric_name, metric_abbrev in metrics
-        if metric_name == "utility_avg" or UTILITY_METRIC_RE.fullmatch(metric_name)
-    }
-    utility_label_text = " / ".join(
-        metric_abbrev
-        for _metric_name, metric_abbrev in metrics
-        if metric_abbrev in utility_labels
-    )
     metric_count = len(metrics)
 
     table_font = r"\scriptsize"
@@ -288,9 +502,9 @@ def build_slide_frame(
     lines = [
         r"\begin{frame}[t]",
         rf"\frametitle{{{frame_title}}}",
-        rf"{{\tiny Values are percentages. F / FC are lower-is-better; H / HC / {utility_label_text} are higher-is-better.}}",
+        build_direction_text(metrics),
         r"",
-        r"{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}",
+        rf"{{\tiny {build_metric_legend(metrics)}.}}",
         r"",
         rf"\vspace{{{top_vspace}}}",
         r"\centering",
@@ -449,20 +663,59 @@ def build_bundles(
     split: str,
     lr: str,
     metrics: list[tuple[str, str]],
+    *,
+    wrong_generation_index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]
+    | None = None,
+    wrong_generation_labels_by_source: dict[str, str | None] | None = None,
 ) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
     return {
-        source_name: load_table_bundle(root, split, lr, metrics)
+        source_name: load_table_bundle(
+            root,
+            split,
+            lr,
+            metrics,
+            wrong_generation_index=wrong_generation_index,
+            wrong_generation_label=(
+                None
+                if wrong_generation_labels_by_source is None
+                else wrong_generation_labels_by_source.get(source_name)
+            ),
+        )
         for source_name, root in root_map.items()
     }
 
 
+def row_spec_has_source_rows(
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    row_spec: tuple[str, str, str, str],
+    metrics: list[tuple[str, str]],
+) -> bool:
+    source_name, source_method, _display_name, _color = row_spec
+    source_bundle = bundles[source_name]
+    return any(
+        source_bundle[metric_name].get(source_method) is not None
+        for metric_name, _ in metrics
+        if metric_name not in WRONG_GENERATION_METRIC_NAMES
+    )
+
+
+def filter_row_specs(
+    row_specs: list[tuple[str, str, str, str]],
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    metrics: list[tuple[str, str]],
+) -> list[tuple[str, str, str, str]]:
+    return [row_spec for row_spec in row_specs if row_spec_has_source_rows(bundles, row_spec, metrics)]
+
+
 def build_combined_row_specs(
     simnpo_root: Path | None,
+    simplece_new_root: Path | None,
     simplece_old_root: Path | None,
 ) -> list[tuple[str, str, str, str]]:
     row_specs = list(COMBINED_ROW_SPECS)
     if simnpo_root is not None:
         row_specs.append(SIMNPO_ROW_SPEC)
+    if simplece_new_root is not None:
         variant_tag = "new" if simplece_old_root is not None else None
         for method_name in COMBINED_SIMPLECE_METHODS:
             row_specs.append(
@@ -477,9 +730,10 @@ def build_combined_row_specs(
 
 def build_combined_slide_row_specs(
     simnpo_root: Path | None,
+    simplece_new_root: Path | None,
     simplece_old_root: Path | None,
 ) -> list[tuple[str, str, str, str]]:
-    return build_combined_row_specs(simnpo_root, simplece_old_root)
+    return build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root)
 
 
 def load_simplece_row_specs(
@@ -590,6 +844,11 @@ def main() -> None:
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
+    simplece_new_root = (
+        simnpo_root
+        if args.simplece_new_root is None
+        else args.simplece_new_root.expanduser().resolve()
+    )
     simplece_old_root = (
         None if args.simplece_old_root is None else args.simplece_old_root.expanduser().resolve()
     )
@@ -601,30 +860,69 @@ def main() -> None:
         if args.output_simplece_slides_tex is None
         else args.output_simplece_slides_tex.expanduser().resolve()
     )
+    wrong_generations_root = (
+        None
+        if args.wrong_generations_root is None
+        else args.wrong_generations_root.expanduser().resolve()
+    )
 
     combined_roots = {"old": old_root, "new": new_root}
     if simnpo_root is not None:
         combined_roots["simnpo"] = simnpo_root
-        combined_roots["simplece_new"] = simnpo_root
+    if simplece_new_root is not None:
+        combined_roots["simplece_new"] = simplece_new_root
     if simplece_old_root is not None:
         combined_roots["simplece_old"] = simplece_old_root
-    metrics = discover_metrics(list(combined_roots.values()))
+    available_wrong_generation_labels: set[str] = set()
+    wrong_generation_index: dict[
+        str,
+        dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]],
+    ] | None = None
+    wrong_generation_labels_by_source: dict[str, str | None] | None = None
+    if wrong_generations_root is not None:
+        wrong_generation_index, available_wrong_generation_labels = load_wrong_generation_index(
+            wrong_generations_root
+        )
+        wrong_generation_labels_by_source = {
+            source_name: resolve_wrong_generation_label(root, available_wrong_generation_labels)
+            for source_name, root in combined_roots.items()
+        }
 
-    combined_row_specs_by_split_lr = {
-        (split, lr): build_combined_row_specs(simnpo_root, simplece_old_root)
-        for split in SPLITS
-        for lr in LRS
-    }
-    combined_slide_row_specs_by_split_lr = {
-        (split, lr): build_combined_slide_row_specs(simnpo_root, simplece_old_root)
-        for split in SPLITS
-        for lr in LRS
-    }
+    metrics = discover_metrics(
+        list(combined_roots.values()),
+        include_wrong_generation_metrics=wrong_generations_root is not None,
+    )
+
     combined_bundles_by_split_lr = {
-        (split, lr): build_bundles(combined_roots, split, lr, metrics)
+        (
+            split,
+            lr,
+        ): build_bundles(
+            combined_roots,
+            split,
+            lr,
+            metrics,
+            wrong_generation_index=wrong_generation_index,
+            wrong_generation_labels_by_source=wrong_generation_labels_by_source,
+        )
         for split in SPLITS
         for lr in LRS
     }
+    combined_row_specs_by_split_lr = {}
+    combined_slide_row_specs_by_split_lr = {}
+    for split in SPLITS:
+        for lr in LRS:
+            bundles = combined_bundles_by_split_lr[(split, lr)]
+            combined_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+                build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+                bundles,
+                metrics,
+            )
+            combined_slide_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+                build_combined_slide_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+                bundles,
+                metrics,
+            )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_text = build_output_text(
@@ -654,25 +952,27 @@ def main() -> None:
         output_slides_tex.write_text(slides_tex, encoding="utf-8")
 
     if output_simplece_file is not None:
-        if simnpo_root is None:
-            raise ValueError("--simnpo-root is required when writing SimpleCE-only outputs")
+        if simplece_new_root is None:
+            raise ValueError(
+                "--simplece-new-root or --simnpo-root is required when writing SimpleCE-only outputs"
+            )
         output_simplece_file.parent.mkdir(parents=True, exist_ok=True)
         if simplece_old_root is None:
-            simplece_source_specs = [("simplece", simnpo_root, None, "blue!12")]
-            simplece_slide_source_specs = [("simplece", simnpo_root, None, "")]
-            simplece_root_map = {"simplece": simnpo_root}
+            simplece_source_specs = [("simplece", simplece_new_root, None, "blue!12")]
+            simplece_slide_source_specs = [("simplece", simplece_new_root, None, "")]
+            simplece_root_map = {"simplece": simplece_new_root}
         else:
             simplece_source_specs = [
                 ("simplece_old", simplece_old_root, "old", "orange!12"),
-                ("simplece_new", simnpo_root, "new", "blue!12"),
+                ("simplece_new", simplece_new_root, "new", "blue!12"),
             ]
             simplece_slide_source_specs = [
                 ("simplece_old", simplece_old_root, "old", ""),
-                ("simplece_new", simnpo_root, "new", ""),
+                ("simplece_new", simplece_new_root, "new", ""),
             ]
             simplece_root_map = {
                 "simplece_old": simplece_old_root,
-                "simplece_new": simnpo_root,
+                "simplece_new": simplece_new_root,
             }
         simplece_row_specs_by_split_lr = {
             (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr, metrics)
@@ -685,7 +985,27 @@ def main() -> None:
             for lr in LRS
         }
         simplece_bundles_by_split_lr = {
-            (split, lr): build_bundles(simplece_root_map, split, lr, metrics)
+            (
+                split,
+                lr,
+            ): build_bundles(
+                simplece_root_map,
+                split,
+                lr,
+                metrics,
+                wrong_generation_index=wrong_generation_index,
+                wrong_generation_labels_by_source=(
+                    None
+                    if wrong_generation_labels_by_source is None
+                    else {
+                        source_name: resolve_wrong_generation_label(
+                            root,
+                            available_wrong_generation_labels,
+                        )
+                        for source_name, root in simplece_root_map.items()
+                    }
+                ),
+            )
             for split in SPLITS
             for lr in LRS
         }

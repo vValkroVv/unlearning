@@ -49,6 +49,13 @@ python src/train.py --config-name=unlearn.yaml \
 python src/eval.py --config-name=eval.yaml experiment=eval/muse/default task_name=SAMPLE_EVAL
 ## Note: eval.yaml is the default config set in src/eval.py, so this argument can be omitted
 
+## analyze malformed / repetitive / overlong generations in saved DUET_EVAL logs
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-part1 \
+  --input-root metrics-new/ep5-part2 \
+  --output-root metrics-new/results-combine/wrong-generations \
+  --overwrite
+
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
 trainer=NPO trainer.method_args.retain_loss_type=KL task_name=llama2_books_NPO_KL \
@@ -65,6 +72,10 @@ forget_split=forget05 retain_split=retain95 \
 retain_logs_path=saves/eval/tofu_retain95/TOFU_EVAL.json \
 paths.output_dir=saves/unlearn/NPO/evals
 ```
+
+The wrong-generation analyzer works from per-example `DUET_EVAL.json` files.
+Checkpoint summaries alone are not enough; if you want the same report at epoch-2
+and epoch-5, keep the checkpoint-level `DUET_EVAL.json` dumps as well.
 
 
 > [!NOTE]

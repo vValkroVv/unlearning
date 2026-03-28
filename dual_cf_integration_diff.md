@@ -1955,6 +1955,107 @@ python src/tools/build_results_combine_tables.py \
   --output-simplece-slides-tex results-combine/simplece_tables_slides.tex
 ```
 
+## 2026-03-28 Seed-Averaged Structured Saves and Split SimpleCE Roots
+
+Files:
+
+- `src/tools/checkpoint_summary_utils.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+
+Updates:
+
+- `build_structured_saves.py` now accepts `--average-seeds` and collapses runs
+  that differ only by a trailing `_seed<INT>` suffix into one averaged method
+  row
+- seed averaging now applies to:
+  - per-metric structured-save TSVs
+  - trajectory summary TSVs
+  - `runs_index.tsv`, which now records the contributing run dirs joined with
+    `|`
+- packaged sparse checkpoint runs no longer fall back to synthetic epoch slots
+  when `trainer_state.json` is absent
+- checkpoint epoch recovery now uses the run-level Hydra config:
+  - `trainer.save_on_epochs`
+  - `trainer.args.num_train_epochs`
+- this restores the intended sparse checkpoint slots such as:
+  - `0.0`
+  - `2.0`
+  - `5.0`
+- `build_results_combine_tables.py` now supports `--simplece-new-root` so
+  `SimNPO` rows and newer `SimpleCE` rows can come from different
+  `structured-saves/` trees
+- combined-table row specs are now filtered per split/LR so methods that are
+  absent in the selected roots are dropped instead of rendering all-`--` rows
+
+Example commands:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-part1/extracted/saves-clean \
+  --output-root metrics-new/ep5-part1/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-part2/extracted/saves-clean \
+  --output-root metrics-new/ep5-part2/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/build_results_combine_tables.py \
+  --old-root metrics-new/ep5-part1/structured-saves-avg \
+  --new-root metrics-new/ep5-part2/structured-saves-avg \
+  --simnpo-root metrics-new/ep5-part1/structured-saves-avg \
+  --simplece-new-root metrics-new/ep5-part2/structured-saves-avg \
+  --simplece-old-root metrics-new/ep5-part1/structured-saves-avg \
+  --output-file metrics-new/results-new-combine/combined_tables.txt \
+  --output-slides-tex metrics-new/results-new-combine/combined_tables_slides.tex \
+  --output-simplece-file metrics-new/results-new-combine/simplece_tables.txt \
+  --output-simplece-slides-tex metrics-new/results-new-combine/simplece_tables_slides.tex
+```
+
+## 2026-03-28 Wrong-Generation Rates in Combined Tables
+
+Files:
+
+- `src/tools/build_results_combine_tables.py`
+
+Updates:
+
+- combined table generation now accepts `--wrong-generations-root` pointing to
+  `analyze_wrong_generations.py` outputs
+- when provided, the helper adds two new columns to the combined and SimpleCE
+  tables:
+  - `FW` = forget wrong-generation rate
+  - `HW` = holdout wrong-generation rate
+- the helper reads `method_stage_summary.tsv` and aligns rows by:
+  - input-root label such as `ep5-part1` / `ep5-part2`
+  - split bucket
+  - LR
+  - epoch
+  - method key
+- sparse runs without checkpoint-level `DUET_EVAL.json` logs keep the epoch-2
+  wrong-generation cells blank (`--`) while epoch-5 finals are populated
+- the slide `.tex` output now updates its legend text automatically when these
+  wrong-generation columns are present
+
+Example command:
+
+```bash
+python src/tools/build_results_combine_tables.py \
+  --old-root metrics-new/ep5-part1/structured-saves-avg \
+  --new-root metrics-new/ep5-part2/structured-saves-avg \
+  --wrong-generations-root metrics-new/results-combine/wrong-generations \
+  --simnpo-root metrics-new/ep5-part1/structured-saves-avg \
+  --simplece-new-root metrics-new/ep5-part2/structured-saves-avg \
+  --simplece-old-root metrics-new/ep5-part1/structured-saves-avg \
+  --output-file metrics-new/results-new-combine/combined_tables.txt \
+  --output-slides-tex metrics-new/results-new-combine/combined_tables_slides.tex \
+  --output-simplece-file metrics-new/results-new-combine/simplece_tables.txt \
+  --output-simplece-slides-tex metrics-new/results-new-combine/simplece_tables_slides.tex
+```
+
 ## 2026-03-25 Explicit Epoch-2 Checkpoints, Resume Safety, and Seed Plumbing
 
 Files:

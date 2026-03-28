@@ -534,3 +534,25 @@ If you want only the full DualCF variant for each seed:
 ```bash
 SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
 ```
+
+## Planned 6 Runs
+
+```bash
+# 1. Baselines first, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 2. Baselines first, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+
+# 3. Old artifacts, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 4. Old artifacts, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+
+# 5. New artifacts, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 6. New artifacts, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+```

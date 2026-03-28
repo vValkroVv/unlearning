@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 import shutil
 from collections import defaultdict
@@ -45,6 +46,7 @@ METHOD_RE = re.compile(
     r"_(dual_cf|dpo_cf|simple_ce|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
 UTILITY_BENCHMARK_ORDER = {
     "mmlu_pro": 0,
     "truthfulqa_bin": 1,
@@ -79,6 +81,14 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Remove the existing output directory before generating files.",
+    )
+    parser.add_argument(
+        "--average-seeds",
+        action="store_true",
+        help=(
+            "Average rows for runs that share the same canonical run name after stripping a trailing "
+            "_seed<INT> suffix."
+        ),
     )
     return parser.parse_args()
 
@@ -179,6 +189,13 @@ def extract_lr(run_name: str) -> str:
     return match.group(1)
 
 
+def split_seed_suffix(run_name: str) -> tuple[str, str | None]:
+    match = SEED_SUFFIX_RE.fullmatch(run_name)
+    if match is None:
+        return run_name, None
+    return match.group("base"), match.group("seed")
+
+
 def extract_method_key(run_name: str) -> str:
     match = METHOD_RE.search(run_name)
     if match is None:
@@ -272,19 +289,27 @@ def dedupe_representative_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return representatives
 
 
+def normalize_epoch_slot_value(actual_epoch: Any) -> float | None:
+    if actual_epoch in {None, "", "None"}:
+        return None
+    return math.floor(float(actual_epoch) * 2.0 + 0.5) / 2.0
+
+
 def build_epoch_slots(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     slot_rows: list[dict[str, Any]] = []
     slot_names: list[str] = []
 
     representatives = dedupe_representative_rows(rows)
-    slot_index = 0
+    last_slot_value = 0.0
     for row in representatives:
         label = row.get("label")
         if label == "base_model_orig":
-            slot_name = "0.0"
+            slot_value = 0.0
         else:
-            slot_index += 1
-            slot_name = format(slot_index * 0.5, ".1f")
+            slot_value = normalize_epoch_slot_value(row.get("epoch"))
+            if slot_value is None:
+                slot_value = last_slot_value + 0.5
+        slot_name = format(slot_value, ".1f")
         slot_names.append(slot_name)
         slot_rows.append(
             {
@@ -295,7 +320,36 @@ def build_epoch_slots(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
                 "actual_epoch": row.get("epoch"),
             }
         )
+        last_slot_value = slot_value
     return slot_rows, slot_names
+
+
+def build_metric_values_by_slot(rows: list[dict[str, Any]], metric_name: str) -> dict[str, Any]:
+    slot_rows, _ = build_epoch_slots(rows)
+    representative_rows = dedupe_representative_rows(rows)
+    return {
+        slot_row["slot"]: source_row.get(metric_name)
+        for slot_row, source_row in zip(slot_rows, representative_rows)
+    }
+
+
+def average_optional_floats(values: list[Any]) -> float | None:
+    numeric_values = [float(value) for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return sum(numeric_values) / len(numeric_values)
+
+
+def average_scalar_values(values: list[Any]) -> Any:
+    present_values = [value for value in values if value not in {None, "", "None"}]
+    if not present_values:
+        return None
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in present_values):
+        return sum(float(value) for value in present_values) / len(present_values)
+    first_value = present_values[0]
+    if all(value == first_value for value in present_values):
+        return first_value
+    return first_value
 
 
 def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
@@ -590,6 +644,98 @@ def sanitize_metric_name(metric_name: str) -> str:
     return metric_name.replace("/", "_").replace(".", "_")
 
 
+def run_seed_sort_key(run: dict[str, Any]) -> tuple[int, int, str]:
+    _canonical_name, seed = split_seed_suffix(str(run["run_name"]))
+    if seed is None:
+        return (1, -1, str(run["run_name"]))
+    return (0, int(seed), str(run["run_name"]))
+
+
+def group_runs_for_output(
+    runs: list[dict[str, Any]],
+    *,
+    average_seeds: bool,
+) -> list[dict[str, Any]]:
+    if not average_seeds:
+        output_groups = []
+        for run in sorted(runs, key=lambda item: method_sort_key(str(item["method"]))):
+            _canonical_name, seed = split_seed_suffix(str(run["run_name"]))
+            output_groups.append(
+                {
+                    "method": run["method"],
+                    "run_name": run["run_name"],
+                    "params_file": run["params_file"],
+                    "runs": [run],
+                    "seed_values": [] if seed is None else [seed],
+                    "source_run_dirs": [str(run["run_dir"])],
+                }
+            )
+        return output_groups
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        method_name = str(run["method"])
+        canonical_name, _seed = split_seed_suffix(str(run["run_name"]))
+        group = grouped.setdefault(
+            method_name,
+            {
+                "method": method_name,
+                "run_name": canonical_name,
+                "params_file": run["params_file"],
+                "runs": [],
+            },
+        )
+        if group["run_name"] != canonical_name:
+            raise ValueError(
+                f"Method {method_name} maps to multiple canonical run names: "
+                f"{group['run_name']} vs {canonical_name}"
+            )
+        group["runs"].append(run)
+
+    output_groups = sorted(grouped.values(), key=lambda item: method_sort_key(str(item["method"])))
+    for group in output_groups:
+        group["runs"].sort(key=run_seed_sort_key)
+        group["seed_values"] = [
+            seed
+            for _canonical_name, seed in (split_seed_suffix(str(run["run_name"])) for run in group["runs"])
+            if seed is not None
+        ]
+        group["source_run_dirs"] = [str(run["run_dir"]) for run in group["runs"]]
+    return output_groups
+
+
+def build_epoch_reference_rows(run_groups: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    slot_map: dict[str, dict[str, Any]] = {}
+    for group in run_groups:
+        for run in group["runs"]:
+            for slot_row in build_epoch_slots(run["merged_rows"])[0]:
+                slot_name = str(slot_row["slot"])
+                current_row = slot_map.get(slot_name)
+                if current_row is None or (
+                    current_row.get("label") != "final" and slot_row.get("label") == "final"
+                ):
+                    slot_map[slot_name] = slot_row
+
+    slot_names = sorted(slot_map, key=float)
+    return [slot_map[slot_name] for slot_name in slot_names], slot_names
+
+
+def collect_metric_names_for_runs(run_groups: list[dict[str, Any]], row_key: str) -> list[str]:
+    metric_keys: set[str] = set()
+    for group in run_groups:
+        for run in group["runs"]:
+            metric_keys.update(collect_metric_keys(run[row_key]))
+
+    ordered = [metric for metric in PREFERRED_METRIC_ORDER if metric in metric_keys]
+    utility_metric_keys = sorted(
+        (metric for metric in metric_keys if UTILITY_COLUMN_RE.fullmatch(metric)),
+        key=utility_metric_sort_key,
+    )
+    ordered.extend(metric for metric in utility_metric_keys if metric not in ordered)
+    ordered.extend(sorted(metric_keys - set(ordered)))
+    return ordered
+
+
 def main() -> None:
     args = parse_args()
     unlearn_root = resolve_unlearn_root(args.input_root)
@@ -693,8 +839,8 @@ def main() -> None:
         split_lr_root = output_root / split_bucket / lr
         split_lr_root.mkdir(parents=True, exist_ok=True)
 
-        runs.sort(key=lambda row: method_sort_key(row["method"]))
-        epoch_rows, epoch_slots = build_epoch_slots(runs[0]["merged_rows"])
+        run_groups = group_runs_for_output(runs, average_seeds=args.average_seeds)
+        epoch_rows, epoch_slots = build_epoch_reference_rows(run_groups)
 
         write_tsv(
             split_lr_root / "epoch_reference.tsv",
@@ -707,17 +853,17 @@ def main() -> None:
             ["method", "run_name", "params_file", "source_run_dir"],
             [
                 {
-                    "method": run["method"],
-                    "run_name": run["run_name"],
-                    "params_file": str(run["params_file"].relative_to(output_root)),
-                    "source_run_dir": str(run["run_dir"]),
+                    "method": group["method"],
+                    "run_name": group["run_name"],
+                    "params_file": str(group["params_file"].relative_to(output_root)),
+                    "source_run_dir": "|".join(group["source_run_dirs"]),
                 }
-                for run in runs
+                for group in run_groups
             ],
         )
 
-        merged_metric_names = collect_metric_keys(runs[0]["merged_rows"])
-        cosine_metric_names = collect_metric_keys(runs[0]["cosine_rows"])
+        merged_metric_names = collect_metric_names_for_runs(run_groups, "merged_rows")
+        cosine_metric_names = collect_metric_names_for_runs(run_groups, "cosine_rows")
         all_metric_names = merged_metric_names + [
             metric for metric in cosine_metric_names if metric not in merged_metric_names
         ]
@@ -725,16 +871,19 @@ def main() -> None:
         for metric_name in all_metric_names:
             fieldnames = ["method"] + epoch_slots
             table_rows: list[dict[str, Any]] = []
-            for run in runs:
-                source_rows = run["cosine_rows"] if metric_name.endswith("_cos_sim") else run["merged_rows"]
-                slot_rows, _ = build_epoch_slots(source_rows)
-                metric_values_by_slot = {
-                    slot_row["slot"]: source_row.get(metric_name)
-                    for slot_row, source_row in zip(slot_rows, dedupe_representative_rows(source_rows))
-                }
-                row = {"method": run["method"]}
+            for group in run_groups:
+                metric_maps = [
+                    build_metric_values_by_slot(
+                        run["cosine_rows"] if metric_name.endswith("_cos_sim") else run["merged_rows"],
+                        metric_name,
+                    )
+                    for run in group["runs"]
+                ]
+                row = {"method": group["method"]}
                 for slot in epoch_slots:
-                    row[slot] = metric_values_by_slot.get(slot)
+                    row[slot] = average_optional_floats(
+                        [metric_values_by_slot.get(slot) for metric_values_by_slot in metric_maps]
+                    )
                 table_rows.append(row)
 
             write_tsv(
@@ -745,17 +894,19 @@ def main() -> None:
 
         trajectory_rows: list[dict[str, Any]] = []
         trajectory_fieldnames = ["method"]
-        flattened_payloads: list[tuple[str, dict[str, Any]]] = []
-        for run in runs:
-            flattened = flatten_trajectory("", run["trajectory_metrics"])
-            flattened_payloads.append((run["method"], flattened))
-            for key in flattened:
-                if key not in trajectory_fieldnames:
-                    trajectory_fieldnames.append(key)
+        flattened_payloads: list[tuple[str, list[dict[str, Any]]]] = []
+        for group in run_groups:
+            flattened_runs = [flatten_trajectory("", run["trajectory_metrics"]) for run in group["runs"]]
+            flattened_payloads.append((str(group["method"]), flattened_runs))
+            for flattened in flattened_runs:
+                for key in flattened:
+                    if key not in trajectory_fieldnames:
+                        trajectory_fieldnames.append(key)
 
-        for method_name, flattened in flattened_payloads:
+        for method_name, flattened_runs in flattened_payloads:
             row = {"method": method_name}
-            row.update(flattened)
+            for key in trajectory_fieldnames[1:]:
+                row[key] = average_scalar_values([flattened.get(key) for flattened in flattened_runs])
             trajectory_rows.append(row)
 
         write_tsv(

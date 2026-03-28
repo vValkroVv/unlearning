@@ -424,6 +424,7 @@ Directory Structure:
 │   │   ├── src/model/lora.py
 │   │   └── src/model/probe.py
 │   ├── src/tools
+│   │   ├── src/tools/analyze_wrong_generations.py
 │   │   ├── src/tools/build_duet_candidate_bank.py
 │   │   ├── src/tools/build_proxy_retain_map.py
 │   │   ├── src/tools/build_results_combine_tables.py
@@ -14467,6 +14468,28 @@ If you want only the full DualCF variant for each seed:
 SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
 ```
 
+## Planned 6 Runs
+
+```bash
+# 1. Baselines first, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 2. Baselines first, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+
+# 3. Old artifacts, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 4. Old artifacts, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+
+# 5. New artifacts, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 6. New artifacts, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+```
+
 </content>
 
 <content full_path="dual_cf_integration_diff.md">
@@ -16427,6 +16450,107 @@ python src/tools/build_results_combine_tables.py \
   --output-simplece-slides-tex results-combine/simplece_tables_slides.tex
 ```
 
+## 2026-03-28 Seed-Averaged Structured Saves and Split SimpleCE Roots
+
+Files:
+
+- `src/tools/checkpoint_summary_utils.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+
+Updates:
+
+- `build_structured_saves.py` now accepts `--average-seeds` and collapses runs
+  that differ only by a trailing `_seed<INT>` suffix into one averaged method
+  row
+- seed averaging now applies to:
+  - per-metric structured-save TSVs
+  - trajectory summary TSVs
+  - `runs_index.tsv`, which now records the contributing run dirs joined with
+    `|`
+- packaged sparse checkpoint runs no longer fall back to synthetic epoch slots
+  when `trainer_state.json` is absent
+- checkpoint epoch recovery now uses the run-level Hydra config:
+  - `trainer.save_on_epochs`
+  - `trainer.args.num_train_epochs`
+- this restores the intended sparse checkpoint slots such as:
+  - `0.0`
+  - `2.0`
+  - `5.0`
+- `build_results_combine_tables.py` now supports `--simplece-new-root` so
+  `SimNPO` rows and newer `SimpleCE` rows can come from different
+  `structured-saves/` trees
+- combined-table row specs are now filtered per split/LR so methods that are
+  absent in the selected roots are dropped instead of rendering all-`--` rows
+
+Example commands:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-part1/extracted/saves-clean \
+  --output-root metrics-new/ep5-part1/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-part2/extracted/saves-clean \
+  --output-root metrics-new/ep5-part2/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/build_results_combine_tables.py \
+  --old-root metrics-new/ep5-part1/structured-saves-avg \
+  --new-root metrics-new/ep5-part2/structured-saves-avg \
+  --simnpo-root metrics-new/ep5-part1/structured-saves-avg \
+  --simplece-new-root metrics-new/ep5-part2/structured-saves-avg \
+  --simplece-old-root metrics-new/ep5-part1/structured-saves-avg \
+  --output-file metrics-new/results-new-combine/combined_tables.txt \
+  --output-slides-tex metrics-new/results-new-combine/combined_tables_slides.tex \
+  --output-simplece-file metrics-new/results-new-combine/simplece_tables.txt \
+  --output-simplece-slides-tex metrics-new/results-new-combine/simplece_tables_slides.tex
+```
+
+## 2026-03-28 Wrong-Generation Rates in Combined Tables
+
+Files:
+
+- `src/tools/build_results_combine_tables.py`
+
+Updates:
+
+- combined table generation now accepts `--wrong-generations-root` pointing to
+  `analyze_wrong_generations.py` outputs
+- when provided, the helper adds two new columns to the combined and SimpleCE
+  tables:
+  - `FW` = forget wrong-generation rate
+  - `HW` = holdout wrong-generation rate
+- the helper reads `method_stage_summary.tsv` and aligns rows by:
+  - input-root label such as `ep5-part1` / `ep5-part2`
+  - split bucket
+  - LR
+  - epoch
+  - method key
+- sparse runs without checkpoint-level `DUET_EVAL.json` logs keep the epoch-2
+  wrong-generation cells blank (`--`) while epoch-5 finals are populated
+- the slide `.tex` output now updates its legend text automatically when these
+  wrong-generation columns are present
+
+Example command:
+
+```bash
+python src/tools/build_results_combine_tables.py \
+  --old-root metrics-new/ep5-part1/structured-saves-avg \
+  --new-root metrics-new/ep5-part2/structured-saves-avg \
+  --wrong-generations-root metrics-new/results-combine/wrong-generations \
+  --simnpo-root metrics-new/ep5-part1/structured-saves-avg \
+  --simplece-new-root metrics-new/ep5-part2/structured-saves-avg \
+  --simplece-old-root metrics-new/ep5-part1/structured-saves-avg \
+  --output-file metrics-new/results-new-combine/combined_tables.txt \
+  --output-slides-tex metrics-new/results-new-combine/combined_tables_slides.tex \
+  --output-simplece-file metrics-new/results-new-combine/simplece_tables.txt \
+  --output-simplece-slides-tex metrics-new/results-new-combine/simplece_tables_slides.tex
+```
+
 ## 2026-03-25 Explicit Epoch-2 Checkpoints, Resume Safety, and Seed Plumbing
 
 Files:
@@ -17210,6 +17334,13 @@ python src/train.py --config-name=unlearn.yaml \
 python src/eval.py --config-name=eval.yaml experiment=eval/muse/default task_name=SAMPLE_EVAL
 ## Note: eval.yaml is the default config set in src/eval.py, so this argument can be omitted
 
+## analyze malformed / repetitive / overlong generations in saved DUET_EVAL logs
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-part1 \
+  --input-root metrics-new/ep5-part2 \
+  --output-root metrics-new/results-combine/wrong-generations \
+  --overwrite
+
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
 trainer=NPO trainer.method_args.retain_loss_type=KL task_name=llama2_books_NPO_KL \
@@ -17226,6 +17357,10 @@ forget_split=forget05 retain_split=retain95 \
 retain_logs_path=saves/eval/tofu_retain95/TOFU_EVAL.json \
 paths.output_dir=saves/unlearn/NPO/evals
 ```
+
+The wrong-generation analyzer works from per-example `DUET_EVAL.json` files.
+Checkpoint summaries alone are not enough; if you want the same report at epoch-2
+and epoch-5, keep the checkpoint-level `DUET_EVAL.json` dumps as well.
 
 
 > [!NOTE]
@@ -43285,10 +43420,13 @@ def chunked(values: Sequence[Dict[str, Any]], chunk_size: int) -> Iterable[Seque
 
 from __future__ import annotations
 
+from functools import lru_cache
 import json
 import re
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 _CHECKPOINT_RE = re.compile(r"checkpoint-(\d+)$")
@@ -43327,6 +43465,47 @@ def read_trainer_state(model_dir: Path | None) -> dict[str, Any]:
         return json.load(handle)
 
 
+def parse_optional_float(value: Any) -> float | None:
+    if value in {None, "", "None"}:
+        return None
+    return float(value)
+
+
+@lru_cache(maxsize=None)
+def load_run_config(run_dir: Path) -> dict[str, Any]:
+    config_path = run_dir / ".hydra" / "config.yaml"
+    if not config_path.exists():
+        return {}
+    with config_path.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle)
+    return payload if isinstance(payload, dict) else {}
+
+
+@lru_cache(maxsize=None)
+def load_epoch_fallbacks(run_dir: Path) -> tuple[tuple[float, ...], float | None]:
+    config = load_run_config(run_dir)
+    trainer_cfg = config.get("trainer")
+    if not isinstance(trainer_cfg, dict):
+        return (), None
+
+    save_on_epochs_raw = trainer_cfg.get("save_on_epochs") or []
+    save_on_epochs = tuple(
+        sorted(
+            {
+                float(epoch)
+                for epoch in save_on_epochs_raw
+                if parse_optional_float(epoch) is not None
+            }
+        )
+    )
+
+    trainer_args = trainer_cfg.get("args")
+    if not isinstance(trainer_args, dict):
+        return save_on_epochs, None
+
+    return save_on_epochs, parse_optional_float(trainer_args.get("num_train_epochs"))
+
+
 def infer_step_epoch(run_dir: Path, label: str) -> tuple[int | None, float | None]:
     if label in {"base_model_orig", "base_model_run"}:
         return 0, 0.0
@@ -43350,6 +43529,32 @@ def infer_step_epoch(run_dir: Path, label: str) -> tuple[int | None, float | Non
         epoch = float(epoch)
 
     return step, epoch
+
+
+def apply_config_epoch_fallbacks(run_dir: Path, rows: list[dict[str, Any]]) -> None:
+    save_on_epochs, final_epoch = load_epoch_fallbacks(run_dir)
+
+    checkpoint_rows = [
+        row
+        for row in rows
+        if parse_checkpoint_step(str(row.get("label", ""))) is not None
+    ]
+    checkpoint_rows.sort(
+        key=lambda row: (
+            parse_checkpoint_step(str(row.get("label", ""))) or 0,
+            str(row.get("label", "")),
+        )
+    )
+
+    if save_on_epochs and len(checkpoint_rows) == len(save_on_epochs):
+        for row, epoch in zip(checkpoint_rows, save_on_epochs):
+            if row.get("epoch") is None:
+                row["epoch"] = epoch
+
+    if final_epoch is not None:
+        for row in rows:
+            if row.get("label") == "final" and row.get("epoch") is None:
+                row["epoch"] = final_epoch
 
 
 def checkpoint_sort_key(label: str, step: int | None) -> tuple[int, int, str]:
@@ -43403,9 +43608,9 @@ def collect_eval_summaries(
         row["step"] = step
         row["epoch"] = epoch
 
+    apply_config_epoch_fallbacks(run_dir, rows)
     rows.sort(key=lambda row: checkpoint_sort_key(row["label"], row["step"]))
     return rows
-
 
 </content>
 
@@ -44671,6 +44876,970 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+</content>
+
+<content full_path="src/tools/analyze_wrong_generations.py">
+#!/usr/bin/env python3
+"""Analyze malformed or overlong generations in DUET_EVAL-style logs."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import re
+import shutil
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from checkpoint_summary_utils import collect_eval_summaries, parse_checkpoint_step
+
+
+DUET_EVAL_FILENAME = "DUET_EVAL.json"
+DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
+LR_RE = re.compile(r"_lr([^_]+)")
+SEED_RE = re.compile(r"_seed(\d+)")
+METHOD_RE = re.compile(
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|falcon)_lora_.*?_lr[^_]+(.*)$"
+)
+DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+RUN_SPLIT_PATTERNS = [
+    r"_city_forget_rare_5_",
+    r"_city_forget_popular_5_",
+    r"_city_forget_5_",
+    r"_forget_level\d+_",
+]
+QUESTION_RE = re.compile(r"\buser\b\s*\n\n(?P<question>.*?)\bassistant\b\s*\n*\Z", re.DOTALL)
+TOKEN_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+PROMPT_MARKERS = ("system\n", "user\n", "assistant\n")
+REASON_ORDER = [
+    "empty_like",
+    "prompt_leak",
+    "punctuation_spam",
+    "char_repeat",
+    "token_repeat",
+    "ngram_repeat",
+    "low_diversity",
+    "too_long",
+]
+METHOD_DISPLAY = {
+    "ga": "GA",
+    "ada_pop": "AdaPop",
+    "npo": "NPO",
+    "npo_sam": "NPO-SAM",
+    "loku": "LoKU",
+    "dual_cf": "DualCF",
+    "dual_cf_full": "DualCF(full)",
+    "dual_cf_d_only": "DualCF(d_only)",
+    "dual_cf_a_only": "DualCF(a_only)",
+    "dpo_cf": "DPO-CF",
+    "simnpo": "SimNPO",
+    "simple_ce": "Simple-CE",
+    "falcon": "FALCON",
+}
+METHOD_ORDER = [
+    "ga",
+    "ada_pop",
+    "npo",
+    "npo_sam",
+    "loku",
+    "dual_cf_full",
+    "dual_cf_d_only",
+    "dual_cf_a_only",
+    "dual_cf",
+    "dpo_cf",
+    "simnpo",
+    "simple_ce",
+    "falcon",
+]
+METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
+
+
+@dataclass(frozen=True)
+class EvalLog:
+    input_root: Path
+    input_root_label: str
+    eval_path: Path
+    run_dir: Path
+    run_name: str
+    benchmark: str
+    model_label: str
+    forget_split: str
+    holdout_split: str
+    lr: str
+    seed: str
+    method_key: str
+    method_display: str
+    stage_label: str
+    step: int | None
+    epoch: float | None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input-root",
+        type=Path,
+        action="append",
+        required=True,
+        help="Root to scan. Can point at part1/part2 folders, extracted saves, or a specific run tree.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        required=True,
+        help="Directory where TSV summaries and sampled examples will be written.",
+    )
+    parser.add_argument(
+        "--eval-filename",
+        default=DUET_EVAL_FILENAME,
+        help="Eval filename to scan for. Defaults to DUET_EVAL.json.",
+    )
+    parser.add_argument(
+        "--sample-limit",
+        type=int,
+        default=3,
+        help="How many wrong and clean samples to keep per root/method/metric bucket.",
+    )
+    parser.add_argument(
+        "--punctuation-ratio-threshold",
+        type=float,
+        default=0.58,
+        help="Flag punctuation spam when punctuation ratio crosses this value and the generation has at least four word tokens.",
+    )
+    parser.add_argument(
+        "--char-run-threshold",
+        type=int,
+        default=8,
+        help="Flag repeated characters when the longest identical-character run reaches this length.",
+    )
+    parser.add_argument(
+        "--token-run-threshold",
+        type=int,
+        default=6,
+        help="Flag repeated tokens when the longest identical-token run reaches this length.",
+    )
+    parser.add_argument(
+        "--bigram-repeat-threshold",
+        type=int,
+        default=8,
+        help="Flag repeated 2-grams when the most common 2-gram appears at least this many times.",
+    )
+    parser.add_argument(
+        "--trigram-repeat-threshold",
+        type=int,
+        default=6,
+        help="Flag repeated 3-grams when the most common 3-gram appears at least this many times.",
+    )
+    parser.add_argument(
+        "--low-diversity-min-words",
+        type=int,
+        default=12,
+        help="Require at least this many word tokens before low-diversity checks can trigger.",
+    )
+    parser.add_argument(
+        "--dominant-token-ratio-threshold",
+        type=float,
+        default=0.50,
+        help="Flag low diversity when one token accounts for at least this fraction of word tokens.",
+    )
+    parser.add_argument(
+        "--unique-token-ratio-threshold",
+        type=float,
+        default=0.35,
+        help="Flag low diversity when the unique-token ratio drops to or below this value.",
+    )
+    parser.add_argument(
+        "--max-words",
+        type=int,
+        default=16,
+        help="Absolute word-count threshold for overlong generations.",
+    )
+    parser.add_argument(
+        "--relative-word-multiplier",
+        type=float,
+        default=4.0,
+        help="Relative overlong threshold multiplier applied to ground-truth word count.",
+    )
+    parser.add_argument(
+        "--relative-word-margin",
+        type=int,
+        default=4,
+        help="Extra slack added after applying the relative overlong threshold.",
+    )
+    parser.add_argument(
+        "--max-chars",
+        type=int,
+        default=160,
+        help="Absolute character-count threshold for overlong generations.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Remove the output directory before writing results.",
+    )
+    return parser.parse_args()
+
+
+def prepare_output_root(path: Path, overwrite: bool) -> Path:
+    root = path.expanduser().resolve()
+    if root.exists():
+        if not overwrite:
+            raise FileExistsError(
+                f"Output directory already exists: {root}. Pass --overwrite to rebuild it."
+            )
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_yaml(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def write_tsv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def format_path(path: Path) -> str:
+    cwd = Path.cwd().resolve()
+    try:
+        return str(path.resolve().relative_to(cwd))
+    except ValueError:
+        return str(path.resolve())
+
+
+def format_float(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.4f}"
+
+
+def format_pct(numerator: int, denominator: int) -> str:
+    if denominator == 0:
+        return ""
+    return f"{100.0 * numerator / denominator:.2f}"
+
+
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._+-]+", "-", value.strip())
+    slug = slug.strip("-")
+    return slug or "unknown"
+
+
+def infer_input_root_label(root: Path) -> str:
+    if root.name:
+        return root.name
+    return slugify(str(root))
+
+
+def extract_lr(run_name: str) -> str:
+    match = LR_RE.search(run_name)
+    if match is None:
+        raise ValueError(f"Could not parse lr from run name: {run_name}")
+    return match.group(1)
+
+
+def extract_seed(run_name: str) -> str:
+    match = SEED_RE.search(run_name)
+    if match is None:
+        return ""
+    return match.group(1)
+
+
+def extract_method_key(run_name: str) -> str:
+    match = METHOD_RE.search(run_name)
+    if match is None:
+        raise ValueError(f"Could not parse method from run name: {run_name}")
+    method_name = match.group(1)
+    suffix = match.group(2)
+    flags = [token for token in suffix.split("_") if DUAL_FLAG_RE.fullmatch(token)]
+
+    if method_name == "dual_cf":
+        flag_set = set(flags)
+        if flag_set == {"dOn", "aOn"}:
+            return "dual_cf_full"
+        if flag_set == {"dOn", "aOff"}:
+            return "dual_cf_d_only"
+        if flag_set == {"dOff", "aOn"}:
+            return "dual_cf_a_only"
+        if flags:
+            return "dual_cf_" + "_".join(flags)
+        return "dual_cf"
+
+    return method_name
+
+
+def extract_method_display(method_key: str) -> str:
+    if method_key in METHOD_DISPLAY:
+        return METHOD_DISPLAY[method_key]
+    if method_key.startswith("dual_cf_"):
+        suffix = method_key.removeprefix("dual_cf_")
+        return f"DualCF({suffix})"
+    return method_key
+
+
+def extract_model_label(run_name: str) -> str:
+    if run_name.startswith("duet_"):
+        rest = run_name[len("duet_") :]
+    elif run_name.startswith("rwku_"):
+        rest = run_name[len("rwku_") :]
+    else:
+        return "unknown_model"
+
+    for pattern in RUN_SPLIT_PATTERNS:
+        match = re.search(pattern, rest)
+        if match is not None:
+            return rest[: match.start()]
+    return "unknown_model"
+
+
+def extract_question(prompt: str) -> str:
+    if not prompt:
+        return ""
+    normalized = prompt.replace("\r\n", "\n").strip()
+    match = QUESTION_RE.search(normalized)
+    if match is not None:
+        return match.group("question").strip()
+    user_marker = normalized.rfind("user\n\n")
+    if user_marker != -1:
+        question = normalized[user_marker + len("user\n\n") :]
+        assistant_marker = question.rfind("assistant")
+        if assistant_marker != -1:
+            question = question[:assistant_marker]
+        question = question.strip()
+        if question:
+            return question
+    return normalized
+
+
+def load_eval_sidecar(eval_dir: Path, run_dir: Path) -> dict[str, Any]:
+    for config_path in (
+        eval_dir / ".hydra" / "config.yaml",
+        eval_dir.parent / ".hydra" / "config.yaml",
+        run_dir / ".hydra" / "config.yaml",
+    ):
+        if config_path.exists():
+            data = load_yaml(config_path)
+            if isinstance(data, dict):
+                return data
+    return {}
+
+
+def resolve_run_dir_and_stage(eval_path: Path) -> tuple[Path, str]:
+    for parent in eval_path.parents:
+        if parent.parent.name == "checkpoint_evals":
+            return parent.parent.parent.resolve(), parent.name
+        if parent.name == "evals":
+            if parent.parent.parent.name == "checkpoint_evals":
+                return parent.parent.parent.parent.resolve(), parent.parent.name
+            return parent.parent.resolve(), "final"
+    raise ValueError(f"Could not resolve run directory for {eval_path}")
+
+
+def infer_splits(run_name: str, benchmark: str, config: dict[str, Any]) -> tuple[str, str]:
+    forget_split = str(config.get("forget_split") or "")
+    holdout_split = str(config.get("holdout_split") or "")
+
+    if "$" in forget_split:
+        forget_split = ""
+    if "$" in holdout_split:
+        holdout_split = ""
+
+    if not forget_split:
+        if "_city_forget_rare_5_" in run_name:
+            forget_split = "city_forget_rare_5"
+        elif "_city_forget_popular_5_" in run_name:
+            forget_split = "city_forget_popular_5"
+        elif "_city_forget_5_" in run_name:
+            forget_split = "city_forget_rare_5+city_forget_popular_5"
+        else:
+            level_match = re.search(r"_forget_level\d+_", run_name)
+            if level_match is not None:
+                forget_split = level_match.group(0).strip("_")
+
+    if not holdout_split:
+        if benchmark == "duet":
+            holdout_split = "city_fast_retain_500"
+        else:
+            level_match = re.search(r"forget_level(\d+)", forget_split)
+            if level_match is not None:
+                holdout_split = f"neighbor_level{level_match.group(1)}"
+
+    return (
+        forget_split or "unknown_forget_split",
+        holdout_split or "unknown_holdout_split",
+    )
+
+
+def build_eval_log(input_root: Path, eval_path: Path) -> EvalLog:
+    run_dir, stage_label = resolve_run_dir_and_stage(eval_path)
+    run_name = run_dir.name
+    benchmark = "rwku" if run_name.startswith("rwku_") else "duet"
+    config = load_eval_sidecar(eval_path.parent, run_dir)
+    forget_split, holdout_split = infer_splits(run_name, benchmark, config)
+
+    stage_index = {
+        row["label"]: row
+        for row in collect_eval_summaries(
+            run_dir=run_dir,
+            eval_root_name="checkpoint_evals",
+            summary_name=DUET_SUMMARY_FILENAME,
+        )
+    }
+    stage_info = stage_index.get(
+        stage_label,
+        {
+            "step": parse_checkpoint_step(stage_label),
+            "epoch": None,
+        },
+    )
+
+    method_key = extract_method_key(run_name)
+    return EvalLog(
+        input_root=input_root.resolve(),
+        input_root_label=infer_input_root_label(input_root.resolve()),
+        eval_path=eval_path.resolve(),
+        run_dir=run_dir,
+        run_name=run_name,
+        benchmark=benchmark,
+        model_label=extract_model_label(run_name),
+        forget_split=forget_split,
+        holdout_split=holdout_split,
+        lr=extract_lr(run_name),
+        seed=extract_seed(run_name),
+        method_key=method_key,
+        method_display=extract_method_display(method_key),
+        stage_label=stage_label,
+        step=stage_info.get("step"),
+        epoch=stage_info.get("epoch"),
+    )
+
+
+def method_sort_key(method_key: str) -> tuple[int, str]:
+    return (METHOD_ORDER_INDEX.get(method_key, len(METHOD_ORDER_INDEX)), method_key)
+
+
+def tokenize(text: str) -> list[str]:
+    return TOKEN_RE.findall(text.lower())
+
+
+def dominant_ngram_count(tokens: list[str], n: int) -> int:
+    if len(tokens) < n:
+        return 0
+    counts = Counter(tuple(tokens[index : index + n]) for index in range(len(tokens) - n + 1))
+    return counts.most_common(1)[0][1]
+
+
+def classify_generation(
+    generation: str,
+    ground_truth: str,
+    args: argparse.Namespace,
+) -> tuple[list[str], dict[str, Any]]:
+    text = str(generation or "").strip()
+    gt_text = str(ground_truth or "").strip()
+    tokens = tokenize(text)
+    word_tokens = [token for token in tokens if re.search(r"\w", token)]
+    gt_word_tokens = [token for token in tokenize(gt_text) if re.search(r"\w", token)]
+    non_space_chars = [char for char in text if not char.isspace()]
+    punct_count = sum(1 for char in non_space_chars if not char.isalnum())
+    punct_ratio = punct_count / max(1, len(non_space_chars))
+
+    longest_char_run = 0
+    current_run = 0
+    previous_char = None
+    for char in text:
+        if char == previous_char:
+            current_run += 1
+        else:
+            current_run = 1
+            previous_char = char
+        longest_char_run = max(longest_char_run, current_run)
+
+    longest_token_run = 0
+    current_run = 0
+    previous_token = None
+    for token in tokens:
+        if token == previous_token:
+            current_run += 1
+        else:
+            current_run = 1
+            previous_token = token
+        longest_token_run = max(longest_token_run, current_run)
+
+    dominant_token_count = Counter(word_tokens).most_common(1)[0][1] if word_tokens else 0
+    dominant_token_ratio = dominant_token_count / max(1, len(word_tokens))
+    unique_token_ratio = (
+        len(set(word_tokens)) / max(1, len(word_tokens)) if word_tokens else 0.0
+    )
+    bigram_repeat = dominant_ngram_count(tokens, 2)
+    trigram_repeat = dominant_ngram_count(tokens, 3)
+    too_long_limit = max(
+        args.max_words,
+        int(len(gt_word_tokens) * args.relative_word_multiplier + args.relative_word_margin),
+    )
+
+    reasons: set[str] = set()
+    if not text or not any(char.isalnum() for char in text):
+        reasons.add("empty_like")
+    if any(marker in text.lower() for marker in PROMPT_MARKERS):
+        reasons.add("prompt_leak")
+    if len(word_tokens) >= 4 and punct_ratio >= args.punctuation_ratio_threshold:
+        reasons.add("punctuation_spam")
+    if longest_char_run >= args.char_run_threshold:
+        reasons.add("char_repeat")
+    if longest_token_run >= args.token_run_threshold:
+        reasons.add("token_repeat")
+    if (
+        bigram_repeat >= args.bigram_repeat_threshold
+        or trigram_repeat >= args.trigram_repeat_threshold
+    ):
+        reasons.add("ngram_repeat")
+    if (
+        len(word_tokens) >= args.low_diversity_min_words
+        and dominant_token_ratio >= args.dominant_token_ratio_threshold
+    ):
+        reasons.add("low_diversity")
+    if (
+        len(word_tokens) >= args.low_diversity_min_words
+        and unique_token_ratio <= args.unique_token_ratio_threshold
+    ):
+        reasons.add("low_diversity")
+    if len(word_tokens) >= too_long_limit or len(text) >= args.max_chars:
+        reasons.add("too_long")
+
+    features = {
+        "word_count": len(word_tokens),
+        "char_count": len(text),
+        "ground_truth_word_count": len(gt_word_tokens),
+        "punctuation_ratio": punct_ratio,
+        "longest_char_run": longest_char_run,
+        "longest_token_run": longest_token_run,
+        "bigram_repeat": bigram_repeat,
+        "trigram_repeat": trigram_repeat,
+        "dominant_token_ratio": dominant_token_ratio,
+        "unique_token_ratio": unique_token_ratio,
+        "too_long_limit": too_long_limit,
+    }
+    ordered_reasons = [reason for reason in REASON_ORDER if reason in reasons]
+    return ordered_reasons, features
+
+
+def new_aggregate() -> dict[str, Any]:
+    return {
+        "total_rows": 0,
+        "wrong_rows": 0,
+        "reasons": Counter(),
+    }
+
+
+def update_aggregate(aggregate: dict[str, Any], reasons: list[str]) -> None:
+    aggregate["total_rows"] += 1
+    if reasons:
+        aggregate["wrong_rows"] += 1
+        aggregate["reasons"].update(reasons)
+
+
+def aggregate_to_row(base: dict[str, Any], aggregate: dict[str, Any]) -> dict[str, Any]:
+    row = dict(base)
+    row["total_rows"] = aggregate["total_rows"]
+    row["wrong_rows"] = aggregate["wrong_rows"]
+    row["clean_rows"] = aggregate["total_rows"] - aggregate["wrong_rows"]
+    row["wrong_pct"] = format_pct(aggregate["wrong_rows"], aggregate["total_rows"])
+    for reason in REASON_ORDER:
+        row[f"{reason}_count"] = aggregate["reasons"].get(reason, 0)
+    return row
+
+
+def numeric_sort_key(value: str) -> tuple[int, str]:
+    try:
+        return (int(value), value)
+    except ValueError:
+        return (10**12, value)
+
+
+def main() -> None:
+    args = parse_args()
+    output_root = prepare_output_root(args.output_root, overwrite=args.overwrite)
+
+    eval_logs: list[EvalLog] = []
+    for input_root in args.input_root:
+        root = input_root.expanduser().resolve()
+        if not root.exists():
+            raise FileNotFoundError(root)
+        if root.is_file():
+            if root.name != args.eval_filename:
+                raise ValueError(
+                    f"Input file {root} does not match --eval-filename={args.eval_filename}."
+                )
+            eval_logs.append(build_eval_log(root.parent, root))
+            continue
+        for eval_path in sorted(root.rglob(args.eval_filename)):
+            eval_logs.append(build_eval_log(root, eval_path))
+
+    if not eval_logs:
+        raise FileNotFoundError(
+            f"No {args.eval_filename} files found under the provided input roots."
+        )
+
+    by_eval: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(new_aggregate)
+    by_method_stage: dict[tuple[str, ...], dict[str, Any]] = defaultdict(new_aggregate)
+    by_method_overall: dict[tuple[str, ...], dict[str, Any]] = defaultdict(new_aggregate)
+    sampled_examples: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    checkpoint_log_count = 0
+
+    for eval_log in eval_logs:
+        if eval_log.stage_label != "final":
+            checkpoint_log_count += 1
+
+        payload = load_json(eval_log.eval_path)
+        if not isinstance(payload, dict):
+            continue
+
+        for metric_name, metric_payload in payload.items():
+            if not isinstance(metric_payload, dict):
+                continue
+            value_by_index = metric_payload.get("value_by_index", {})
+            if not isinstance(value_by_index, dict):
+                continue
+
+            has_generation_rows = any(
+                isinstance(row, dict) and "generation" in row
+                for row in value_by_index.values()
+            )
+            if not has_generation_rows:
+                continue
+
+            eval_key = (
+                eval_log.input_root_label,
+                format_path(eval_log.eval_path),
+                metric_name,
+            )
+            method_stage_key = (
+                eval_log.input_root_label,
+                eval_log.benchmark,
+                eval_log.forget_split,
+                eval_log.holdout_split,
+                eval_log.lr,
+                eval_log.stage_label,
+                format_float(eval_log.epoch),
+                str(eval_log.step or ""),
+                eval_log.method_key,
+                eval_log.method_display,
+                metric_name,
+            )
+            method_overall_key = (
+                eval_log.input_root_label,
+                eval_log.benchmark,
+                eval_log.method_key,
+                eval_log.method_display,
+            )
+
+            for index_key, row in value_by_index.items():
+                if not isinstance(row, dict):
+                    continue
+                generation = str(row.get("generation", "") or "")
+                ground_truth = str(row.get("ground_truth", "") or "")
+                reasons, features = classify_generation(generation, ground_truth, args)
+                update_aggregate(by_eval[eval_key], reasons)
+                update_aggregate(by_method_stage[method_stage_key], reasons)
+                update_aggregate(by_method_overall[method_overall_key], reasons)
+
+                sample_status = "wrong" if reasons else "clean"
+                sample_key = (
+                    eval_log.input_root_label,
+                    eval_log.method_key,
+                    metric_name,
+                    sample_status,
+                )
+                if len(sampled_examples[sample_key]) < args.sample_limit:
+                    sampled_examples[sample_key].append(
+                        {
+                            "status": sample_status,
+                            "input_root_label": eval_log.input_root_label,
+                            "benchmark": eval_log.benchmark,
+                            "model_label": eval_log.model_label,
+                            "forget_split": eval_log.forget_split,
+                            "holdout_split": eval_log.holdout_split,
+                            "lr": eval_log.lr,
+                            "seed": eval_log.seed,
+                            "stage_label": eval_log.stage_label,
+                            "step": "" if eval_log.step is None else eval_log.step,
+                            "epoch": format_float(eval_log.epoch),
+                            "method_key": eval_log.method_key,
+                            "method_display": eval_log.method_display,
+                            "metric_name": metric_name,
+                            "eval_path": format_path(eval_log.eval_path),
+                            "run_name": eval_log.run_name,
+                            "index": index_key,
+                            "reasons": ",".join(reasons),
+                            "question": extract_question(str(row.get("input", "") or "")),
+                            "ground_truth": ground_truth,
+                            "generation": generation,
+                            "word_count": features["word_count"],
+                            "char_count": features["char_count"],
+                            "punctuation_ratio": f"{features['punctuation_ratio']:.4f}",
+                            "bigram_repeat": features["bigram_repeat"],
+                            "trigram_repeat": features["trigram_repeat"],
+                            "longest_char_run": features["longest_char_run"],
+                            "longest_token_run": features["longest_token_run"],
+                            "dominant_token_ratio": f"{features['dominant_token_ratio']:.4f}",
+                            "unique_token_ratio": f"{features['unique_token_ratio']:.4f}",
+                            "too_long_limit": features["too_long_limit"],
+                        }
+                    )
+
+    eval_summary_rows: list[dict[str, Any]] = []
+    for eval_log in sorted(
+        eval_logs,
+        key=lambda item: (
+            item.input_root_label,
+            item.benchmark,
+            item.forget_split,
+            item.lr,
+            method_sort_key(item.method_key),
+            item.stage_label,
+            format_path(item.eval_path),
+        ),
+    ):
+        for metric_name in ("forget_qa_rouge", "holdout_qa_rouge"):
+            eval_key = (
+                eval_log.input_root_label,
+                format_path(eval_log.eval_path),
+                metric_name,
+            )
+            aggregate = by_eval.get(eval_key)
+            if aggregate is None:
+                continue
+            eval_summary_rows.append(
+                aggregate_to_row(
+                    {
+                        "input_root_label": eval_log.input_root_label,
+                        "benchmark": eval_log.benchmark,
+                        "model_label": eval_log.model_label,
+                        "forget_split": eval_log.forget_split,
+                        "holdout_split": eval_log.holdout_split,
+                        "lr": eval_log.lr,
+                        "seed": eval_log.seed,
+                        "stage_label": eval_log.stage_label,
+                        "step": "" if eval_log.step is None else eval_log.step,
+                        "epoch": format_float(eval_log.epoch),
+                        "method_key": eval_log.method_key,
+                        "method_display": eval_log.method_display,
+                        "metric_name": metric_name,
+                        "eval_path": format_path(eval_log.eval_path),
+                        "run_name": eval_log.run_name,
+                    },
+                    aggregate,
+                )
+            )
+
+    method_stage_rows: list[dict[str, Any]] = []
+    for key, aggregate in sorted(
+        by_method_stage.items(),
+        key=lambda item: (
+            item[0][0],
+            item[0][1],
+            item[0][2],
+            item[0][4],
+            float(item[0][6] or 10**9),
+            method_sort_key(item[0][8]),
+            item[0][10],
+        ),
+    ):
+        (
+            input_root_label,
+            benchmark,
+            forget_split,
+            holdout_split,
+            lr,
+            stage_label,
+            epoch,
+            step,
+            method_key,
+            method_display,
+            metric_name,
+        ) = key
+        method_stage_rows.append(
+            aggregate_to_row(
+                {
+                    "input_root_label": input_root_label,
+                    "benchmark": benchmark,
+                    "forget_split": forget_split,
+                    "holdout_split": holdout_split,
+                    "lr": lr,
+                    "stage_label": stage_label,
+                    "step": step,
+                    "epoch": epoch,
+                    "method_key": method_key,
+                    "method_display": method_display,
+                    "metric_name": metric_name,
+                },
+                aggregate,
+            )
+        )
+
+    method_overall_rows: list[dict[str, Any]] = []
+    for key, aggregate in sorted(
+        by_method_overall.items(),
+        key=lambda item: (
+            item[0][0],
+            item[0][1],
+            method_sort_key(item[0][2]),
+        ),
+    ):
+        input_root_label, benchmark, method_key, method_display = key
+        method_overall_rows.append(
+            aggregate_to_row(
+                {
+                    "input_root_label": input_root_label,
+                    "benchmark": benchmark,
+                    "method_key": method_key,
+                    "method_display": method_display,
+                },
+                aggregate,
+            )
+        )
+
+    sample_rows: list[dict[str, Any]] = []
+    for key in sorted(
+        sampled_examples,
+        key=lambda item: (
+            item[0],
+            method_sort_key(item[1]),
+            item[2],
+            item[3],
+        ),
+    ):
+        rows = sampled_examples[key]
+        rows.sort(key=lambda row: numeric_sort_key(str(row["index"])))
+        sample_rows.extend(rows)
+
+    summary_fieldnames = [
+        "input_root_label",
+        "benchmark",
+        "method_key",
+        "method_display",
+        "total_rows",
+        "wrong_rows",
+        "clean_rows",
+        "wrong_pct",
+        *[f"{reason}_count" for reason in REASON_ORDER],
+    ]
+    method_stage_fieldnames = [
+        "input_root_label",
+        "benchmark",
+        "forget_split",
+        "holdout_split",
+        "lr",
+        "stage_label",
+        "step",
+        "epoch",
+        "method_key",
+        "method_display",
+        "metric_name",
+        "total_rows",
+        "wrong_rows",
+        "clean_rows",
+        "wrong_pct",
+        *[f"{reason}_count" for reason in REASON_ORDER],
+    ]
+    eval_fieldnames = [
+        "input_root_label",
+        "benchmark",
+        "model_label",
+        "forget_split",
+        "holdout_split",
+        "lr",
+        "seed",
+        "stage_label",
+        "step",
+        "epoch",
+        "method_key",
+        "method_display",
+        "metric_name",
+        "eval_path",
+        "run_name",
+        "total_rows",
+        "wrong_rows",
+        "clean_rows",
+        "wrong_pct",
+        *[f"{reason}_count" for reason in REASON_ORDER],
+    ]
+    sample_fieldnames = [
+        "status",
+        "input_root_label",
+        "benchmark",
+        "model_label",
+        "forget_split",
+        "holdout_split",
+        "lr",
+        "seed",
+        "stage_label",
+        "step",
+        "epoch",
+        "method_key",
+        "method_display",
+        "metric_name",
+        "eval_path",
+        "run_name",
+        "index",
+        "reasons",
+        "question",
+        "ground_truth",
+        "generation",
+        "word_count",
+        "char_count",
+        "punctuation_ratio",
+        "bigram_repeat",
+        "trigram_repeat",
+        "longest_char_run",
+        "longest_token_run",
+        "dominant_token_ratio",
+        "unique_token_ratio",
+        "too_long_limit",
+    ]
+
+    write_tsv(output_root / "overall_method_summary.tsv", method_overall_rows, summary_fieldnames)
+    write_tsv(output_root / "method_stage_summary.tsv", method_stage_rows, method_stage_fieldnames)
+    write_tsv(output_root / "eval_file_summary.tsv", eval_summary_rows, eval_fieldnames)
+    write_tsv(output_root / "sample_examples.tsv", sample_rows, sample_fieldnames)
+
+    print(f"Wrote wrong-generation reports to {output_root}")
+    print()
+    print("Overall method summary:")
+    for row in method_overall_rows:
+        print(
+            f"  {row['input_root_label']:>12s} | {row['benchmark']:>4s} | "
+            f"{row['method_display']:<14s} | wrong={str(row['wrong_rows']):>6s}/{str(row['total_rows']):>6s} "
+            f"({str(row['wrong_pct']):>6s}%)"
+        )
+    if checkpoint_log_count == 0:
+        print()
+        print(
+            "Note: no checkpoint-level generation logs matched the requested eval filename. "
+            "These reports cover final eval logs only."
+        )
+
+
+if __name__ == "__main__":
+    main()
 
 </content>
 
@@ -46804,6 +47973,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 import shutil
 from collections import defaultdict
@@ -46843,6 +48013,7 @@ METHOD_RE = re.compile(
     r"_(dual_cf|dpo_cf|simple_ce|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
+SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
 UTILITY_BENCHMARK_ORDER = {
     "mmlu_pro": 0,
     "truthfulqa_bin": 1,
@@ -46877,6 +48048,14 @@ def parse_args() -> argparse.Namespace:
         "--overwrite",
         action="store_true",
         help="Remove the existing output directory before generating files.",
+    )
+    parser.add_argument(
+        "--average-seeds",
+        action="store_true",
+        help=(
+            "Average rows for runs that share the same canonical run name after stripping a trailing "
+            "_seed<INT> suffix."
+        ),
     )
     return parser.parse_args()
 
@@ -46977,6 +48156,13 @@ def extract_lr(run_name: str) -> str:
     return match.group(1)
 
 
+def split_seed_suffix(run_name: str) -> tuple[str, str | None]:
+    match = SEED_SUFFIX_RE.fullmatch(run_name)
+    if match is None:
+        return run_name, None
+    return match.group("base"), match.group("seed")
+
+
 def extract_method_key(run_name: str) -> str:
     match = METHOD_RE.search(run_name)
     if match is None:
@@ -47070,19 +48256,27 @@ def dedupe_representative_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return representatives
 
 
+def normalize_epoch_slot_value(actual_epoch: Any) -> float | None:
+    if actual_epoch in {None, "", "None"}:
+        return None
+    return math.floor(float(actual_epoch) * 2.0 + 0.5) / 2.0
+
+
 def build_epoch_slots(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     slot_rows: list[dict[str, Any]] = []
     slot_names: list[str] = []
 
     representatives = dedupe_representative_rows(rows)
-    slot_index = 0
+    last_slot_value = 0.0
     for row in representatives:
         label = row.get("label")
         if label == "base_model_orig":
-            slot_name = "0.0"
+            slot_value = 0.0
         else:
-            slot_index += 1
-            slot_name = format(slot_index * 0.5, ".1f")
+            slot_value = normalize_epoch_slot_value(row.get("epoch"))
+            if slot_value is None:
+                slot_value = last_slot_value + 0.5
+        slot_name = format(slot_value, ".1f")
         slot_names.append(slot_name)
         slot_rows.append(
             {
@@ -47093,7 +48287,36 @@ def build_epoch_slots(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]],
                 "actual_epoch": row.get("epoch"),
             }
         )
+        last_slot_value = slot_value
     return slot_rows, slot_names
+
+
+def build_metric_values_by_slot(rows: list[dict[str, Any]], metric_name: str) -> dict[str, Any]:
+    slot_rows, _ = build_epoch_slots(rows)
+    representative_rows = dedupe_representative_rows(rows)
+    return {
+        slot_row["slot"]: source_row.get(metric_name)
+        for slot_row, source_row in zip(slot_rows, representative_rows)
+    }
+
+
+def average_optional_floats(values: list[Any]) -> float | None:
+    numeric_values = [float(value) for value in values if value is not None]
+    if not numeric_values:
+        return None
+    return sum(numeric_values) / len(numeric_values)
+
+
+def average_scalar_values(values: list[Any]) -> Any:
+    present_values = [value for value in values if value not in {None, "", "None"}]
+    if not present_values:
+        return None
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in present_values):
+        return sum(float(value) for value in present_values) / len(present_values)
+    first_value = present_values[0]
+    if all(value == first_value for value in present_values):
+        return first_value
+    return first_value
 
 
 def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
@@ -47388,6 +48611,98 @@ def sanitize_metric_name(metric_name: str) -> str:
     return metric_name.replace("/", "_").replace(".", "_")
 
 
+def run_seed_sort_key(run: dict[str, Any]) -> tuple[int, int, str]:
+    _canonical_name, seed = split_seed_suffix(str(run["run_name"]))
+    if seed is None:
+        return (1, -1, str(run["run_name"]))
+    return (0, int(seed), str(run["run_name"]))
+
+
+def group_runs_for_output(
+    runs: list[dict[str, Any]],
+    *,
+    average_seeds: bool,
+) -> list[dict[str, Any]]:
+    if not average_seeds:
+        output_groups = []
+        for run in sorted(runs, key=lambda item: method_sort_key(str(item["method"]))):
+            _canonical_name, seed = split_seed_suffix(str(run["run_name"]))
+            output_groups.append(
+                {
+                    "method": run["method"],
+                    "run_name": run["run_name"],
+                    "params_file": run["params_file"],
+                    "runs": [run],
+                    "seed_values": [] if seed is None else [seed],
+                    "source_run_dirs": [str(run["run_dir"])],
+                }
+            )
+        return output_groups
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        method_name = str(run["method"])
+        canonical_name, _seed = split_seed_suffix(str(run["run_name"]))
+        group = grouped.setdefault(
+            method_name,
+            {
+                "method": method_name,
+                "run_name": canonical_name,
+                "params_file": run["params_file"],
+                "runs": [],
+            },
+        )
+        if group["run_name"] != canonical_name:
+            raise ValueError(
+                f"Method {method_name} maps to multiple canonical run names: "
+                f"{group['run_name']} vs {canonical_name}"
+            )
+        group["runs"].append(run)
+
+    output_groups = sorted(grouped.values(), key=lambda item: method_sort_key(str(item["method"])))
+    for group in output_groups:
+        group["runs"].sort(key=run_seed_sort_key)
+        group["seed_values"] = [
+            seed
+            for _canonical_name, seed in (split_seed_suffix(str(run["run_name"])) for run in group["runs"])
+            if seed is not None
+        ]
+        group["source_run_dirs"] = [str(run["run_dir"]) for run in group["runs"]]
+    return output_groups
+
+
+def build_epoch_reference_rows(run_groups: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    slot_map: dict[str, dict[str, Any]] = {}
+    for group in run_groups:
+        for run in group["runs"]:
+            for slot_row in build_epoch_slots(run["merged_rows"])[0]:
+                slot_name = str(slot_row["slot"])
+                current_row = slot_map.get(slot_name)
+                if current_row is None or (
+                    current_row.get("label") != "final" and slot_row.get("label") == "final"
+                ):
+                    slot_map[slot_name] = slot_row
+
+    slot_names = sorted(slot_map, key=float)
+    return [slot_map[slot_name] for slot_name in slot_names], slot_names
+
+
+def collect_metric_names_for_runs(run_groups: list[dict[str, Any]], row_key: str) -> list[str]:
+    metric_keys: set[str] = set()
+    for group in run_groups:
+        for run in group["runs"]:
+            metric_keys.update(collect_metric_keys(run[row_key]))
+
+    ordered = [metric for metric in PREFERRED_METRIC_ORDER if metric in metric_keys]
+    utility_metric_keys = sorted(
+        (metric for metric in metric_keys if UTILITY_COLUMN_RE.fullmatch(metric)),
+        key=utility_metric_sort_key,
+    )
+    ordered.extend(metric for metric in utility_metric_keys if metric not in ordered)
+    ordered.extend(sorted(metric_keys - set(ordered)))
+    return ordered
+
+
 def main() -> None:
     args = parse_args()
     unlearn_root = resolve_unlearn_root(args.input_root)
@@ -47491,8 +48806,8 @@ def main() -> None:
         split_lr_root = output_root / split_bucket / lr
         split_lr_root.mkdir(parents=True, exist_ok=True)
 
-        runs.sort(key=lambda row: method_sort_key(row["method"]))
-        epoch_rows, epoch_slots = build_epoch_slots(runs[0]["merged_rows"])
+        run_groups = group_runs_for_output(runs, average_seeds=args.average_seeds)
+        epoch_rows, epoch_slots = build_epoch_reference_rows(run_groups)
 
         write_tsv(
             split_lr_root / "epoch_reference.tsv",
@@ -47505,17 +48820,17 @@ def main() -> None:
             ["method", "run_name", "params_file", "source_run_dir"],
             [
                 {
-                    "method": run["method"],
-                    "run_name": run["run_name"],
-                    "params_file": str(run["params_file"].relative_to(output_root)),
-                    "source_run_dir": str(run["run_dir"]),
+                    "method": group["method"],
+                    "run_name": group["run_name"],
+                    "params_file": str(group["params_file"].relative_to(output_root)),
+                    "source_run_dir": "|".join(group["source_run_dirs"]),
                 }
-                for run in runs
+                for group in run_groups
             ],
         )
 
-        merged_metric_names = collect_metric_keys(runs[0]["merged_rows"])
-        cosine_metric_names = collect_metric_keys(runs[0]["cosine_rows"])
+        merged_metric_names = collect_metric_names_for_runs(run_groups, "merged_rows")
+        cosine_metric_names = collect_metric_names_for_runs(run_groups, "cosine_rows")
         all_metric_names = merged_metric_names + [
             metric for metric in cosine_metric_names if metric not in merged_metric_names
         ]
@@ -47523,16 +48838,19 @@ def main() -> None:
         for metric_name in all_metric_names:
             fieldnames = ["method"] + epoch_slots
             table_rows: list[dict[str, Any]] = []
-            for run in runs:
-                source_rows = run["cosine_rows"] if metric_name.endswith("_cos_sim") else run["merged_rows"]
-                slot_rows, _ = build_epoch_slots(source_rows)
-                metric_values_by_slot = {
-                    slot_row["slot"]: source_row.get(metric_name)
-                    for slot_row, source_row in zip(slot_rows, dedupe_representative_rows(source_rows))
-                }
-                row = {"method": run["method"]}
+            for group in run_groups:
+                metric_maps = [
+                    build_metric_values_by_slot(
+                        run["cosine_rows"] if metric_name.endswith("_cos_sim") else run["merged_rows"],
+                        metric_name,
+                    )
+                    for run in group["runs"]
+                ]
+                row = {"method": group["method"]}
                 for slot in epoch_slots:
-                    row[slot] = metric_values_by_slot.get(slot)
+                    row[slot] = average_optional_floats(
+                        [metric_values_by_slot.get(slot) for metric_values_by_slot in metric_maps]
+                    )
                 table_rows.append(row)
 
             write_tsv(
@@ -47543,17 +48861,19 @@ def main() -> None:
 
         trajectory_rows: list[dict[str, Any]] = []
         trajectory_fieldnames = ["method"]
-        flattened_payloads: list[tuple[str, dict[str, Any]]] = []
-        for run in runs:
-            flattened = flatten_trajectory("", run["trajectory_metrics"])
-            flattened_payloads.append((run["method"], flattened))
-            for key in flattened:
-                if key not in trajectory_fieldnames:
-                    trajectory_fieldnames.append(key)
+        flattened_payloads: list[tuple[str, list[dict[str, Any]]]] = []
+        for group in run_groups:
+            flattened_runs = [flatten_trajectory("", run["trajectory_metrics"]) for run in group["runs"]]
+            flattened_payloads.append((str(group["method"]), flattened_runs))
+            for flattened in flattened_runs:
+                for key in flattened:
+                    if key not in trajectory_fieldnames:
+                        trajectory_fieldnames.append(key)
 
-        for method_name, flattened in flattened_payloads:
+        for method_name, flattened_runs in flattened_payloads:
             row = {"method": method_name}
-            row.update(flattened)
+            for key in trajectory_fieldnames[1:]:
+                row[key] = average_scalar_values([flattened.get(key) for flattened in flattened_runs])
             trajectory_rows.append(row)
 
         write_tsv(
@@ -48635,6 +49955,8 @@ EPOCH_SPECS = [("2.0", "2"), ("5.0", "5")]
 FIXED_METRICS = [
     ("forget_qa_rouge", "F"),
     ("holdout_qa_rouge", "H"),
+    ("forget_wrong_gen_rate", "FW"),
+    ("holdout_wrong_gen_rate", "HW"),
     ("forget_qa_cos_sim", "FC"),
     ("holdout_qa_cos_sim", "HC"),
     ("utility_avg", "U"),
@@ -48642,9 +49964,41 @@ FIXED_METRICS = [
 METRIC_DIRECTION = {
     "forget_qa_rouge": r"$\downarrow$",
     "holdout_qa_rouge": r"$\uparrow$",
+    "forget_wrong_gen_rate": r"$\downarrow$",
+    "holdout_wrong_gen_rate": r"$\downarrow$",
     "forget_qa_cos_sim": r"$\downarrow$",
     "holdout_qa_cos_sim": r"$\uparrow$",
     "utility_avg": r"$\uparrow$",
+}
+WRONG_GENERATION_METRIC_NAMES = {"forget_wrong_gen_rate", "holdout_wrong_gen_rate"}
+WRONG_GENERATION_METRIC_MAP = {
+    "forget_qa_rouge": "forget_wrong_gen_rate",
+    "holdout_qa_rouge": "holdout_wrong_gen_rate",
+}
+WRONG_GENERATION_METHOD_MAP = {
+    "dual_cf_full": "full",
+    "dual_cf_d_only": "d_only",
+    "dual_cf_a_only": "a_only",
+    "dpo_cf": "dpo",
+    "ga": "ga",
+    "ada_pop": "ada_pop",
+    "npo": "npo",
+    "npo_sam": "npo_sam",
+    "loku": "loku",
+    "simnpo": "simnpo",
+}
+METRIC_LEGEND_LABELS = {
+    "F": "forget ROUGE",
+    "H": "holdout ROUGE",
+    "FW": "forget wrong-generation rate",
+    "HW": "holdout wrong-generation rate",
+    "FC": "forget cosine similarity",
+    "HC": "holdout cosine similarity",
+    "U": "utility_avg",
+    "M": "MMLU-Pro",
+    "T": "TruthfulQA",
+    "W": "Winogrande",
+    "A": "ARC",
 }
 UTILITY_METRIC_RE = re.compile(r"^(mmlu_pro|truthfulqa_bin|winogrande|arc)_\d+_acc$")
 UTILITY_METRIC_ORDER = {
@@ -48716,9 +50070,25 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to a Beamer .tex file with one slide per split/LR/epoch table.",
     )
     parser.add_argument(
+        "--wrong-generations-root",
+        type=Path,
+        help=(
+            "Optional path to analyze_wrong_generations.py outputs that contain "
+            "method_stage_summary.tsv for wrong-generation rates."
+        ),
+    )
+    parser.add_argument(
         "--simnpo-root",
         type=Path,
-        help="Optional path to a structured-saves directory that contains simnpo rows and the newer simple_ce rows.",
+        help="Optional path to a structured-saves directory that contains simnpo rows.",
+    )
+    parser.add_argument(
+        "--simplece-new-root",
+        type=Path,
+        help=(
+            "Optional path to a structured-saves directory that contains the newer simple_ce rows. "
+            "Defaults to --simnpo-root when omitted."
+        ),
     )
     parser.add_argument(
         "--simplece-old-root",
@@ -48762,7 +50132,11 @@ def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
     return (UTILITY_METRIC_ORDER[match.group(1)], metric_name)
 
 
-def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
+def discover_metrics(
+    roots: list[Path],
+    *,
+    include_wrong_generation_metrics: bool,
+) -> list[tuple[str, str]]:
     utility_metric_names: set[str] = set()
     for root in roots:
         for split in SPLITS:
@@ -48775,7 +50149,11 @@ def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
                     if UTILITY_METRIC_RE.fullmatch(metric_name):
                         utility_metric_names.add(metric_name)
 
-    metrics = list(FIXED_METRICS)
+    metrics = [
+        metric_spec
+        for metric_spec in FIXED_METRICS
+        if include_wrong_generation_metrics or metric_spec[0] not in WRONG_GENERATION_METRIC_NAMES
+    ]
     for metric_name in sorted(utility_metric_names, key=utility_metric_sort_key):
         match = UTILITY_METRIC_RE.fullmatch(metric_name)
         assert match is not None
@@ -48783,18 +50161,151 @@ def discover_metrics(roots: list[Path]) -> list[tuple[str, str]]:
     return metrics
 
 
+def normalize_epoch_column(raw_value: str | None) -> str | None:
+    if raw_value in {None, ""}:
+        return None
+    return f"{float(raw_value):.1f}"
+
+
+def infer_wrong_generation_split(benchmark: str, forget_split: str) -> str | None:
+    if benchmark == "rwku":
+        return "rwku"
+    if forget_split == "city_forget_rare_5":
+        return "duet_rare"
+    if forget_split == "city_forget_popular_5":
+        return "duet_popular"
+    if forget_split in {"city_forget_5", "city_forget_rare_5+city_forget_popular_5"}:
+        return "duet_merged"
+    return None
+
+
+def load_wrong_generation_index(
+    wrong_generations_root: Path,
+) -> tuple[dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]], set[str]]:
+    summary_path = wrong_generations_root / "method_stage_summary.tsv"
+
+    index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]] = {}
+    labels: set[str] = set()
+    with summary_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        for row in reader:
+            metric_name = WRONG_GENERATION_METRIC_MAP.get(str(row.get("metric_name") or ""))
+            if metric_name is None:
+                continue
+            split = infer_wrong_generation_split(
+                str(row.get("benchmark") or ""),
+                str(row.get("forget_split") or ""),
+            )
+            epoch_column = normalize_epoch_column(row.get("epoch"))
+            wrong_pct = row.get("wrong_pct")
+            if split is None or epoch_column is None or wrong_pct in {None, ""}:
+                continue
+
+            label = str(row.get("input_root_label") or "")
+            if not label:
+                continue
+            labels.add(label)
+            split_map = index.setdefault(label, {}).setdefault(split, {}).setdefault(
+                str(row.get("lr") or ""),
+                {},
+            )
+            method_key = str(row.get("method_key") or "")
+            method_map = split_map.setdefault(epoch_column, {}).setdefault(method_key, {})
+            method_map[metric_name] = format(float(wrong_pct) / 100.0, ".12g")
+
+    return index, labels
+
+
+def resolve_wrong_generation_label(root: Path, available_labels: set[str]) -> str | None:
+    for candidate in [root.name, *(parent.name for parent in root.parents)]:
+        if candidate and candidate in available_labels:
+            return candidate
+    return None
+
+
+def resolve_wrong_generation_methods(
+    method_key: str,
+    source_methods: set[str],
+) -> list[str]:
+    mapped_method = WRONG_GENERATION_METHOD_MAP.get(method_key)
+    if mapped_method is not None:
+        return [mapped_method] if mapped_method in source_methods else []
+
+    if method_key != "simple_ce":
+        return []
+
+    simple_ce_methods = sorted(
+        (method_name for method_name in source_methods if method_name.startswith("simple_ce")),
+        key=simple_ce_sort_key,
+    )
+    if len(simple_ce_methods) == 1:
+        return simple_ce_methods
+    return []
+
+
+def load_wrong_generation_rows(
+    wrong_generation_index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]],
+    wrong_generation_label: str | None,
+    split: str,
+    lr: str,
+    metric_name: str,
+    source_methods: set[str],
+) -> dict[str, dict[str, str]]:
+    if wrong_generation_label is None:
+        return {}
+
+    rows: dict[str, dict[str, str]] = {}
+    by_epoch = (
+        wrong_generation_index.get(wrong_generation_label, {})
+        .get(split, {})
+        .get(lr, {})
+    )
+    for epoch_column, method_entries in by_epoch.items():
+        for method_key, metric_values in method_entries.items():
+            raw_value = metric_values.get(metric_name)
+            if raw_value is None:
+                continue
+            for resolved_method in resolve_wrong_generation_methods(method_key, source_methods):
+                row = rows.setdefault(resolved_method, {"method": resolved_method})
+                row[epoch_column] = raw_value
+    return rows
+
+
 def load_table_bundle(
     root: Path,
     split: str,
     lr: str,
     metrics: list[tuple[str, str]],
+    *,
+    wrong_generation_index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]
+    | None = None,
+    wrong_generation_label: str | None = None,
 ) -> dict[str, dict[str, dict[str, str]]]:
     bundle: dict[str, dict[str, dict[str, str]]] = {}
-    fixed_metric_names = {metric_name for metric_name, _metric_abbrev in FIXED_METRICS}
+    fixed_metric_names = {
+        metric_name
+        for metric_name, _metric_abbrev in FIXED_METRICS
+        if metric_name not in WRONG_GENERATION_METRIC_NAMES
+    }
     for metric_name, _metric_abbrev in metrics:
+        if metric_name in WRONG_GENERATION_METRIC_NAMES:
+            continue
         bundle[metric_name] = load_metric_rows(
             root / split / lr / f"{metric_name}.tsv",
             missing_ok=metric_name not in fixed_metric_names,
+        )
+
+    source_methods = set(bundle.get("forget_qa_rouge", {}))
+    for metric_name, _metric_abbrev in metrics:
+        if metric_name not in WRONG_GENERATION_METRIC_NAMES:
+            continue
+        bundle[metric_name] = load_wrong_generation_rows(
+            wrong_generation_index or {},
+            wrong_generation_label,
+            split,
+            lr,
+            metric_name,
+            source_methods,
         )
     return bundle
 
@@ -48815,6 +50326,39 @@ def build_header_cells(metrics: list[tuple[str, str]]) -> list[str]:
         direction = METRIC_DIRECTION.get(metric_name, r"$\uparrow$")
         cells.append(f"{metric_abbrev}{direction}")
     return cells
+
+
+def build_direction_text(metrics: list[tuple[str, str]]) -> str:
+    lower = [metric_abbrev for metric_name, metric_abbrev in metrics if METRIC_DIRECTION.get(metric_name) == r"$\downarrow$"]
+    higher = [
+        metric_abbrev
+        for metric_name, metric_abbrev in metrics
+        if METRIC_DIRECTION.get(metric_name, r"$\uparrow$") == r"$\uparrow$"
+    ]
+    if lower and higher:
+        return (
+            rf"{{\tiny Values are percentages. {' / '.join(lower)} are lower-is-better; "
+            rf"{' / '.join(higher)} are higher-is-better.}}"
+        )
+    if lower:
+        return rf"{{\tiny Values are percentages. {' / '.join(lower)} are lower-is-better.}}"
+    if higher:
+        return rf"{{\tiny Values are percentages. {' / '.join(higher)} are higher-is-better.}}"
+    return r"{\tiny Values are percentages.}"
+
+
+def build_metric_legend(metrics: list[tuple[str, str]]) -> str:
+    legend_parts: list[str] = []
+    seen_abbrevs: set[str] = set()
+    for _metric_name, metric_abbrev in metrics:
+        if metric_abbrev in seen_abbrevs:
+            continue
+        label = METRIC_LEGEND_LABELS.get(metric_abbrev)
+        if label is None:
+            continue
+        legend_parts.append(f"{metric_abbrev} = {label.replace('_', r'\_')}")
+        seen_abbrevs.add(metric_abbrev)
+    return ",\\ ".join(legend_parts)
 
 
 def build_row_cells(
@@ -48881,16 +50425,6 @@ def build_slide_frame(
 ) -> str:
     header_cells = build_header_cells(metrics)
     row_lines = build_row_cells(epoch_column, bundles, row_specs, metrics)
-    utility_labels = {
-        metric_abbrev
-        for metric_name, metric_abbrev in metrics
-        if metric_name == "utility_avg" or UTILITY_METRIC_RE.fullmatch(metric_name)
-    }
-    utility_label_text = " / ".join(
-        metric_abbrev
-        for _metric_name, metric_abbrev in metrics
-        if metric_abbrev in utility_labels
-    )
     metric_count = len(metrics)
 
     table_font = r"\scriptsize"
@@ -48908,9 +50442,9 @@ def build_slide_frame(
     lines = [
         r"\begin{frame}[t]",
         rf"\frametitle{{{frame_title}}}",
-        rf"{{\tiny Values are percentages. F / FC are lower-is-better; H / HC / {utility_label_text} are higher-is-better.}}",
+        build_direction_text(metrics),
         r"",
-        r"{\tiny F/H = ROUGE,\ FC/HC = cosine similarity,\ U = utility\_avg,\ M = MMLU-Pro,\ T = TruthfulQA,\ W = Winogrande,\ A = ARC.}",
+        rf"{{\tiny {build_metric_legend(metrics)}.}}",
         r"",
         rf"\vspace{{{top_vspace}}}",
         r"\centering",
@@ -49069,20 +50603,59 @@ def build_bundles(
     split: str,
     lr: str,
     metrics: list[tuple[str, str]],
+    *,
+    wrong_generation_index: dict[str, dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]]]
+    | None = None,
+    wrong_generation_labels_by_source: dict[str, str | None] | None = None,
 ) -> dict[str, dict[str, dict[str, dict[str, str]]]]:
     return {
-        source_name: load_table_bundle(root, split, lr, metrics)
+        source_name: load_table_bundle(
+            root,
+            split,
+            lr,
+            metrics,
+            wrong_generation_index=wrong_generation_index,
+            wrong_generation_label=(
+                None
+                if wrong_generation_labels_by_source is None
+                else wrong_generation_labels_by_source.get(source_name)
+            ),
+        )
         for source_name, root in root_map.items()
     }
 
 
+def row_spec_has_source_rows(
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    row_spec: tuple[str, str, str, str],
+    metrics: list[tuple[str, str]],
+) -> bool:
+    source_name, source_method, _display_name, _color = row_spec
+    source_bundle = bundles[source_name]
+    return any(
+        source_bundle[metric_name].get(source_method) is not None
+        for metric_name, _ in metrics
+        if metric_name not in WRONG_GENERATION_METRIC_NAMES
+    )
+
+
+def filter_row_specs(
+    row_specs: list[tuple[str, str, str, str]],
+    bundles: dict[str, dict[str, dict[str, dict[str, str]]]],
+    metrics: list[tuple[str, str]],
+) -> list[tuple[str, str, str, str]]:
+    return [row_spec for row_spec in row_specs if row_spec_has_source_rows(bundles, row_spec, metrics)]
+
+
 def build_combined_row_specs(
     simnpo_root: Path | None,
+    simplece_new_root: Path | None,
     simplece_old_root: Path | None,
 ) -> list[tuple[str, str, str, str]]:
     row_specs = list(COMBINED_ROW_SPECS)
     if simnpo_root is not None:
         row_specs.append(SIMNPO_ROW_SPEC)
+    if simplece_new_root is not None:
         variant_tag = "new" if simplece_old_root is not None else None
         for method_name in COMBINED_SIMPLECE_METHODS:
             row_specs.append(
@@ -49097,9 +50670,10 @@ def build_combined_row_specs(
 
 def build_combined_slide_row_specs(
     simnpo_root: Path | None,
+    simplece_new_root: Path | None,
     simplece_old_root: Path | None,
 ) -> list[tuple[str, str, str, str]]:
-    return build_combined_row_specs(simnpo_root, simplece_old_root)
+    return build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root)
 
 
 def load_simplece_row_specs(
@@ -49210,6 +50784,11 @@ def main() -> None:
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
+    simplece_new_root = (
+        simnpo_root
+        if args.simplece_new_root is None
+        else args.simplece_new_root.expanduser().resolve()
+    )
     simplece_old_root = (
         None if args.simplece_old_root is None else args.simplece_old_root.expanduser().resolve()
     )
@@ -49221,30 +50800,69 @@ def main() -> None:
         if args.output_simplece_slides_tex is None
         else args.output_simplece_slides_tex.expanduser().resolve()
     )
+    wrong_generations_root = (
+        None
+        if args.wrong_generations_root is None
+        else args.wrong_generations_root.expanduser().resolve()
+    )
 
     combined_roots = {"old": old_root, "new": new_root}
     if simnpo_root is not None:
         combined_roots["simnpo"] = simnpo_root
-        combined_roots["simplece_new"] = simnpo_root
+    if simplece_new_root is not None:
+        combined_roots["simplece_new"] = simplece_new_root
     if simplece_old_root is not None:
         combined_roots["simplece_old"] = simplece_old_root
-    metrics = discover_metrics(list(combined_roots.values()))
+    available_wrong_generation_labels: set[str] = set()
+    wrong_generation_index: dict[
+        str,
+        dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]],
+    ] | None = None
+    wrong_generation_labels_by_source: dict[str, str | None] | None = None
+    if wrong_generations_root is not None:
+        wrong_generation_index, available_wrong_generation_labels = load_wrong_generation_index(
+            wrong_generations_root
+        )
+        wrong_generation_labels_by_source = {
+            source_name: resolve_wrong_generation_label(root, available_wrong_generation_labels)
+            for source_name, root in combined_roots.items()
+        }
 
-    combined_row_specs_by_split_lr = {
-        (split, lr): build_combined_row_specs(simnpo_root, simplece_old_root)
-        for split in SPLITS
-        for lr in LRS
-    }
-    combined_slide_row_specs_by_split_lr = {
-        (split, lr): build_combined_slide_row_specs(simnpo_root, simplece_old_root)
-        for split in SPLITS
-        for lr in LRS
-    }
+    metrics = discover_metrics(
+        list(combined_roots.values()),
+        include_wrong_generation_metrics=wrong_generations_root is not None,
+    )
+
     combined_bundles_by_split_lr = {
-        (split, lr): build_bundles(combined_roots, split, lr, metrics)
+        (
+            split,
+            lr,
+        ): build_bundles(
+            combined_roots,
+            split,
+            lr,
+            metrics,
+            wrong_generation_index=wrong_generation_index,
+            wrong_generation_labels_by_source=wrong_generation_labels_by_source,
+        )
         for split in SPLITS
         for lr in LRS
     }
+    combined_row_specs_by_split_lr = {}
+    combined_slide_row_specs_by_split_lr = {}
+    for split in SPLITS:
+        for lr in LRS:
+            bundles = combined_bundles_by_split_lr[(split, lr)]
+            combined_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+                build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+                bundles,
+                metrics,
+            )
+            combined_slide_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+                build_combined_slide_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+                bundles,
+                metrics,
+            )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_text = build_output_text(
@@ -49274,25 +50892,27 @@ def main() -> None:
         output_slides_tex.write_text(slides_tex, encoding="utf-8")
 
     if output_simplece_file is not None:
-        if simnpo_root is None:
-            raise ValueError("--simnpo-root is required when writing SimpleCE-only outputs")
+        if simplece_new_root is None:
+            raise ValueError(
+                "--simplece-new-root or --simnpo-root is required when writing SimpleCE-only outputs"
+            )
         output_simplece_file.parent.mkdir(parents=True, exist_ok=True)
         if simplece_old_root is None:
-            simplece_source_specs = [("simplece", simnpo_root, None, "blue!12")]
-            simplece_slide_source_specs = [("simplece", simnpo_root, None, "")]
-            simplece_root_map = {"simplece": simnpo_root}
+            simplece_source_specs = [("simplece", simplece_new_root, None, "blue!12")]
+            simplece_slide_source_specs = [("simplece", simplece_new_root, None, "")]
+            simplece_root_map = {"simplece": simplece_new_root}
         else:
             simplece_source_specs = [
                 ("simplece_old", simplece_old_root, "old", "orange!12"),
-                ("simplece_new", simnpo_root, "new", "blue!12"),
+                ("simplece_new", simplece_new_root, "new", "blue!12"),
             ]
             simplece_slide_source_specs = [
                 ("simplece_old", simplece_old_root, "old", ""),
-                ("simplece_new", simnpo_root, "new", ""),
+                ("simplece_new", simplece_new_root, "new", ""),
             ]
             simplece_root_map = {
                 "simplece_old": simplece_old_root,
-                "simplece_new": simnpo_root,
+                "simplece_new": simplece_new_root,
             }
         simplece_row_specs_by_split_lr = {
             (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr, metrics)
@@ -49305,7 +50925,27 @@ def main() -> None:
             for lr in LRS
         }
         simplece_bundles_by_split_lr = {
-            (split, lr): build_bundles(simplece_root_map, split, lr, metrics)
+            (
+                split,
+                lr,
+            ): build_bundles(
+                simplece_root_map,
+                split,
+                lr,
+                metrics,
+                wrong_generation_index=wrong_generation_index,
+                wrong_generation_labels_by_source=(
+                    None
+                    if wrong_generation_labels_by_source is None
+                    else {
+                        source_name: resolve_wrong_generation_label(
+                            root,
+                            available_wrong_generation_labels,
+                        )
+                        for source_name, root in simplece_root_map.items()
+                    }
+                ),
+            )
             for split in SPLITS
             for lr in LRS
         }
