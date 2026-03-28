@@ -7,9 +7,12 @@ from data.qa import (
     QAwithAlternateDataset,
     QAwithAlternateMetadataDataset,
     QAAnswerIndexDataset,
+    QAMultiCFDataset,
+    QABoundaryCFDataset,
 )
 from data.collators import (
     DataCollatorForSupervisedDataset,
+    DataCollatorForMultiCF,
 )
 from data.unlearn import ForgetRetainDataset
 from data.pretraining import PretrainingDataset, CompletionDataset
@@ -104,6 +107,8 @@ _register_data(CompletionDataset)
 _register_data(QAwithAlternateDataset)
 _register_data(QAwithAlternateMetadataDataset)
 _register_data(QAAnswerIndexDataset)
+_register_data(QAMultiCFDataset)
+_register_data(QABoundaryCFDataset)
 
 # Register composite datasets used in unlearning
 # groups: unlearn
@@ -111,3 +116,4 @@ _register_data(ForgetRetainDataset)
 
 # Register collators
 _register_collator(DataCollatorForSupervisedDataset)
+_register_collator(DataCollatorForMultiCF)

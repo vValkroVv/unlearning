@@ -34,6 +34,11 @@ PY
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
+experiment="${EXPERIMENT:-unlearn/duet/dual_cf_v2_lora.yaml}"
+trainer="${TRAINER:-DualCF}"
+method_name="${METHOD_NAME:-dual_cf}"
+run_label="${RUN_LABEL:-DualCF}"
+
 base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
 lora_model="${MODEL_CONFIG:-${base_model}-lora}"
 hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
@@ -44,11 +49,11 @@ use_sft_base=${USE_SFT_BASE:-1}
 if [[ "${use_sft_base}" == "1" ]]; then
     base_model_path="${local_sft_base}"
     default_tokenizer_model_path="${base_model_path}"
-    echo "[duet][DualCF] Using locally finetuned base checkpoint at ${base_model_path}"
+    echo "[duet][${run_label}] Using locally finetuned base checkpoint at ${base_model_path}"
 else
     base_model_path="${hf_base_model_path}"
     default_tokenizer_model_path="${hf_base_model_path}"
-    echo "[duet][DualCF] Using Hugging Face base checkpoint ${base_model_path}"
+    echo "[duet][${run_label}] Using Hugging Face base checkpoint ${base_model_path}"
 fi
 
 tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${default_tokenizer_model_path}}"
@@ -63,11 +68,6 @@ if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
     extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
     extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
 fi
-
-experiment="${EXPERIMENT:-unlearn/duet/dual_cf_v2_lora.yaml}"
-trainer="${TRAINER:-DualCF}"
-method_name="${METHOD_NAME:-dual_cf}"
-run_label="${RUN_LABEL:-DualCF}"
 
 output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/duet/${method_name}}"
 mkdir -p "${output_root}"
@@ -196,6 +196,16 @@ raw_neg_powers="${NEG_POWERS:-1.0}"
 raw_neg_powers="${raw_neg_powers//,/ }"; raw_neg_powers="${raw_neg_powers//\"/}"; raw_neg_powers="${raw_neg_powers//\'/}"
 read -r -a neg_powers <<< "${raw_neg_powers}"
 
+multicf_max_alternates_used="${MULTICF_MAX_ALTERNATES_USED:-4}"
+multicf_alt_agg_mode="${MULTICF_ALT_AGG_MODE:-weighted_mean}"
+multicf_alt_weight_mode="${MULTICF_ALT_WEIGHT_MODE:-rerank}"
+multicf_alt_set_temperature="${MULTICF_ALT_SET_TEMPERATURE:-0.7}"
+boundary_local_retain_weight="${BOUNDARY_LOCAL_RETAIN_WEIGHT:-0.5}"
+boundary_margin_weight="${BOUNDARY_MARGIN_WEIGHT:-1.0}"
+span_mode="${SPAN_MODE:-lcs}"
+span_shared_token_weight="${SPAN_SHARED_TOKEN_WEIGHT:-0.25}"
+span_unique_token_weight="${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}"
+
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
@@ -264,7 +274,21 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                         attribution_tag="aOff"
                                                                                                     fi
 
-                                                                                                    task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}_${difficulty_tag}_${attribution_tag}
+                                                                                                    method_suffix=""
+                                                                                                    if [[ "${trainer}" == "MultiCF" ]]; then
+                                                                                                        multicf_temp_tag=${multicf_alt_set_temperature//./p}
+                                                                                                        method_suffix=_k${multicf_max_alternates_used}_agg${multicf_alt_agg_mode}_w${multicf_alt_weight_mode}_temp${multicf_temp_tag}
+                                                                                                    elif [[ "${trainer}" == "BoundaryCF" ]]; then
+                                                                                                        boundary_local_tag=${boundary_local_retain_weight//./p}
+                                                                                                        boundary_margin_tag=${boundary_margin_weight//./p}
+                                                                                                        method_suffix=_lrw${boundary_local_tag}_bmw${boundary_margin_tag}
+                                                                                                    elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                        span_shared_tag=${span_shared_token_weight//./p}
+                                                                                                        span_unique_tag=${span_unique_token_weight//./p}
+                                                                                                        method_suffix=_mode${span_mode}_stw${span_shared_tag}_utw${span_unique_tag}
+                                                                                                    fi
+
+                                                                                                    task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
                                                                                                     if [[ -n "${run_tag_extra}" ]]; then
                                                                                                         task_name="${task_name}_${run_tag_extra}"
                                                                                                     fi
@@ -316,7 +340,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             trainer.method_args.gamma=${gamma}
                                                                                                             trainer.method_args.retain_loss_type=NLL
                                                                                                         )
-                                                                                                        if [[ "${trainer}" == "DualCF" ]]; then
+                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.tau_d=${tau_d}
                                                                                                                 trainer.method_args.tau_a=${tau_a}
@@ -335,6 +359,25 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                                 trainer.method_args.alpha_eff_topk_frac=${alpha_eff_topk_frac}
                                                                                                                 trainer.method_args.risk_power=${risk_power}
                                                                                                                 trainer.method_args.neg_power=${neg_power}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "MultiCF" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.max_alternates_used=${multicf_max_alternates_used}
+                                                                                                                trainer.method_args.alt_agg_mode=${multicf_alt_agg_mode}
+                                                                                                                trainer.method_args.alt_weight_mode=${multicf_alt_weight_mode}
+                                                                                                                trainer.method_args.alt_set_temperature=${multicf_alt_set_temperature}
+                                                                                                            )
+                                                                                                        elif [[ "${trainer}" == "BoundaryCF" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.local_retain_weight=${boundary_local_retain_weight}
+                                                                                                                trainer.method_args.boundary_margin_weight=${boundary_margin_weight}
+                                                                                                            )
+                                                                                                        elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.span_mode=${span_mode}
+                                                                                                                trainer.method_args.shared_token_weight=${span_shared_token_weight}
+                                                                                                                trainer.method_args.unique_token_weight=${span_unique_token_weight}
                                                                                                             )
                                                                                                         fi
 

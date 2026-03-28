@@ -1,0 +1,49 @@
+{
+  "created_at_utc": "2026-03-19T14:41:16.699313+00:00",
+  "backend": "multiple",
+  "model": "multiple",
+  "input_backends": [
+    "codex_cli",
+    "chatgpt_manual"
+  ],
+  "input_models": [
+    "gpt-5.4-mini",
+    "gpt-5.4",
+    "gpt-5.4-pro"
+  ],
+  "input_dataset_paths": [
+    "SwetieePawsss/DUET"
+  ],
+  "input_reasoning_efforts": [
+    "medium",
+    "high",
+    "low",
+    "xhigh"
+  ],
+  "input_sidecars": [
+    "artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_med/api_sidecar.jsonl",
+    "artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54mini_high/api_sidecar.jsonl",
+    "artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54_low/api_sidecar.jsonl",
+    "artifacts/dualcf_api_v3/duet/rare_codex_v3__full_g54pro_xhigh/api_sidecar.jsonl"
+  ],
+  "prompt_family": "duet_relation_safe",
+  "dataset_path": "SwetieePawsss/DUET",
+  "dataset_name": null,
+  "split": "city_forget_rare_5",
+  "data_files": null,
+  "question_key": "question",
+  "answer_key": "answer",
+  "answer_index": null,
+  "num_alternates": 8,
+  "batch_size": null,
+  "max_examples": 482,
+  "candidate_bank": null,
+  "candidate_bank_limit": null,
+  "reasoning_effort": null,
+  "timeout_seconds": null,
+  "sleep_seconds": null,
+  "max_attempts": null,
+  "resume": false,
+  "codex_login_status": null,
+  "merged_from_sidecars": true
+}

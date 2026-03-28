@@ -1,0 +1,12 @@
+{
+  "rows": 964,
+  "unique_indices": 964,
+  "duplicate_indices": [],
+  "bad_rows": 0,
+  "source_rows_rare": 482,
+  "source_rows_popular": 482,
+  "merged_rows": 964,
+  "synthetic_order": "rare_then_popular",
+  "duplicate_row_signatures": 0,
+  "merged_data_file": "/Users/valerii.kropotin/\u041d\u041e\u0414/Diploma/open-unlearning/artifacts/dualcf_api_v3/duet/merged_codex_v3__full_mix4/merged_input.jsonl"
+}

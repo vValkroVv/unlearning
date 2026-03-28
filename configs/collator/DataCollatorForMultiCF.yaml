@@ -1,0 +1,4 @@
+DataCollatorForMultiCF:
+  handler: DataCollatorForMultiCF
+  args:
+    padding_side: right

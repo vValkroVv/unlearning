@@ -27,6 +27,27 @@ case "${METHOD_VARIANT}" in
   simple_ce)
     exec bash "${script_dir}/simple_ce_rwku.sh"
     ;;
+  multicf)
+    export TRAINER=${TRAINER:-MultiCF}
+    export METHOD_NAME=${METHOD_NAME:-multicf}
+    export RUN_LABEL=${RUN_LABEL:-MultiCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/multicf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  boundary_cf)
+    export TRAINER=${TRAINER:-BoundaryCF}
+    export METHOD_NAME=${METHOD_NAME:-boundary_cf}
+    export RUN_LABEL=${RUN_LABEL:-BoundaryCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/boundary_cf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf)
+    export TRAINER=${TRAINER:-SpanCF}
+    export METHOD_NAME=${METHOD_NAME:-span_cf}
+    export RUN_LABEL=${RUN_LABEL:-SpanCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
   ga)
     exec bash "${script_dir}/ga_rwku.sh"
     ;;

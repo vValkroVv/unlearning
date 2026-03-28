@@ -12,7 +12,22 @@ from typing import Callable
 
 
 DEFAULT_LRS = ["5e-6", "1e-5", "5e-5", "1e-4"]
-DEFAULT_VARIANTS = ["full", "d_only", "a_only", "dpo", "simple_ce", "ga", "ada_pop", "npo", "simnpo", "npo_sam", "loku"]
+DEFAULT_VARIANTS = [
+    "full",
+    "d_only",
+    "a_only",
+    "dpo",
+    "simple_ce",
+    "multicf",
+    "boundary_cf",
+    "span_cf",
+    "ga",
+    "ada_pop",
+    "npo",
+    "simnpo",
+    "npo_sam",
+    "loku",
+]
 
 PHASE_PREFIXES = {
     "duet_rare": "duet_Llama-3.1-8B-Instruct_city_forget_rare_5_",
@@ -46,6 +61,9 @@ VARIANT_MATCHERS: dict[str, Callable[[str], bool]] = {
     "a_only": _is_dualcf_a_only,
     "dpo": _contains("_dpo_cf_lora_"),
     "simple_ce": _contains("_simple_ce_lora_"),
+    "multicf": _contains("_multicf_lora_"),
+    "boundary_cf": _contains("_boundary_cf_lora_"),
+    "span_cf": _contains("_span_cf_lora_"),
     "ga": _contains("_ga_lora_"),
     "ada_pop": _contains("_ada_pop_lora_"),
     "npo": _contains("_npo_lora_"),

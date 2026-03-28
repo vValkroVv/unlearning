@@ -40,6 +40,9 @@ WRONG_GENERATION_METHOD_MAP = {
     "dual_cf_d_only": "d_only",
     "dual_cf_a_only": "a_only",
     "dpo_cf": "dpo",
+    "multicf": "multicf",
+    "boundary_cf": "boundary_cf",
+    "span_cf": "span_cf",
     "ga": "ga",
     "ada_pop": "ada_pop",
     "npo": "npo",
@@ -87,6 +90,9 @@ COMBINED_ROW_SPECS = [
     ("new", "d_only", "d-only-new", "orange!20"),
     ("new", "a_only", "a-only-new", "green!20"),
     ("new", "dpo", "DPO-new", "gray!15"),
+    ("new", "multicf", "MultiCF", "teal!12"),
+    ("new", "boundary_cf", "BoundaryCF", "cyan!12"),
+    ("new", "span_cf", "SpanCF", "yellow!12"),
 ]
 SIMNPO_ROW_SPEC = ("simnpo", "simnpo", "SimNPO", "red!12")
 COMBINED_SIMPLECE_METHODS = [

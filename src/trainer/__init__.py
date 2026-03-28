@@ -24,6 +24,9 @@ from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
 from trainer.unlearn.loku import LoKU
 from trainer.unlearn.dual_cf import DualCF
+from trainer.unlearn.multicf import MultiCF
+from trainer.unlearn.boundary_cf import BoundaryCF
+from trainer.unlearn.span_cf import SpanCF
 from trainer.callbacks import JsonlTraceCallback, SaveOnEpochsCallback
 
 
@@ -123,3 +126,6 @@ _register_trainer(FALCON)
 _register_trainer(R2D)
 _register_trainer(LoKU)
 _register_trainer(DualCF)
+_register_trainer(MultiCF)
+_register_trainer(BoundaryCF)
+_register_trainer(SpanCF)

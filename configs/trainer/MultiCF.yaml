@@ -1,0 +1,10 @@
+defaults:
+  - DualCF
+
+handler: MultiCF
+
+method_args:
+  max_alternates_used: 4
+  alt_agg_mode: weighted_mean
+  alt_weight_mode: rerank
+  alt_set_temperature: 0.7

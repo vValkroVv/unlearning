@@ -556,3 +556,43 @@ SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scri
 # 6. New artifacts, lr=5e-5, GPU 1
 SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
 ```
+
+## New Method Runs
+
+Use `MULTICF_MAX_ALTERNATES_USED=8` so `multicf` tests the full available
+external candidate set rather than the trainer default top-4 variant.
+
+Run the short GPU validation sequence first:
+
+```bash
+# 1. MultiCF smoke, DUET rare, lr=1e-4, GPU 2
+SEEDS="42" METHOD_VARIANTS="multicf" MULTICF_MAX_ALTERNATES_USED=8 \
+bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 duet_rare
+
+# 2. BoundaryCF smoke, DUET rare, lr=1e-4, GPU 2
+SEEDS="42" METHOD_VARIANTS="boundary_cf" \
+bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 duet_rare
+
+# 3. MultiCF smoke, RWKU, lr=1e-4, GPU 2
+SEEDS="42" METHOD_VARIANTS="multicf" MULTICF_MAX_ALTERNATES_USED=8 \
+bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 rwku
+
+# 4. BoundaryCF smoke, RWKU, lr=1e-4, GPU 2
+SEEDS="42" METHOD_VARIANTS="boundary_cf" \
+bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 rwku
+```
+
+If those are clean, run the full new-method campaign:
+
+```bash
+# 5. MultiCF + BoundaryCF, lr=1e-4, GPU 2
+SEEDS="42 179 1137" METHOD_VARIANTS="multicf boundary_cf" MULTICF_MAX_ALTERNATES_USED=8 \
+bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+
+# 6. MultiCF + BoundaryCF, lr=5e-5, GPU 1
+SEEDS="42 179 1137" METHOD_VARIANTS="multicf boundary_cf" MULTICF_MAX_ALTERNATES_USED=8 \
+bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+```
+
+Interpret `boundary_cf` DUET-popular results carefully: the current artifact is
+mostly fallback hard negatives there, not true lexical near-miss boundaries.

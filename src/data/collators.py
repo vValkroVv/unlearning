@@ -86,3 +86,71 @@ class DataCollatorForSupervisedDataset(object):
                 else:
                     raise Warning(f"{self.index} not found in dataset")
         return return_dct
+
+
+class DataCollatorForMultiCF(DataCollatorForSupervisedDataset):
+    """Collate MultiCF batches with a variable number of alternates per sample."""
+
+    def __init__(self, max_alternates=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_alternates = (
+            None if max_alternates in (None, "", "null", "None") else int(max_alternates)
+        )
+
+    def _empty_alternate_sample(self) -> Dict[str, torch.Tensor]:
+        pad_token_id = self.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = self.tokenizer.eos_token_id or 0
+        return {
+            "input_ids": torch.tensor([pad_token_id, pad_token_id], dtype=torch.long),
+            "labels": torch.tensor([IGNORE_INDEX, IGNORE_INDEX], dtype=torch.long),
+        }
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        first_instance = instances[0]
+        if isinstance(first_instance, dict) and "alternates" in first_instance:
+            return_dct = {}
+            alternate_counts = [len(instance["alternates"]) for instance in instances]
+            max_alternates = max(alternate_counts) if alternate_counts else 0
+            if self.max_alternates is not None:
+                max_alternates = min(max_alternates, self.max_alternates)
+            if max_alternates <= 0:
+                raise ValueError("DataCollatorForMultiCF expected at least one alternate.")
+
+            for key in first_instance.keys():
+                if key in {"alternates", "alternate_mask", "alternate_weights"}:
+                    continue
+                key_instances = self.get_instances_from_key(instances=instances, key=key)
+                return_dct[key] = super().__call__(key_instances)
+
+            alternate_batches = []
+            empty_sample = self._empty_alternate_sample()
+            for alt_idx in range(max_alternates):
+                alt_instances = []
+                for instance in instances:
+                    alternates = instance["alternates"][:max_alternates]
+                    if alt_idx < len(alternates):
+                        alt_instances.append(alternates[alt_idx])
+                    else:
+                        alt_instances.append(empty_sample)
+                alternate_batches.append(super().__call__(alt_instances))
+
+            batch_size = len(instances)
+            alternate_mask = torch.zeros((batch_size, max_alternates), dtype=torch.bool)
+            alternate_weights = torch.zeros(
+                (batch_size, max_alternates), dtype=torch.float32
+            )
+            for row_idx, instance in enumerate(instances):
+                raw_mask = list(instance.get("alternate_mask", []))[:max_alternates]
+                raw_weights = list(instance.get("alternate_weights", []))[:max_alternates]
+                for alt_idx, value in enumerate(raw_mask):
+                    alternate_mask[row_idx, alt_idx] = bool(value)
+                for alt_idx, value in enumerate(raw_weights):
+                    alternate_weights[row_idx, alt_idx] = float(value)
+
+            return_dct["alternates"] = alternate_batches
+            return_dct["alternate_mask"] = alternate_mask
+            return_dct["alternate_weights"] = alternate_weights
+            return return_dct
+
+        return super().__call__(instances)

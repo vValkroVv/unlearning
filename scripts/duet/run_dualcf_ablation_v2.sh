@@ -50,6 +50,27 @@ case "${METHOD_VARIANT}" in
   simple_ce)
     exec bash "${script_dir}/simple_ce_duet.sh"
     ;;
+  multicf)
+    export TRAINER=${TRAINER:-MultiCF}
+    export METHOD_NAME=${METHOD_NAME:-multicf}
+    export RUN_LABEL=${RUN_LABEL:-MultiCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/multicf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
+  boundary_cf)
+    export TRAINER=${TRAINER:-BoundaryCF}
+    export METHOD_NAME=${METHOD_NAME:-boundary_cf}
+    export RUN_LABEL=${RUN_LABEL:-BoundaryCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/boundary_cf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
+  span_cf)
+    export TRAINER=${TRAINER:-SpanCF}
+    export METHOD_NAME=${METHOD_NAME:-span_cf}
+    export RUN_LABEL=${RUN_LABEL:-SpanCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
   ga)
     exec bash "${script_dir}/ga_duet.sh"
     ;;

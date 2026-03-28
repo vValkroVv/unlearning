@@ -1,0 +1,8 @@
+defaults:
+  - DualCF
+
+handler: BoundaryCF
+
+method_args:
+  local_retain_weight: 0.5
+  boundary_margin_weight: 1.0

@@ -236,11 +236,60 @@ configure_method_variant_env() {
   echo "[dualcf][campaign] LoKU cleanup: FILA_BASE_PATH=${FILA_BASE_PATH}"
 }
 
+resolve_duet_artifact_for_method() {
+  local forget_label="$1"
+  local method_variant="$2"
+
+  case "${method_variant}" in
+    multicf)
+      echo "${ARTIFACT_ROOT}/duet/${forget_label}_llama31_8b_v2/multicf_${forget_label}_v1.jsonl"
+      ;;
+    boundary_cf)
+      echo "${ARTIFACT_ROOT}/duet/${forget_label}_llama31_8b_v2/boundarycf_${forget_label}_v1.jsonl"
+      ;;
+    span_cf)
+      case "${forget_label}" in
+        rare) echo "${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl" ;;
+        popular) echo "${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl" ;;
+        merged) echo "${ARTIFACT_ROOT}/duet/merged_llama31_8b_v2/dualcf_merged_v2.jsonl" ;;
+        *)
+          echo "[dualcf][campaign] Unsupported DUET forget_label=${forget_label}" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      case "${forget_label}" in
+        rare) echo "${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl" ;;
+        popular) echo "${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl" ;;
+        merged) echo "${ARTIFACT_ROOT}/duet/merged_llama31_8b_v2/dualcf_merged_v2.jsonl" ;;
+        *)
+          echo "[dualcf][campaign] Unsupported DUET forget_label=${forget_label}" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+  esac
+}
+
+resolve_rwku_artifact_for_method() {
+  local method_variant="$1"
+
+  case "${method_variant}" in
+    multicf)
+      echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/multicf_forget_level2_v1.jsonl"
+      ;;
+    boundary_cf)
+      echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/boundarycf_forget_level2_v1.jsonl"
+      ;;
+    span_cf|*)
+      echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/dualcf_forget_level2_v2.jsonl"
+      ;;
+  esac
+}
+
 run_duet_block() {
   local forget_label="$1"
-  local artifact_path="$2"
-
-  require_file "${artifact_path}"
 
   export USE_SFT_BASE=1
   export LOCAL_SFT_BASE="${DUET_LOCAL_SFT_BASE}"
@@ -248,12 +297,14 @@ run_duet_block() {
   export TOKENIZER_MODEL_PATH="${DUET_LOCAL_SFT_BASE}"
   export TOKENIZER_SUBFOLDER="${DUET_SFT_SUBFOLDER}"
   export FORGET_LABEL="${forget_label}"
-  export CF_DATASET_DATA_FILES="${artifact_path}"
   export MAX_STEPS="${MAX_STEPS:-0}"
 
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=duet_${forget_label}"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
+    export CF_DATASET_DATA_FILES="$(resolve_duet_artifact_for_method "${forget_label}" "${METHOD_VARIANT}")"
+    require_file "${CF_DATASET_DATA_FILES}"
+    echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
     configure_method_variant_env "${METHOD_VARIANT}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
@@ -263,10 +314,6 @@ run_duet_block() {
 }
 
 run_rwku_block() {
-  local artifact_path="$1"
-
-  require_file "${artifact_path}"
-
   unset FORGET_LABEL
   unset FORGET_SPLIT_OVERRIDE
   unset RETAIN_SPLIT_OVERRIDE
@@ -280,12 +327,14 @@ run_rwku_block() {
   export TOKENIZER_MODEL_PATH="${HF_BASE_MODEL_PATH}"
   export FORGET_SPLIT="${FORGET_SPLIT:-forget_level2}"
   export RETAIN_SPLIT="${RETAIN_SPLIT:-neighbor_level2}"
-  export CF_DATASET_DATA_FILES="${artifact_path}"
   export MAX_STEPS="${MAX_STEPS:-0}"
 
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=rwku"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
+    export CF_DATASET_DATA_FILES="$(resolve_rwku_artifact_for_method "${METHOD_VARIANT}")"
+    require_file "${CF_DATASET_DATA_FILES}"
+    echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
     configure_method_variant_env "${METHOD_VARIANT}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
@@ -375,7 +424,7 @@ export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
 export ATTR_RETAIN_MAX_STEPS="${ATTR_RETAIN_MAX_STEPS:-0}"
 export ATTR_FORGET_MAX_STEPS="${ATTR_FORGET_MAX_STEPS:-0}"
 
-METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce ga ada_pop npo simnpo npo_sam loku}"
+METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku}"
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
@@ -385,38 +434,33 @@ echo "[dualcf][campaign] method_variants=${METHOD_VARIANTS}"
 echo "[dualcf][campaign] utility=${UTILITY} utility_root=${UTILITY_ROOT}"
 echo "[dualcf][campaign] duet_local_sft_base=${DUET_LOCAL_SFT_BASE}"
 
-duet_rare_artifact="${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl"
-duet_popular_artifact="${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl"
-duet_merged_artifact="${ARTIFACT_ROOT}/duet/merged_llama31_8b_v2/dualcf_merged_v2.jsonl"
-rwku_artifact="${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/dualcf_forget_level2_v2.jsonl"
-
 case "${PHASE}" in
   duet_rare)
-    run_duet_block rare "${duet_rare_artifact}"
+    run_duet_block rare
     ;;
   duet_popular)
-    run_duet_block popular "${duet_popular_artifact}"
+    run_duet_block popular
     ;;
   duet_split_first)
-    run_duet_block rare "${duet_rare_artifact}"
-    run_duet_block popular "${duet_popular_artifact}"
+    run_duet_block rare
+    run_duet_block popular
     ;;
   duet_merged)
-    run_duet_block merged "${duet_merged_artifact}"
+    run_duet_block merged
     ;;
   duet_all)
-    run_duet_block rare "${duet_rare_artifact}"
-    run_duet_block popular "${duet_popular_artifact}"
-    run_duet_block merged "${duet_merged_artifact}"
+    run_duet_block rare
+    run_duet_block popular
+    run_duet_block merged
     ;;
   rwku)
-    run_rwku_block "${rwku_artifact}"
+    run_rwku_block
     ;;
   all)
-    run_duet_block rare "${duet_rare_artifact}"
-    run_duet_block popular "${duet_popular_artifact}"
-    run_duet_block merged "${duet_merged_artifact}"
-    run_rwku_block "${rwku_artifact}"
+    run_duet_block rare
+    run_duet_block popular
+    run_duet_block merged
+    run_rwku_block
     ;;
   *)
     echo "[dualcf][campaign] Unsupported PHASE=${PHASE}" >&2

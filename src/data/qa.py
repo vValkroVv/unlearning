@@ -1,5 +1,6 @@
 import torch
 from torch.utils.data import Dataset
+from typing import Any
 
 from data.utils import load_hf_dataset, preprocess_chat_instance, add_dataset_index
 
@@ -199,4 +200,149 @@ class QAAnswerIndexDataset(QADataset):
         item = self._process_sample(question=question, answer=answer, index=index)
         if pop_sum is not None:
             item["pop_sum"] = pop_sum
+        return item
+
+
+class QAMultiCFDataset(QADataset):
+    def __init__(
+        self,
+        alternate_key="alternate",
+        alternate_set_key="alternate_set",
+        alternate_weights_key="alternate_set_weights",
+        metadata_keys=None,
+        return_original=True,
+        max_alternates=0,
+        normalize_alternate_weights=True,
+        *args,
+        **kwargs,
+    ):
+        self.alternate_key = alternate_key
+        self.alternate_set_key = alternate_set_key
+        self.alternate_weights_key = alternate_weights_key
+        self.metadata_keys = list(metadata_keys or [])
+        self.return_original = bool(return_original)
+        self.max_alternates = int(max_alternates)
+        self.normalize_alternate_weights = bool(normalize_alternate_weights)
+        super().__init__(*args, **kwargs)
+        if not self.return_original:
+            raise ValueError("QAMultiCFDataset requires return_original=True.")
+
+    def _coerce_metadata_value(self, key: str, value: Any):
+        if hasattr(value, "item"):
+            value = value.item()
+        if key == "index":
+            return int(value)
+        return float(value)
+
+    def _gather_alternate_texts(self, row):
+        candidates = []
+        for key in (self.alternate_key, self.alternate_set_key):
+            value = row.get(key)
+            if isinstance(value, str):
+                candidates.append(value.strip())
+            elif isinstance(value, (list, tuple)):
+                for alternate in value:
+                    if isinstance(alternate, str):
+                        candidates.append(alternate.strip())
+
+        deduped = []
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            deduped.append(candidate)
+
+        if self.max_alternates > 0:
+            deduped = deduped[: self.max_alternates]
+        if not deduped:
+            raise ValueError(
+                f"QAMultiCFDataset expected at least one alternate for index {row['index']}."
+            )
+        return deduped
+
+    def _alternate_weights(self, row, alternate_count: int):
+        raw_weights = row.get(self.alternate_weights_key)
+        if not isinstance(raw_weights, (list, tuple)):
+            weights = [1.0 for _ in range(alternate_count)]
+        else:
+            weights = [float(weight) for weight in raw_weights[:alternate_count]]
+            if len(weights) < alternate_count:
+                weights.extend([0.0] * (alternate_count - len(weights)))
+
+        if self.normalize_alternate_weights:
+            weight_sum = sum(weights)
+            if weight_sum > 0.0:
+                weights = [weight / weight_sum for weight in weights]
+            else:
+                weights = [1.0 / float(alternate_count) for _ in range(alternate_count)]
+        return weights
+
+    def __getitem__(self, idx):
+        row = self.data[idx]
+        question = row[self.question_key]
+        answer = row[self.answer_key]
+        index = int(row["index"])
+
+        if not isinstance(answer, str):
+            raise NotImplementedError("QAMultiCFDataset expects string answers.")
+
+        alternates = self._gather_alternate_texts(row)
+        item = {
+            "original": self._process_sample(question=question, answer=answer, index=index),
+            "alternates": [
+                self._process_sample(question=question, answer=alternate, index=index)
+                for alternate in alternates
+            ],
+            "alternate_mask": [1 for _ in alternates],
+            "alternate_weights": self._alternate_weights(
+                row=row,
+                alternate_count=len(alternates),
+            ),
+        }
+
+        for key in self.metadata_keys:
+            if key not in row:
+                raise KeyError(
+                    f"Metadata key `{key}` is missing from dataset row {idx}."
+                )
+            item[key] = self._coerce_metadata_value(key=key, value=row[key])
+        return item
+
+
+class QABoundaryCFDataset(QAwithAlternateMetadataDataset):
+    def __init__(
+        self,
+        local_retain_question_key="local_retain_question",
+        local_retain_answer_key="local_retain_answer",
+        local_retain_index_key="local_retain_index",
+        *args,
+        **kwargs,
+    ):
+        self.local_retain_question_key = local_retain_question_key
+        self.local_retain_answer_key = local_retain_answer_key
+        self.local_retain_index_key = local_retain_index_key
+        super().__init__(*args, **kwargs)
+        if not self.return_original:
+            raise ValueError("QABoundaryCFDataset requires return_original=True.")
+
+    def __getitem__(self, idx):
+        item = super().__getitem__(idx)
+        row = self.data[idx]
+        if self.local_retain_question_key not in row:
+            raise KeyError(
+                f"BoundaryCF row {idx} is missing `{self.local_retain_question_key}`."
+            )
+        if self.local_retain_answer_key not in row:
+            raise KeyError(
+                f"BoundaryCF row {idx} is missing `{self.local_retain_answer_key}`."
+            )
+
+        retain_index = int(row.get(self.local_retain_index_key, -1))
+        item["local_retain"] = self._process_sample(
+            question=row[self.local_retain_question_key],
+            answer=row[self.local_retain_answer_key],
+            index=retain_index,
+        )
+        item["local_retain_index"] = retain_index
         return item

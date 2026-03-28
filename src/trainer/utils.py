@@ -52,10 +52,8 @@ def compute_batch_nll(model, inputs):
     outputs = model(**inputs)
     logits = outputs.logits
     labels = inputs["labels"]
-    shifted_labels = labels[..., 1:].contiguous()
-    logits = logits[..., :-1, :].contiguous()
-    loss_function = nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
-    loss = loss_function(logits.transpose(-1, -2), shifted_labels).sum(dim=-1)
+    loss, _ = _compute_shifted_token_ce(logits, labels)
+    loss = loss.sum(dim=-1)
     return loss, outputs
 
 
@@ -65,12 +63,59 @@ def _token_counts_from_labels(labels: torch.Tensor) -> torch.Tensor:
     return counts.clamp_min(1)
 
 
+def _compute_shifted_token_ce(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    shifted_labels = labels[..., 1:].contiguous()
+    shifted_logits = logits[..., :-1, :].contiguous()
+    loss_function = nn.CrossEntropyLoss(ignore_index=-100, reduction="none")
+    token_loss = loss_function(shifted_logits.transpose(-1, -2), shifted_labels)
+    return token_loss, shifted_labels
+
+
+def _align_token_weights(
+    labels: torch.Tensor,
+    token_weights,
+) -> torch.Tensor:
+    if torch.is_tensor(token_weights):
+        weights = token_weights.to(device=labels.device, dtype=torch.float32)
+    else:
+        weights = torch.tensor(token_weights, device=labels.device, dtype=torch.float32)
+
+    shifted_shape = labels[..., 1:].shape
+    if weights.shape == labels.shape:
+        weights = weights[..., 1:]
+    elif weights.shape != shifted_shape:
+        raise ValueError(
+            "token_weights must match labels or shifted labels shape; "
+            f"got token_weights.shape={tuple(weights.shape)} "
+            f"labels.shape={tuple(labels.shape)}."
+        )
+    return weights
+
+
 def compute_nll_per_sample(model, inputs, normalize_by_tokens: bool = True):
     loss_sum, outputs = compute_batch_nll(model, inputs)
     if normalize_by_tokens:
         counts = _token_counts_from_labels(inputs["labels"]).to(loss_sum.device)
         loss_sum = loss_sum / counts
     return loss_sum, outputs
+
+
+def compute_weighted_nll_per_sample(model, inputs, token_weights):
+    inputs = _filter_model_inputs(inputs)
+    outputs = model(**inputs)
+    token_loss, shifted_labels = _compute_shifted_token_ce(
+        outputs.logits,
+        inputs["labels"],
+    )
+    weights = _align_token_weights(inputs["labels"], token_weights)
+    valid_mask = shifted_labels != -100
+    weights = weights * valid_mask.to(dtype=weights.dtype)
+    loss_sum = (token_loss * weights).sum(dim=-1)
+    norm = weights.sum(dim=-1).clamp_min(1e-6)
+    return loss_sum / norm, outputs
 
 
 def compute_npo_per_sample(
@@ -86,6 +131,30 @@ def compute_npo_per_sample(
     with torch.no_grad():
         lose_ref_loss, _ = compute_nll_per_sample(
             ref_model, lose_inputs, normalize_by_tokens=normalize_by_tokens
+        )
+
+    lose_log_ratio = -(lose_loss - lose_ref_loss)
+    loss = -2.0 / beta * F.logsigmoid(beta * (-lose_log_ratio))
+    return loss, lose_outputs
+
+
+def compute_weighted_npo_per_sample(
+    model,
+    ref_model,
+    lose_inputs,
+    token_weights,
+    beta: float = 1.0,
+):
+    lose_loss, lose_outputs = compute_weighted_nll_per_sample(
+        model,
+        lose_inputs,
+        token_weights=token_weights,
+    )
+    with torch.no_grad():
+        lose_ref_loss, _ = compute_weighted_nll_per_sample(
+            ref_model,
+            lose_inputs,
+            token_weights=token_weights,
         )
 
     lose_log_ratio = -(lose_loss - lose_ref_loss)

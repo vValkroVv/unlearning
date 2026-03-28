@@ -7,6 +7,8 @@ from trainer.utils import compute_nll_per_sample, compute_npo_per_sample
 
 
 class DualCF(GradDiff):
+    LOG_PREFIX = "dualcf"
+
     def __init__(
         self,
         beta=0.5,
@@ -49,6 +51,7 @@ class DualCF(GradDiff):
         self.alpha_eff_topk_frac = float(alpha_eff_topk_frac)
         self.risk_power = float(risk_power)
         self.neg_power = float(neg_power)
+        self.log_prefix = str(getattr(self, "LOG_PREFIX", "dualcf"))
 
         if self.beta <= 0.0:
             raise ValueError("DualCF requires beta > 0.")
@@ -87,6 +90,16 @@ class DualCF(GradDiff):
             )
         return score
 
+    def _optional_score_tensor(self, forget_inputs, key: str, device, batch_size: int):
+        if key not in forget_inputs:
+            return None
+        return self._score_tensor(
+            forget_inputs=forget_inputs,
+            key=key,
+            device=device,
+            batch_size=batch_size,
+        )
+
     def _summarize_risk(self, risk_gate: torch.Tensor) -> torch.Tensor:
         if self.alpha_eff_stat == "mean":
             return risk_gate.mean()
@@ -99,26 +112,26 @@ class DualCF(GradDiff):
             return torch.topk(risk_gate, k=topk).values.mean()
         raise ValueError(f"Unknown alpha_eff_stat={self.alpha_eff_stat}")
 
-    def compute_loss(self, model, inputs, return_outputs=False):
-        forget_inputs = inputs["forget"]
-        original_inputs = forget_inputs["original"]
+    def _compute_cf_term(self, model, forget_inputs):
         alternate_inputs = forget_inputs["alternate"]
-
-        cf_vec, alternate_outputs = compute_nll_per_sample(
+        cf_vec, outputs = compute_nll_per_sample(
             model,
             alternate_inputs,
             normalize_by_tokens=self.normalize_cf_by_tokens,
         )
-        neg_vec, _ = compute_npo_per_sample(
+        return cf_vec, outputs, {}
+
+    def _compute_neg_term(self, model, original_inputs):
+        neg_vec, outputs = compute_npo_per_sample(
             model,
             self.ref_model,
             original_inputs,
             beta=self.beta,
             normalize_by_tokens=self.normalize_neg_by_tokens,
         )
+        return neg_vec, outputs, {}
 
-        batch_size = int(cf_vec.shape[0])
-        device = cf_vec.device
+    def _compute_routing(self, forget_inputs, batch_size: int, device):
         difficulty = self._score_tensor(
             forget_inputs, "difficulty_score", device=device, batch_size=batch_size
         )
@@ -139,64 +152,146 @@ class DualCF(GradDiff):
         lambda_neg = self.lambda_neg_max * difficulty_gate * (1.0 - risk_gate)
         forget_scale = 1.0 - (1.0 - self.risk_forget_scale) * risk_gate
 
-        forget_loss = (
-            forget_scale * (self.cf_weight * cf_vec + lambda_neg * neg_vec)
-        ).mean()
-
         risk_batch = self._summarize_risk(risk_gate)
         lambda_ret_batch = self.lambda_ret_lo + (
             self.lambda_ret_hi - self.lambda_ret_lo
         ) * risk_batch
         alpha_eff = self.alpha * lambda_ret_batch
 
-        retain_loss = self.compute_retain_loss(
-            model=model,
-            retain_inputs=self._retain_inputs(inputs),
-        )
-        loss = self.gamma * forget_loss + alpha_eff * retain_loss
+        return {
+            "difficulty": difficulty,
+            "attribution": attribution,
+            "difficulty_gate": difficulty_gate,
+            "risk_gate": risk_gate,
+            "lambda_neg": lambda_neg,
+            "forget_scale": forget_scale,
+            "risk_batch": risk_batch,
+            "lambda_ret_batch": lambda_ret_batch,
+            "alpha_eff": alpha_eff,
+        }
 
+    def _forget_term_vector(
+        self,
+        cf_vec: torch.Tensor,
+        neg_vec: torch.Tensor,
+        routing: dict,
+        forget_inputs,
+    ) -> torch.Tensor:
+        return routing["forget_scale"] * (self.cf_weight * cf_vec + routing["lambda_neg"] * neg_vec)
+
+    def _extra_log_components(self, components: dict) -> dict:
+        return {}
+
+    def _compute_core_components(self, model, inputs):
+        forget_inputs = inputs["forget"]
+        original_inputs = forget_inputs["original"]
+
+        cf_vec, outputs, cf_logs = self._compute_cf_term(model, forget_inputs)
+        neg_vec, _, neg_logs = self._compute_neg_term(model, original_inputs)
+
+        batch_size = int(cf_vec.shape[0])
+        device = cf_vec.device
+        routing = self._compute_routing(
+            forget_inputs=forget_inputs,
+            batch_size=batch_size,
+            device=device,
+        )
+        per_sample_forget_loss = self._forget_term_vector(
+            cf_vec=cf_vec,
+            neg_vec=neg_vec,
+            routing=routing,
+            forget_inputs=forget_inputs,
+        )
+        forget_loss = per_sample_forget_loss.mean()
+
+        components = {
+            "forget_inputs": forget_inputs,
+            "original_inputs": original_inputs,
+            "cf_vec": cf_vec,
+            "neg_vec": neg_vec,
+            "outputs": outputs,
+            "per_sample_forget_loss": per_sample_forget_loss,
+            "forget_loss": forget_loss,
+            **routing,
+        }
+        extra_logs = {}
+        extra_logs.update(cf_logs)
+        extra_logs.update(neg_logs)
+        extra_logs.update(self._extra_log_components(components))
+        components["extra_logs"] = extra_logs
+        return components
+
+    def _build_log_payload(self, components: dict, retain_loss, loss=None, extra_logs=None):
+        prefix = self.log_prefix
+        alpha_eff = components["alpha_eff"]
+        alpha_eff_value = (
+            float(alpha_eff.detach().item())
+            if torch.is_tensor(alpha_eff)
+            else float(alpha_eff)
+        )
+        payload = {
+            f"{prefix}_cf_loss": float(components["cf_vec"].mean().detach().item()),
+            f"{prefix}_neg_loss": float(components["neg_vec"].mean().detach().item()),
+            f"{prefix}_forget_loss": float(components["forget_loss"].detach().item()),
+            f"{prefix}_retain_loss": float(retain_loss.detach().item()),
+            f"{prefix}_alpha_eff": alpha_eff_value,
+            f"{prefix}_lambda_ret_batch": float(
+                components["lambda_ret_batch"].detach().item()
+            ),
+            f"{prefix}_d_mean": float(components["difficulty"].mean().detach().item()),
+            f"{prefix}_a_mean": float(
+                components["attribution"].mean().detach().item()
+            ),
+            f"{prefix}_s_mean": float(
+                components["difficulty_gate"].mean().detach().item()
+            ),
+            f"{prefix}_s_p50": float(
+                torch.quantile(components["difficulty_gate"], 0.50).detach().item()
+            ),
+            f"{prefix}_s_p90": float(
+                torch.quantile(components["difficulty_gate"], 0.90).detach().item()
+            ),
+            f"{prefix}_r_mean": float(components["risk_gate"].mean().detach().item()),
+            f"{prefix}_r_p50": float(
+                torch.quantile(components["risk_gate"], 0.50).detach().item()
+            ),
+            f"{prefix}_r_p90": float(
+                torch.quantile(components["risk_gate"], 0.90).detach().item()
+            ),
+            f"{prefix}_r_hi_frac": float(
+                (components["risk_gate"] > 0.8).float().mean().detach().item()
+            ),
+            f"{prefix}_risk_batch": float(components["risk_batch"].detach().item()),
+            f"{prefix}_lambda_neg_mean": float(
+                components["lambda_neg"].mean().detach().item()
+            ),
+        }
+        if loss is not None:
+            payload[f"{prefix}_total_loss"] = float(loss.detach().item())
+        payload.update(components.get("extra_logs", {}))
+        if extra_logs:
+            payload.update(extra_logs)
+        return payload
+
+    def _maybe_log(self, components: dict, retain_loss, loss=None, extra_logs=None):
         try:
-            alpha_eff_value = (
-                float(alpha_eff.detach().item())
-                if torch.is_tensor(alpha_eff)
-                else float(alpha_eff)
-            )
             self.log(
-                {
-                    "dualcf_cf_loss": float(cf_vec.mean().detach().item()),
-                    "dualcf_neg_loss": float(neg_vec.mean().detach().item()),
-                    "dualcf_forget_loss": float(forget_loss.detach().item()),
-                    "dualcf_retain_loss": float(retain_loss.detach().item()),
-                    "dualcf_alpha_eff": alpha_eff_value,
-                    "dualcf_lambda_ret_batch": float(
-                        lambda_ret_batch.detach().item()
-                    ),
-                    "dualcf_d_mean": float(difficulty.mean().detach().item()),
-                    "dualcf_a_mean": float(attribution.mean().detach().item()),
-                    "dualcf_s_mean": float(difficulty_gate.mean().detach().item()),
-                    "dualcf_s_p50": float(
-                        torch.quantile(difficulty_gate, 0.50).detach().item()
-                    ),
-                    "dualcf_s_p90": float(
-                        torch.quantile(difficulty_gate, 0.90).detach().item()
-                    ),
-                    "dualcf_r_mean": float(risk_gate.mean().detach().item()),
-                    "dualcf_r_p50": float(
-                        torch.quantile(risk_gate, 0.50).detach().item()
-                    ),
-                    "dualcf_r_p90": float(
-                        torch.quantile(risk_gate, 0.90).detach().item()
-                    ),
-                    "dualcf_r_hi_frac": float(
-                        (risk_gate > 0.8).float().mean().detach().item()
-                    ),
-                    "dualcf_risk_batch": float(risk_batch.detach().item()),
-                    "dualcf_lambda_neg_mean": float(
-                        lambda_neg.mean().detach().item()
-                    ),
-                }
+                self._build_log_payload(
+                    components=components,
+                    retain_loss=retain_loss,
+                    loss=loss,
+                    extra_logs=extra_logs,
+                )
             )
         except Exception:
             pass
 
-        return (loss, alternate_outputs) if return_outputs else loss
+    def compute_loss(self, model, inputs, return_outputs=False):
+        components = self._compute_core_components(model, inputs)
+        retain_loss = self.compute_retain_loss(
+            model=model,
+            retain_inputs=self._retain_inputs(inputs),
+        )
+        loss = self.gamma * components["forget_loss"] + components["alpha_eff"] * retain_loss
+        self._maybe_log(components=components, retain_loss=retain_loss, loss=loss)
+        return (loss, components["outputs"]) if return_outputs else loss
