@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from checkpoint_summary_utils import collect_eval_summaries, parse_checkpoint_step
+from new_method_variant_utils import extract_new_method_variant, variant_info_from_method_key, variant_sort_key
 
 
 DUET_EVAL_FILENAME = "DUET_EVAL.json"
@@ -23,7 +24,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -301,10 +302,16 @@ def extract_method_key(run_name: str) -> str:
             return "dual_cf_" + "_".join(flags)
         return "dual_cf"
 
+    variant_info = extract_new_method_variant(run_name, method_name)
+    if variant_info is not None:
+        return variant_info.method_key
     return method_name
 
 
 def extract_method_display(method_key: str) -> str:
+    variant_info = variant_info_from_method_key(method_key)
+    if variant_info is not None:
+        return variant_info.display_name
     if method_key in METHOD_DISPLAY:
         return METHOD_DISPLAY[method_key]
     if method_key.startswith("dual_cf_"):
@@ -450,8 +457,11 @@ def build_eval_log(input_root: Path, eval_path: Path) -> EvalLog:
     )
 
 
-def method_sort_key(method_key: str) -> tuple[int, str]:
-    return (METHOD_ORDER_INDEX.get(method_key, len(METHOD_ORDER_INDEX)), method_key)
+def method_sort_key(method_key: str) -> tuple[int, int, str]:
+    variant_key = variant_sort_key(method_key)
+    if variant_key is not None:
+        return (len(METHOD_ORDER_INDEX), variant_key[0] * 100 + variant_key[1], method_key)
+    return (METHOD_ORDER_INDEX.get(method_key, len(METHOD_ORDER_INDEX)), 0, method_key)
 
 
 def tokenize(text: str) -> list[str]:

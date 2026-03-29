@@ -10,9 +10,14 @@ Directory Structure:
 │       ├── .agents/skills/dualcf-fast-discovery
 │       │   │   └── .agents/skills/dualcf-fast-discovery/agents/openai.yaml
 │       │   └── .agents/skills/dualcf-fast-discovery/SKILL.md
-│       └── .agents/skills/dualcf-portable-runtime
-│           │   └── .agents/skills/dualcf-portable-runtime/agents/openai.yaml
-│           └── .agents/skills/dualcf-portable-runtime/SKILL.md
+│       ├── .agents/skills/dualcf-portable-runtime
+│       │   │   └── .agents/skills/dualcf-portable-runtime/agents/openai.yaml
+│       │   └── .agents/skills/dualcf-portable-runtime/SKILL.md
+│       └── .agents/skills/latex-pdf-build
+│           │   └── .agents/skills/latex-pdf-build/agents/openai.yaml
+│           ├── .agents/skills/latex-pdf-build/scripts
+│           │   └── .agents/skills/latex-pdf-build/scripts/build_pdf.py
+│           └── .agents/skills/latex-pdf-build/SKILL.md
 │   │   ├── .codex/agents/docs-sync-editor.toml
 │   │   ├── .codex/agents/portable-runtime-engineer.toml
 │   │   └── .codex/agents/spark-discovery-agent.toml
@@ -453,6 +458,7 @@ Directory Structure:
 │   │   ├── src/tools/loku_measure_importance.py
 │   │   ├── src/tools/make_counterfactuals.py
 │   │   ├── src/tools/merge_checkpoint_utility_summaries.py
+│   │   ├── src/tools/new_method_variant_utils.py
 │   │   ├── src/tools/retry_invalid_counterfactuals.py
 │   │   ├── src/tools/score_attribution.py
 │   │   ├── src/tools/score_difficulty.py
@@ -2449,6 +2455,91 @@ The branch is wired and syntax-checked, but the validation ladder from
 3. 1-step train smoke
 4. short DUET / RWKU functional train + eval
 5. only then campaign-scale runs
+
+## 2026-03-30 Variant-Aware v2.5 Result Extraction
+
+Files:
+
+- `src/tools/new_method_variant_utils.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/build_results_combine_tables.py`
+- `docs/experiments.md`
+
+Updates:
+
+- added shared parsing for the `## New Method Runs` launcher suffixes so the
+  six `MultiCF`, six `BoundaryCF`, and six `SpanCF` specs are preserved as
+  distinct method keys instead of collapsing to one row per algorithm
+- `build_structured_saves.py --average-seeds` now emits:
+  - `multicf_m1` .. `multicf_m6`
+  - `boundary_cf_b1` .. `boundary_cf_b6`
+  - `span_cf_s1` .. `span_cf_s6`
+- `analyze_wrong_generations.py` now recognizes those same variant keys and
+  keeps the runbook labels plus changed params in `method_display`
+- `build_results_combine_tables.py` now supports a single-root
+  `--variant-root` mode for these v2.5 new-method campaigns
+- the combine helper now discovers available split/LR buckets from the provided
+  roots instead of assuming all hardcoded combinations are present
+- wrong-generation loading now passes through exact method keys when the
+  analyzer output already matches the structured-saves method names
+
+Validated command sequence:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5/extracted/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations \
+  --output-file metrics-new/results-combine-v2_5/combined_tables.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_slides.tex
+```
+
+Observed outputs:
+
+- `metrics-new/results-combine-v2_5/combined_tables.txt`
+- `metrics-new/results-combine-v2_5/combined_tables_slides.tex`
+
+Validation actually completed in this turn:
+
+- `python -m py_compile` on:
+  - `src/tools/new_method_variant_utils.py`
+  - `src/tools/build_structured_saves.py`
+  - `src/tools/analyze_wrong_generations.py`
+  - `src/tools/build_results_combine_tables.py`
+- extracted `metrics-new/ep5-dualfc-v2_5/saves-clean.zip.part.*` into
+  `metrics-new/ep5-dualfc-v2_5/extracted/saves-clean`
+- real `build_structured_saves.py --average-seeds` run on
+  `metrics-new/ep5-dualfc-v2_5/extracted/saves-clean`
+- real `analyze_wrong_generations.py` run on `metrics-new/ep5-dualfc-v2_5`
+- real `build_results_combine_tables.py --variant-root ...` run into
+  `metrics-new/results-combine-v2_5`
+- row-count check confirmed 18 averaged runs for:
+  - `duet_rare / 1e-4`
+  - `duet_popular / 1e-4`
+  - `duet_merged / 1e-4`
+  - `rwku / 1e-4`
+- final `combined_tables.txt` check confirmed 8 tables total:
+  - 4 splits
+  - 2 epochs
+  - 18 rows per table
+
+Caveats:
+
+- the validated v2.5 combine flow only covered the available `1e-4` new-method
+  runs from `prod-run-dual-gpu.md`
+- wrong-generation columns are blank at epoch 2 because this archive only has
+  final per-example `DUET_EVAL.json` logs, not checkpoint-level generation logs
 
 </content>
 
@@ -15269,39 +15360,116 @@ SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scri
 
 ## New Method Runs
 
-Use `MULTICF_MAX_ALTERNATES_USED=8` so `multicf` tests the full available
-external candidate set rather than the trainer default top-4 variant.
+First-pass new-method ablations should freeze the shared routed DualCF core and
+vary only the method-specific knobs. Keep `tau_d`, `tau_a`, `temp_d`,
+`temp_a`, `lambda_neg_max`, `lambda_ret_lo`, `lambda_ret_hi`, `cf_weight`,
+`risk_forget_scale`, and the difficulty / attribution routing flags fixed.
 
-Run the short GPU validation sequence first:
-
-```bash
-# 1. MultiCF smoke, DUET rare, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="multicf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 duet_rare
-
-# 2. BoundaryCF smoke, DUET rare, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="boundary_cf" \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 duet_rare
-
-# 3. MultiCF smoke, RWKU, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="multicf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 rwku
-
-# 4. BoundaryCF smoke, RWKU, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="boundary_cf" \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 rwku
-```
-
-If those are clean, run the full new-method campaign:
+Each command below runs the requested `1e-4` / `all` ablations serially for one
+method. MultiCF is split across two GPUs and uses a reduced counterfactual
+count to avoid the H100 OOM seen with the original `k=6` / `k=8` plan.
+New-method output dirs now abbreviate method tags in the launcher:
+MultiCF uses `agwm`/`agm`/`agt1` and `wrr`/`wuni`,
+BoundaryCF uses `lr`/`bm`,
+SpanCF uses `mlc`/`mso` plus `sw`/`uw`.
+These shorter tags keep run dirs under filesystem name limits.
+Each loop continues to the next spec if one spec fails.
 
 ```bash
-# 5. MultiCF + BoundaryCF, lr=1e-4, GPU 2
-SEEDS="42 179 1137" METHOD_VARIANTS="multicf boundary_cf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+# MultiCF GPU 0: M1, M2, M4
+GPU_ID=1
+for spec in \
+  "M1|2|weighted_mean|rerank|0.7" \
+  "M2|2|weighted_mean|rerank|0.5" \
+  "M4|3|weighted_mean|rerank|0.7"
+do
+  IFS='|' read -r tag max_alts agg_mode weight_mode set_temp <<<"${spec}"
+  echo "[multicf] ${tag}: k=${max_alts} agg=${agg_mode} weight=${weight_mode} temp=${set_temp}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="multicf" \
+    MULTICF_MAX_ALTERNATES_USED="${max_alts}" \
+    MULTICF_ALT_AGG_MODE="${agg_mode}" \
+    MULTICF_ALT_WEIGHT_MODE="${weight_mode}" \
+    MULTICF_ALT_SET_TEMPERATURE="${set_temp}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[multicf] ${tag} done"
+  else
+    echo "[multicf] ${tag} failed, continuing to next spec"
+  fi
+done
 
-# 6. MultiCF + BoundaryCF, lr=5e-5, GPU 1
-SEEDS="42 179 1137" METHOD_VARIANTS="multicf boundary_cf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+# MultiCF GPU 1: M3, M5, M6
+GPU_ID=2
+for spec in \
+  "M5|3|weighted_mean|rerank|0.5" \
+  "M3|2|weighted_mean|rerank|1.0" \
+  "M6|2|mean|uniform|1.0"
+do
+  IFS='|' read -r tag max_alts agg_mode weight_mode set_temp <<<"${spec}"
+  echo "[multicf] ${tag}: k=${max_alts} agg=${agg_mode} weight=${weight_mode} temp=${set_temp}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="multicf" \
+    MULTICF_MAX_ALTERNATES_USED="${max_alts}" \
+    MULTICF_ALT_AGG_MODE="${agg_mode}" \
+    MULTICF_ALT_WEIGHT_MODE="${weight_mode}" \
+    MULTICF_ALT_SET_TEMPERATURE="${set_temp}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[multicf] ${tag} done"
+  else
+    echo "[multicf] ${tag} failed, continuing to next spec"
+  fi
+done
+
+# BoundaryCF: B1-B6
+GPU_ID=4
+for spec in \
+  "B1|0.75|0.5" \
+  "B2|1.0|0.5" \
+  "B3|0.5|0.5" \
+  "B4|0.5|1.0" \
+  "B5|0.75|1.0" \
+  "B6|1.0|1.0"
+do
+  IFS='|' read -r tag local_retain margin <<<"${spec}"
+  echo "[boundary_cf] ${tag}: local_retain=${local_retain} margin=${margin}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="boundary_cf" \
+    BOUNDARY_LOCAL_RETAIN_WEIGHT="${local_retain}" \
+    BOUNDARY_MARGIN_WEIGHT="${margin}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[boundary_cf] ${tag} done"
+  else
+    echo "[boundary_cf] ${tag} failed, continuing to next spec"
+  fi
+done
+
+# SpanCF: S1-S6
+GPU_ID=5
+for spec in \
+  "S1|lcs|0.10|1.25" \
+  "S2|lcs|0.10|1.0" \
+  "S3|lcs|0.25|1.25" \
+  "S4|lcs|0.0|1.0" \
+  "S5|lcs|0.25|1.0" \
+  "S6|set_overlap|0.10|1.25"
+do
+  IFS='|' read -r tag span_mode shared_weight unique_weight <<<"${spec}"
+  echo "[span_cf] ${tag}: mode=${span_mode} shared=${shared_weight} unique=${unique_weight}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="span_cf" \
+    SPAN_MODE="${span_mode}" \
+    SPAN_SHARED_TOKEN_WEIGHT="${shared_weight}" \
+    SPAN_UNIQUE_TOKEN_WEIGHT="${unique_weight}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[span_cf] ${tag} done"
+  else
+    echo "[span_cf] ${tag} failed, continuing to next spec"
+  fi
+done
 ```
 
 Interpret `boundary_cf` DUET-popular results carefully: the current artifact is
@@ -17986,6 +18154,118 @@ policy:
 
 </content>
 
+<content full_path=".agents/skills/latex-pdf-build/SKILL.md">
+---
+name: latex-pdf-build
+description: Compile LaTeX sources into PDF files inside this open-unlearning workspace. Use when asked to build, rebuild, or verify a PDF from a `.tex` file under `/Users/valerii.kropotin/НОД/Diploma/open-unlearning`, especially generated slide decks such as `metrics-new/results-combine-v2_5/combined_tables_slides.tex`.
+---
+
+# LaTeX PDF Build
+
+Compile the requested `.tex` file with the repo-local helper instead of rebuilding the workflow from scratch. Prefer `tectonic` because it handles package fetching and works well in this workspace.
+
+## Workflow
+
+1. Resolve the target `.tex` path relative to the workspace root `/Users/valerii.kropotin/НОД/Diploma/open-unlearning` unless the user gave an absolute path.
+2. Run `scripts/build_pdf.py <path-to-tex>` from this skill.
+3. Read the compiler output and report either the generated PDF path or the first actionable LaTeX error.
+4. If the compiler fails because of a source issue, fix the document and rerun the same command.
+5. If `tectonic` is missing, install it with Homebrew: `brew install tectonic`, then rerun the build.
+
+## Quick Start
+
+Use the helper directly:
+
+```bash
+python3 .agents/skills/latex-pdf-build/scripts/build_pdf.py metrics-new/results-combine-v2_5/combined_tables_slides.tex
+```
+
+## Rules
+
+- Invoke the helper from the repo root or pass an absolute `.tex` path.
+- Let the helper run in the source file's directory so LaTeX relative includes keep working.
+- Do not assume an existing PDF is current; rebuild it when asked.
+- Prefer fixing actual LaTeX/package errors over switching engines.
+- Keep edits minimal when the build fails because of document issues.
+
+## Resource
+
+- `scripts/build_pdf.py`: Resolve repo-relative paths, verify `tectonic` exists, run the build in the correct directory, and print the resulting PDF path.
+
+</content>
+
+<content full_path=".agents/skills/latex-pdf-build/agents/openai.yaml">
+interface:
+  display_name: "LaTeX PDF Build"
+  short_description: "Build LaTeX PDFs in this repo"
+  default_prompt: "Use $latex-pdf-build to compile a .tex file in this workspace into a PDF."
+
+</content>
+
+<content full_path=".agents/skills/latex-pdf-build/scripts/build_pdf.py">
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+def resolve_tex_path(raw_path: str) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = REPO_ROOT / candidate
+    return candidate.resolve()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Compile a LaTeX source file in this workspace into a PDF."
+    )
+    parser.add_argument("tex_path", help="Path to the .tex file, absolute or relative to the repo root")
+    args = parser.parse_args()
+
+    engine = shutil.which("tectonic")
+    if engine is None:
+        print(
+            "tectonic is not installed. Install it with: brew install tectonic",
+            file=sys.stderr,
+        )
+        return 1
+
+    tex_path = resolve_tex_path(args.tex_path)
+    if not tex_path.exists():
+        print(f"TeX file not found: {tex_path}", file=sys.stderr)
+        return 1
+    if tex_path.suffix.lower() != ".tex":
+        print(f"Expected a .tex file, got: {tex_path}", file=sys.stderr)
+        return 1
+
+    cmd = [engine, tex_path.name]
+    result = subprocess.run(cmd, cwd=tex_path.parent)
+    if result.returncode != 0:
+        return result.returncode
+
+    pdf_path = tex_path.with_suffix(".pdf")
+    if not pdf_path.exists():
+        print(f"Build finished but PDF was not created: {pdf_path}", file=sys.stderr)
+        return 1
+
+    print(pdf_path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+</content>
+
 <content full_path=".agents/skills/dualcf-doc-sync/SKILL.md">
 ---
 name: dualcf-doc-sync
@@ -18157,6 +18437,24 @@ python src/tools/analyze_wrong_generations.py \
   --input-root metrics-new/ep5-part2 \
   --output-root metrics-new/results-combine/wrong-generations \
   --overwrite
+
+## build seed-averaged tables for the 18 v2.5 new-method runs (M1-M6, B1-B6, S1-S6)
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5/extracted/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations \
+  --output-file metrics-new/results-combine-v2_5/combined_tables.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_slides.tex
 
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
@@ -30433,6 +30731,31 @@ num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+
+short_multicf_agg_tag() {
+    case "$1" in
+        weighted_mean) echo "wm" ;;
+        mean) echo "m" ;;
+        top1) echo "t1" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+short_multicf_weight_tag() {
+    case "$1" in
+        rerank) echo "rr" ;;
+        uniform) echo "uni" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+short_span_mode_tag() {
+    case "$1" in
+        lcs) echo "lc" ;;
+        set_overlap) echo "so" ;;
+        *) echo "$1" ;;
+    esac
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -30622,15 +30945,18 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                     method_suffix=""
                                                                                                     if [[ "${trainer}" == "MultiCF" ]]; then
                                                                                                         multicf_temp_tag=${multicf_alt_set_temperature//./p}
-                                                                                                        method_suffix=_k${multicf_max_alternates_used}_agg${multicf_alt_agg_mode}_w${multicf_alt_weight_mode}_temp${multicf_temp_tag}
+                                                                                                        multicf_agg_tag=$(short_multicf_agg_tag "${multicf_alt_agg_mode}")
+                                                                                                        multicf_weight_tag=$(short_multicf_weight_tag "${multicf_alt_weight_mode}")
+                                                                                                        method_suffix=_k${multicf_max_alternates_used}_ag${multicf_agg_tag}_w${multicf_weight_tag}_t${multicf_temp_tag}
                                                                                                     elif [[ "${trainer}" == "BoundaryCF" ]]; then
                                                                                                         boundary_local_tag=${boundary_local_retain_weight//./p}
                                                                                                         boundary_margin_tag=${boundary_margin_weight//./p}
-                                                                                                        method_suffix=_lrw${boundary_local_tag}_bmw${boundary_margin_tag}
+                                                                                                        method_suffix=_lr${boundary_local_tag}_bm${boundary_margin_tag}
                                                                                                     elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                        span_mode_tag=$(short_span_mode_tag "${span_mode}")
                                                                                                         span_shared_tag=${span_shared_token_weight//./p}
                                                                                                         span_unique_tag=${span_unique_token_weight//./p}
-                                                                                                        method_suffix=_mode${span_mode}_stw${span_shared_tag}_utw${span_unique_tag}
+                                                                                                        method_suffix=_m${span_mode_tag}_sw${span_shared_tag}_uw${span_unique_tag}
                                                                                                     fi
 
                                                                                                     task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
@@ -39573,6 +39899,31 @@ num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+
+short_multicf_agg_tag() {
+    case "$1" in
+        weighted_mean) echo "wm" ;;
+        mean) echo "m" ;;
+        top1) echo "t1" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+short_multicf_weight_tag() {
+    case "$1" in
+        rerank) echo "rr" ;;
+        uniform) echo "uni" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+short_span_mode_tag() {
+    case "$1" in
+        lcs) echo "lc" ;;
+        set_overlap) echo "so" ;;
+        *) echo "$1" ;;
+    esac
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -39739,15 +40090,18 @@ for lr in "${lrs[@]}"; do
                                                                                                 method_suffix=""
                                                                                                 if [[ "${trainer}" == "MultiCF" ]]; then
                                                                                                     multicf_temp_tag=${multicf_alt_set_temperature//./p}
-                                                                                                    method_suffix=_k${multicf_max_alternates_used}_agg${multicf_alt_agg_mode}_w${multicf_alt_weight_mode}_temp${multicf_temp_tag}
+                                                                                                    multicf_agg_tag=$(short_multicf_agg_tag "${multicf_alt_agg_mode}")
+                                                                                                    multicf_weight_tag=$(short_multicf_weight_tag "${multicf_alt_weight_mode}")
+                                                                                                    method_suffix=_k${multicf_max_alternates_used}_ag${multicf_agg_tag}_w${multicf_weight_tag}_t${multicf_temp_tag}
                                                                                                 elif [[ "${trainer}" == "BoundaryCF" ]]; then
                                                                                                     boundary_local_tag=${boundary_local_retain_weight//./p}
                                                                                                     boundary_margin_tag=${boundary_margin_weight//./p}
-                                                                                                    method_suffix=_lrw${boundary_local_tag}_bmw${boundary_margin_tag}
+                                                                                                    method_suffix=_lr${boundary_local_tag}_bm${boundary_margin_tag}
                                                                                                 elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                    span_mode_tag=$(short_span_mode_tag "${span_mode}")
                                                                                                     span_shared_tag=${span_shared_token_weight//./p}
                                                                                                     span_unique_tag=${span_unique_token_weight//./p}
-                                                                                                    method_suffix=_mode${span_mode}_stw${span_shared_tag}_utw${span_unique_tag}
+                                                                                                    method_suffix=_m${span_mode_tag}_sw${span_shared_tag}_uw${span_unique_tag}
                                                                                                 fi
 
                                                                                                 task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
@@ -46749,6 +47103,7 @@ from typing import Any
 import yaml
 
 from checkpoint_summary_utils import collect_eval_summaries, parse_checkpoint_step
+from new_method_variant_utils import extract_new_method_variant, variant_info_from_method_key, variant_sort_key
 
 
 DUET_EVAL_FILENAME = "DUET_EVAL.json"
@@ -46756,7 +47111,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -47034,10 +47389,16 @@ def extract_method_key(run_name: str) -> str:
             return "dual_cf_" + "_".join(flags)
         return "dual_cf"
 
+    variant_info = extract_new_method_variant(run_name, method_name)
+    if variant_info is not None:
+        return variant_info.method_key
     return method_name
 
 
 def extract_method_display(method_key: str) -> str:
+    variant_info = variant_info_from_method_key(method_key)
+    if variant_info is not None:
+        return variant_info.display_name
     if method_key in METHOD_DISPLAY:
         return METHOD_DISPLAY[method_key]
     if method_key.startswith("dual_cf_"):
@@ -47183,8 +47544,11 @@ def build_eval_log(input_root: Path, eval_path: Path) -> EvalLog:
     )
 
 
-def method_sort_key(method_key: str) -> tuple[int, str]:
-    return (METHOD_ORDER_INDEX.get(method_key, len(METHOD_ORDER_INDEX)), method_key)
+def method_sort_key(method_key: str) -> tuple[int, int, str]:
+    variant_key = variant_sort_key(method_key)
+    if variant_key is not None:
+        return (len(METHOD_ORDER_INDEX), variant_key[0] * 100 + variant_key[1], method_key)
+    return (METHOD_ORDER_INDEX.get(method_key, len(METHOD_ORDER_INDEX)), 0, method_key)
 
 
 def tokenize(text: str) -> list[str]:
@@ -50283,6 +50647,7 @@ from typing import Any
 import yaml
 
 from checkpoint_summary_utils import checkpoint_sort_key, collect_eval_summaries
+from new_method_variant_utils import base_variant_algorithm, extract_new_method_variant, variant_sort_key
 
 
 META_COLUMNS = {"label", "checkpoint", "step", "epoch"}
@@ -50495,6 +50860,9 @@ def extract_method_key(run_name: str) -> str:
         if ablation_tokens:
             return "_".join([method_name] + ablation_tokens)
         return method_name
+    variant_info = extract_new_method_variant(run_name, method_name)
+    if variant_info is not None:
+        return variant_info.method_key
     return method_name
 
 
@@ -50639,8 +51007,13 @@ def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
     return ordered
 
 
-def method_sort_key(method_name: str) -> tuple[int, str]:
-    return (METHOD_ORDER_INDEX.get(method_name, len(METHOD_ORDER)), method_name)
+def method_sort_key(method_name: str) -> tuple[int, int, str]:
+    variant_key = variant_sort_key(method_name)
+    if variant_key is not None:
+        base_method = base_variant_algorithm(method_name)
+        if base_method is not None:
+            return (METHOD_ORDER_INDEX.get(base_method, len(METHOD_ORDER)), variant_key[1], method_name)
+    return (METHOD_ORDER_INDEX.get(method_name, len(METHOD_ORDER)), 0, method_name)
 
 
 def lr_sort_key(lr: str) -> float:
@@ -51837,6 +52210,231 @@ if __name__ == "__main__":
 
 </content>
 
+<content full_path="src/tools/new_method_variant_utils.py">
+#!/usr/bin/env python3
+"""Shared helpers for MultiCF / BoundaryCF / SpanCF run variants."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+
+MULTICF_RUN_RE = re.compile(
+    r"_k(?P<k>[^_]+)_ag(?P<agg>[^_]+)_w(?P<weight>[^_]+)_t(?P<temp>[^_]+)"
+    r"_(?:dOn|dOff)_(?:aOn|aOff)(?:_seed\d+)?$"
+)
+BOUNDARY_RUN_RE = re.compile(
+    r"_lr(?P<local>[^_]+)_bm(?P<margin>[^_]+)"
+    r"_(?:dOn|dOff)_(?:aOn|aOff)(?:_seed\d+)?$"
+)
+SPAN_RUN_RE = re.compile(
+    r"_m(?P<mode>[^_]+)_sw(?P<shared>[^_]+)_uw(?P<unique>[^_]+)"
+    r"_(?:dOn|dOff)_(?:aOn|aOff)(?:_seed\d+)?$"
+)
+
+MULTICF_KEY_RE = re.compile(
+    r"^multicf_(?:(?P<tag>m\d+)|k(?P<k>[^_]+)_ag(?P<agg>[^_]+)_w(?P<weight>[^_]+)_t(?P<temp>[^_]+))$"
+)
+BOUNDARY_KEY_RE = re.compile(
+    r"^boundary_cf_(?:(?P<tag>b\d+)|lr(?P<local>[^_]+)_bm(?P<margin>[^_]+))$"
+)
+SPAN_KEY_RE = re.compile(
+    r"^span_cf_(?:(?P<tag>s\d+)|m(?P<mode>[^_]+)_sw(?P<shared>[^_]+)_uw(?P<unique>[^_]+))$"
+)
+
+MULTICF_TAGS = {
+    ("2", "wm", "rr", "0p7"): "m1",
+    ("2", "wm", "rr", "0p5"): "m2",
+    ("2", "wm", "rr", "1p0"): "m3",
+    ("3", "wm", "rr", "0p7"): "m4",
+    ("3", "wm", "rr", "0p5"): "m5",
+    ("2", "m", "uni", "1p0"): "m6",
+}
+BOUNDARY_TAGS = {
+    ("0p75", "0p5"): "b1",
+    ("1p0", "0p5"): "b2",
+    ("0p5", "0p5"): "b3",
+    ("0p5", "1p0"): "b4",
+    ("0p75", "1p0"): "b5",
+    ("1p0", "1p0"): "b6",
+}
+SPAN_TAGS = {
+    ("lc", "0p10", "1p25"): "s1",
+    ("lc", "0p10", "1p0"): "s2",
+    ("lc", "0p25", "1p25"): "s3",
+    ("lc", "0p0", "1p0"): "s4",
+    ("lc", "0p25", "1p0"): "s5",
+    ("so", "0p10", "1p25"): "s6",
+}
+
+MULTICF_TOKENS_BY_TAG = {tag: spec for spec, tag in MULTICF_TAGS.items()}
+BOUNDARY_TOKENS_BY_TAG = {tag: spec for spec, tag in BOUNDARY_TAGS.items()}
+SPAN_TOKENS_BY_TAG = {tag: spec for spec, tag in SPAN_TAGS.items()}
+
+MULTICF_AGG_DISPLAY = {
+    "wm": "weighted_mean",
+    "m": "mean",
+    "t1": "top1",
+}
+MULTICF_WEIGHT_DISPLAY = {
+    "rr": "rerank",
+    "uni": "uniform",
+}
+SPAN_MODE_DISPLAY = {
+    "lc": "lcs",
+    "so": "set_overlap",
+}
+
+VARIANT_ALGORITHM_ORDER = {
+    "multicf": 0,
+    "boundary_cf": 1,
+    "span_cf": 2,
+}
+
+
+@dataclass(frozen=True)
+class MethodVariantInfo:
+    method_key: str
+    display_name: str
+    algorithm: str
+    order_index: int
+
+
+def format_numeric_token(token: str) -> str:
+    return token.replace("p", ".")
+
+
+def base_variant_algorithm(method_key: str) -> str | None:
+    if method_key.startswith("multicf_"):
+        return "multicf"
+    if method_key.startswith("boundary_cf_"):
+        return "boundary_cf"
+    if method_key.startswith("span_cf_"):
+        return "span_cf"
+    return None
+
+
+def _multicf_info(*, tag: str | None, k: str, agg: str, weight: str, temp: str) -> MethodVariantInfo:
+    method_key = f"multicf_{tag}" if tag is not None else f"multicf_k{k}_ag{agg}_w{weight}_t{temp}"
+    display_prefix = f"MultiCF {tag.upper()}" if tag is not None else "MultiCF"
+    display_name = (
+        f"{display_prefix} (k={k} agg={MULTICF_AGG_DISPLAY.get(agg, agg)} "
+        f"weight={MULTICF_WEIGHT_DISPLAY.get(weight, weight)} temp={format_numeric_token(temp)})"
+    )
+    order_index = int(tag[1:]) if tag is not None and tag[1:].isdigit() else 999
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name=display_name,
+        algorithm="multicf",
+        order_index=order_index,
+    )
+
+
+def _boundary_info(*, tag: str | None, local: str, margin: str) -> MethodVariantInfo:
+    method_key = f"boundary_cf_{tag}" if tag is not None else f"boundary_cf_lr{local}_bm{margin}"
+    display_prefix = f"BoundaryCF {tag.upper()}" if tag is not None else "BoundaryCF"
+    display_name = (
+        f"{display_prefix} (local_retain={format_numeric_token(local)} "
+        f"margin={format_numeric_token(margin)})"
+    )
+    order_index = int(tag[1:]) if tag is not None and tag[1:].isdigit() else 999
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name=display_name,
+        algorithm="boundary_cf",
+        order_index=order_index,
+    )
+
+
+def _span_info(*, tag: str | None, mode: str, shared: str, unique: str) -> MethodVariantInfo:
+    method_key = f"span_cf_{tag}" if tag is not None else f"span_cf_m{mode}_sw{shared}_uw{unique}"
+    display_prefix = f"SpanCF {tag.upper()}" if tag is not None else "SpanCF"
+    display_name = (
+        f"{display_prefix} (mode={SPAN_MODE_DISPLAY.get(mode, mode)} "
+        f"shared={format_numeric_token(shared)} unique={format_numeric_token(unique)})"
+    )
+    order_index = int(tag[1:]) if tag is not None and tag[1:].isdigit() else 999
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name=display_name,
+        algorithm="span_cf",
+        order_index=order_index,
+    )
+
+
+def extract_new_method_variant(run_name: str, method_name: str) -> MethodVariantInfo | None:
+    if method_name == "multicf":
+        match = MULTICF_RUN_RE.search(run_name)
+        if match is None:
+            return None
+        tokens = (
+            match.group("k"),
+            match.group("agg"),
+            match.group("weight"),
+            match.group("temp"),
+        )
+        return _multicf_info(tag=MULTICF_TAGS.get(tokens), k=tokens[0], agg=tokens[1], weight=tokens[2], temp=tokens[3])
+
+    if method_name == "boundary_cf":
+        match = BOUNDARY_RUN_RE.search(run_name)
+        if match is None:
+            return None
+        tokens = (match.group("local"), match.group("margin"))
+        return _boundary_info(tag=BOUNDARY_TAGS.get(tokens), local=tokens[0], margin=tokens[1])
+
+    if method_name == "span_cf":
+        match = SPAN_RUN_RE.search(run_name)
+        if match is None:
+            return None
+        tokens = (match.group("mode"), match.group("shared"), match.group("unique"))
+        return _span_info(tag=SPAN_TAGS.get(tokens), mode=tokens[0], shared=tokens[1], unique=tokens[2])
+
+    return None
+
+
+def variant_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
+    match = MULTICF_KEY_RE.fullmatch(method_key)
+    if match is not None:
+        tag = match.group("tag")
+        if tag is not None:
+            tokens = MULTICF_TOKENS_BY_TAG.get(tag)
+            if tokens is not None:
+                return _multicf_info(tag=tag, k=tokens[0], agg=tokens[1], weight=tokens[2], temp=tokens[3])
+            return MethodVariantInfo(method_key=method_key, display_name=f"MultiCF {tag.upper()}", algorithm="multicf", order_index=999)
+        return _multicf_info(tag=None, k=match.group("k"), agg=match.group("agg"), weight=match.group("weight"), temp=match.group("temp"))
+
+    match = BOUNDARY_KEY_RE.fullmatch(method_key)
+    if match is not None:
+        tag = match.group("tag")
+        if tag is not None:
+            tokens = BOUNDARY_TOKENS_BY_TAG.get(tag)
+            if tokens is not None:
+                return _boundary_info(tag=tag, local=tokens[0], margin=tokens[1])
+            return MethodVariantInfo(method_key=method_key, display_name=f"BoundaryCF {tag.upper()}", algorithm="boundary_cf", order_index=999)
+        return _boundary_info(tag=None, local=match.group("local"), margin=match.group("margin"))
+
+    match = SPAN_KEY_RE.fullmatch(method_key)
+    if match is not None:
+        tag = match.group("tag")
+        if tag is not None:
+            tokens = SPAN_TOKENS_BY_TAG.get(tag)
+            if tokens is not None:
+                return _span_info(tag=tag, mode=tokens[0], shared=tokens[1], unique=tokens[2])
+            return MethodVariantInfo(method_key=method_key, display_name=f"SpanCF {tag.upper()}", algorithm="span_cf", order_index=999)
+        return _span_info(tag=None, mode=match.group("mode"), shared=match.group("shared"), unique=match.group("unique"))
+
+    return None
+
+
+def variant_sort_key(method_key: str) -> tuple[int, int, str] | None:
+    info = variant_info_from_method_key(method_key)
+    if info is None:
+        return None
+    return (VARIANT_ALGORITHM_ORDER[info.algorithm], info.order_index, info.method_key)
+
+</content>
+
 <content full_path="src/tools/clean_counterfactuals.py">
 #!/usr/bin/env python3
 """Clean and optionally repair DualCF counterfactual artifacts."""
@@ -52251,6 +52849,11 @@ import csv
 import re
 from pathlib import Path
 
+from new_method_variant_utils import (
+    base_variant_algorithm,
+    variant_info_from_method_key,
+    variant_sort_key,
+)
 
 SPLITS = ["duet_rare", "duet_popular", "duet_merged", "rwku"]
 LRS = ["1e-4", "5e-5"]
@@ -52358,14 +52961,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--old-root",
         type=Path,
-        required=True,
         help="Path to the old structured-saves directory (for example metrics-ep5-all-v2/structured-saves).",
     )
     parser.add_argument(
         "--new-root",
         type=Path,
-        required=True,
         help="Path to the new structured-saves directory (for example metrics-ep5-dualfc-new_cf/structured-saves).",
+    )
+    parser.add_argument(
+        "--variant-root",
+        type=Path,
+        help=(
+            "Optional structured-saves directory for a single-root new-method table build "
+            "(for example metrics-new/ep5-dualfc-v2_5/structured-saves-avg)."
+        ),
     )
     parser.add_argument(
         "--output-file",
@@ -52539,6 +53148,9 @@ def resolve_wrong_generation_methods(
     mapped_method = WRONG_GENERATION_METHOD_MAP.get(method_key)
     if mapped_method is not None:
         return [mapped_method] if mapped_method in source_methods else []
+
+    if method_key in source_methods:
+        return [method_key]
 
     if method_key != "simple_ce":
         return []
@@ -53017,6 +53629,7 @@ def build_output_text(
     metrics: list[tuple[str, str]],
     caption_prefix: str,
     label_prefix: str,
+    split_lrs: list[tuple[str, str]] | None = None,
 ) -> str:
     abbreviations = [
         f"{metric_abbrev}={metric_name}"
@@ -53030,29 +53643,29 @@ def build_output_text(
     ]
 
     first_table = True
-    for split in SPLITS:
-        for lr in LRS:
-            row_specs = row_specs_by_split_lr[(split, lr)]
-            bundles = bundles_by_split_lr[(split, lr)]
-            for epoch_column, epoch_label in EPOCH_SPECS:
-                if not first_table:
-                    sections.append("")
-                    sections.append("")
-                sections.append(f"% Split: {split} | LR: {lr} | Epoch: {epoch_label}")
-                sections.append(
-                    build_table(
-                        caption=(
-                            f"{caption_prefix} for {SPLIT_LABELS[split]} at LR={lr}, epoch {epoch_label}. "
-                            "Values are percentages."
-                        ),
-                        label=f"tab:{label_prefix}-{split.replace('_', '-')}-{lr.replace('-', '')}-ep{epoch_label}",
-                        epoch_column=epoch_column,
-                        bundles=bundles,
-                        row_specs=row_specs,
-                        metrics=metrics,
-                    )
+    split_lrs = split_lrs or [(split, lr) for split in SPLITS for lr in LRS]
+    for split, lr in split_lrs:
+        row_specs = row_specs_by_split_lr[(split, lr)]
+        bundles = bundles_by_split_lr[(split, lr)]
+        for epoch_column, epoch_label in EPOCH_SPECS:
+            if not first_table:
+                sections.append("")
+                sections.append("")
+            sections.append(f"% Split: {split} | LR: {lr} | Epoch: {epoch_label}")
+            sections.append(
+                build_table(
+                    caption=(
+                        f"{caption_prefix} for {SPLIT_LABELS[split]} at LR={lr}, epoch {epoch_label}. "
+                        "Values are percentages."
+                    ),
+                    label=f"tab:{label_prefix}-{split.replace('_', '-')}-{lr.replace('-', '')}-ep{epoch_label}",
+                    epoch_column=epoch_column,
+                    bundles=bundles,
+                    row_specs=row_specs,
+                    metrics=metrics,
                 )
-                first_table = False
+            )
+            first_table = False
     sections.append("")
     return "\n".join(sections)
 
@@ -53064,34 +53677,104 @@ def build_frames(
     metrics: list[tuple[str, str]],
     title_prefix: str,
     compact: bool = False,
+    split_lrs: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     frames: list[str] = []
-    for split in SPLITS:
-        for lr in LRS:
-            row_specs = row_specs_by_split_lr[(split, lr)]
-            bundles = bundles_by_split_lr[(split, lr)]
-            for epoch_column, epoch_label in EPOCH_SPECS:
-                frames.append(
-                    build_slide_frame(
-                        frame_title=f"{title_prefix} | {SPLIT_LABELS[split]} | LR = {lr} | Epoch = {epoch_label}",
-                        epoch_column=epoch_column,
-                        bundles=bundles,
-                        row_specs=row_specs,
-                        metrics=metrics,
-                        compact=compact,
-                    )
+    split_lrs = split_lrs or [(split, lr) for split in SPLITS for lr in LRS]
+    for split, lr in split_lrs:
+        row_specs = row_specs_by_split_lr[(split, lr)]
+        bundles = bundles_by_split_lr[(split, lr)]
+        for epoch_column, epoch_label in EPOCH_SPECS:
+            frames.append(
+                build_slide_frame(
+                    frame_title=f"{title_prefix} | {SPLIT_LABELS[split]} | LR = {lr} | Epoch = {epoch_label}",
+                    epoch_column=epoch_column,
+                    bundles=bundles,
+                    row_specs=row_specs,
+                    metrics=metrics,
+                    compact=compact,
                 )
+            )
     return frames
+
+
+def lr_sort_key(lr: str) -> tuple[int, float | str]:
+    if lr in LRS:
+        return (LRS.index(lr), 0.0)
+    try:
+        return (len(LRS), float(lr))
+    except ValueError:
+        return (len(LRS), lr)
+
+
+def discover_available_split_lrs(roots: list[Path]) -> list[tuple[str, str]]:
+    discovered: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for split in SPLITS:
+        candidate_lrs: set[str] = set()
+        for root in roots:
+            split_root = root / split
+            if not split_root.exists():
+                continue
+            for child in split_root.iterdir():
+                if child.is_dir():
+                    candidate_lrs.add(child.name)
+        for lr in sorted(candidate_lrs, key=lr_sort_key):
+            item = (split, lr)
+            if item not in seen:
+                seen.add(item)
+                discovered.append(item)
+    return discovered
+
+
+def load_variant_row_specs(
+    variant_root: Path,
+    split: str,
+    lr: str,
+) -> list[tuple[str, str, str, str]]:
+    first_metric = FIXED_METRICS[0][0]
+    table_path = variant_root / split / lr / f"{first_metric}.tsv"
+    if not table_path.exists():
+        return []
+
+    rows = load_metric_rows(table_path)
+    method_names = [
+        method_name
+        for method_name in rows
+        if variant_info_from_method_key(method_name) is not None
+    ]
+    method_names.sort(key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name))
+
+    color_by_algorithm = {
+        "multicf": "teal!12",
+        "boundary_cf": "cyan!12",
+        "span_cf": "yellow!12",
+    }
+    row_specs: list[tuple[str, str, str, str]] = []
+    for method_name in method_names:
+        info = variant_info_from_method_key(method_name)
+        if info is None:
+            continue
+        row_specs.append(
+            (
+                "variant",
+                method_name,
+                info.display_name,
+                color_by_algorithm.get(base_variant_algorithm(method_name) or "", ""),
+            )
+        )
+    return row_specs
 
 
 def main() -> None:
     args = parse_args()
-    old_root = args.old_root.expanduser().resolve()
-    new_root = args.new_root.expanduser().resolve()
     output_file = args.output_file.expanduser().resolve()
     output_slides_tex = (
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
+    variant_root = None if args.variant_root is None else args.variant_root.expanduser().resolve()
+    old_root = None if args.old_root is None else args.old_root.expanduser().resolve()
+    new_root = None if args.new_root is None else args.new_root.expanduser().resolve()
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
     simplece_new_root = (
         simnpo_root
@@ -53114,6 +53797,83 @@ def main() -> None:
         if args.wrong_generations_root is None
         else args.wrong_generations_root.expanduser().resolve()
     )
+
+    if variant_root is not None:
+        if old_root is not None or new_root is not None:
+            raise ValueError("--variant-root cannot be combined with --old-root/--new-root")
+        if output_simplece_file is not None or output_simplece_slides_tex is not None:
+            raise ValueError("SimpleCE-only outputs are not supported with --variant-root")
+
+        wrong_generation_index: dict[
+            str,
+            dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]],
+        ] | None = None
+        wrong_generation_labels_by_source: dict[str, str | None] | None = None
+        available_wrong_generation_labels: set[str] = set()
+        if wrong_generations_root is not None:
+            wrong_generation_index, available_wrong_generation_labels = load_wrong_generation_index(
+                wrong_generations_root
+            )
+            wrong_generation_labels_by_source = {
+                "variant": resolve_wrong_generation_label(variant_root, available_wrong_generation_labels)
+            }
+
+        metrics = discover_metrics(
+            [variant_root],
+            include_wrong_generation_metrics=wrong_generations_root is not None,
+        )
+        split_lrs = discover_available_split_lrs([variant_root])
+        if not split_lrs:
+            raise FileNotFoundError(f"No split/LR tables found under {variant_root}")
+
+        bundles_by_split_lr = {
+            (split, lr): build_bundles(
+                {"variant": variant_root},
+                split,
+                lr,
+                metrics,
+                wrong_generation_index=wrong_generation_index,
+                wrong_generation_labels_by_source=wrong_generation_labels_by_source,
+            )
+            for split, lr in split_lrs
+        }
+        row_specs_by_split_lr = {
+            (split, lr): load_variant_row_specs(variant_root, split, lr)
+            for split, lr in split_lrs
+        }
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_text = build_output_text(
+            header_comment="% New-method tables generated by src/tools/build_results_combine_tables.py",
+            row_specs_by_split_lr=row_specs_by_split_lr,
+            bundles_by_split_lr=bundles_by_split_lr,
+            metrics=metrics,
+            caption_prefix="New-method results",
+            label_prefix="new-methods",
+            split_lrs=split_lrs,
+        )
+        output_file.write_text(output_text, encoding="utf-8")
+
+        if output_slides_tex is not None:
+            output_slides_tex.parent.mkdir(parents=True, exist_ok=True)
+            frames = build_frames(
+                row_specs_by_split_lr=row_specs_by_split_lr,
+                bundles_by_split_lr=bundles_by_split_lr,
+                metrics=metrics,
+                title_prefix="New Method Tables",
+                compact=True,
+                split_lrs=split_lrs,
+            )
+            slides_tex = build_slides_tex(
+                title="New Method Tables",
+                subtitle=f"{len(frames)} split/LR/epoch slides",
+                frames=frames,
+            )
+            output_slides_tex.write_text(slides_tex, encoding="utf-8")
+        return
+
+    if old_root is None or new_root is None:
+        raise ValueError("--old-root and --new-root are required unless --variant-root is used")
 
     combined_roots = {"old": old_root, "new": new_root}
     if simnpo_root is not None:
@@ -53141,6 +53901,7 @@ def main() -> None:
         list(combined_roots.values()),
         include_wrong_generation_metrics=wrong_generations_root is not None,
     )
+    split_lrs = discover_available_split_lrs(list(combined_roots.values()))
 
     combined_bundles_by_split_lr = {
         (
@@ -53154,24 +53915,22 @@ def main() -> None:
             wrong_generation_index=wrong_generation_index,
             wrong_generation_labels_by_source=wrong_generation_labels_by_source,
         )
-        for split in SPLITS
-        for lr in LRS
+        for split, lr in split_lrs
     }
     combined_row_specs_by_split_lr = {}
     combined_slide_row_specs_by_split_lr = {}
-    for split in SPLITS:
-        for lr in LRS:
-            bundles = combined_bundles_by_split_lr[(split, lr)]
-            combined_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
-                build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
-                bundles,
-                metrics,
-            )
-            combined_slide_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
-                build_combined_slide_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
-                bundles,
-                metrics,
-            )
+    for split, lr in split_lrs:
+        bundles = combined_bundles_by_split_lr[(split, lr)]
+        combined_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+            build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+            bundles,
+            metrics,
+        )
+        combined_slide_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+            build_combined_slide_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+            bundles,
+            metrics,
+        )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_text = build_output_text(
@@ -53181,6 +53940,7 @@ def main() -> None:
         metrics=metrics,
         caption_prefix="Combined old/new results",
         label_prefix="combined",
+        split_lrs=split_lrs,
     )
     output_file.write_text(output_text, encoding="utf-8")
 
@@ -53192,6 +53952,7 @@ def main() -> None:
             metrics=metrics,
             title_prefix="Combined Tables",
             compact=True,
+            split_lrs=split_lrs,
         )
         slides_tex = build_slides_tex(
             title="Combined DualCF Tables",
@@ -53225,13 +53986,11 @@ def main() -> None:
             }
         simplece_row_specs_by_split_lr = {
             (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr, metrics)
-            for split in SPLITS
-            for lr in LRS
+            for split, lr in split_lrs
         }
         simplece_slide_row_specs_by_split_lr = {
             (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr, metrics)
-            for split in SPLITS
-            for lr in LRS
+            for split, lr in split_lrs
         }
         simplece_bundles_by_split_lr = {
             (
@@ -53255,8 +54014,7 @@ def main() -> None:
                     }
                 ),
             )
-            for split in SPLITS
-            for lr in LRS
+            for split, lr in split_lrs
         }
         simplece_output_text = build_output_text(
             header_comment="% SimpleCE-only tables generated by src/tools/build_results_combine_tables.py",
@@ -53265,6 +54023,7 @@ def main() -> None:
             metrics=metrics,
             caption_prefix="SimpleCE ablations",
             label_prefix="simplece",
+            split_lrs=split_lrs,
         )
         output_simplece_file.write_text(simplece_output_text, encoding="utf-8")
 
@@ -53275,6 +54034,7 @@ def main() -> None:
                 bundles_by_split_lr=simplece_bundles_by_split_lr,
                 metrics=metrics,
                 title_prefix="SimpleCE Ablations",
+                split_lrs=split_lrs,
             )
             simplece_slides_tex = build_slides_tex(
                 title="SimpleCE Ablation Tables",

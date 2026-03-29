@@ -737,3 +737,88 @@ The branch is wired and syntax-checked, but the validation ladder from
 3. 1-step train smoke
 4. short DUET / RWKU functional train + eval
 5. only then campaign-scale runs
+
+## 2026-03-30 Variant-Aware v2.5 Result Extraction
+
+Files:
+
+- `src/tools/new_method_variant_utils.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/build_results_combine_tables.py`
+- `docs/experiments.md`
+
+Updates:
+
+- added shared parsing for the `## New Method Runs` launcher suffixes so the
+  six `MultiCF`, six `BoundaryCF`, and six `SpanCF` specs are preserved as
+  distinct method keys instead of collapsing to one row per algorithm
+- `build_structured_saves.py --average-seeds` now emits:
+  - `multicf_m1` .. `multicf_m6`
+  - `boundary_cf_b1` .. `boundary_cf_b6`
+  - `span_cf_s1` .. `span_cf_s6`
+- `analyze_wrong_generations.py` now recognizes those same variant keys and
+  keeps the runbook labels plus changed params in `method_display`
+- `build_results_combine_tables.py` now supports a single-root
+  `--variant-root` mode for these v2.5 new-method campaigns
+- the combine helper now discovers available split/LR buckets from the provided
+  roots instead of assuming all hardcoded combinations are present
+- wrong-generation loading now passes through exact method keys when the
+  analyzer output already matches the structured-saves method names
+
+Validated command sequence:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5/extracted/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations \
+  --output-file metrics-new/results-combine-v2_5/combined_tables.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_slides.tex
+```
+
+Observed outputs:
+
+- `metrics-new/results-combine-v2_5/combined_tables.txt`
+- `metrics-new/results-combine-v2_5/combined_tables_slides.tex`
+
+Validation actually completed in this turn:
+
+- `python -m py_compile` on:
+  - `src/tools/new_method_variant_utils.py`
+  - `src/tools/build_structured_saves.py`
+  - `src/tools/analyze_wrong_generations.py`
+  - `src/tools/build_results_combine_tables.py`
+- extracted `metrics-new/ep5-dualfc-v2_5/saves-clean.zip.part.*` into
+  `metrics-new/ep5-dualfc-v2_5/extracted/saves-clean`
+- real `build_structured_saves.py --average-seeds` run on
+  `metrics-new/ep5-dualfc-v2_5/extracted/saves-clean`
+- real `analyze_wrong_generations.py` run on `metrics-new/ep5-dualfc-v2_5`
+- real `build_results_combine_tables.py --variant-root ...` run into
+  `metrics-new/results-combine-v2_5`
+- row-count check confirmed 18 averaged runs for:
+  - `duet_rare / 1e-4`
+  - `duet_popular / 1e-4`
+  - `duet_merged / 1e-4`
+  - `rwku / 1e-4`
+- final `combined_tables.txt` check confirmed 8 tables total:
+  - 4 splits
+  - 2 epochs
+  - 18 rows per table
+
+Caveats:
+
+- the validated v2.5 combine flow only covered the available `1e-4` new-method
+  runs from `prod-run-dual-gpu.md`
+- wrong-generation columns are blank at epoch 2 because this archive only has
+  final per-example `DUET_EVAL.json` logs, not checkpoint-level generation logs

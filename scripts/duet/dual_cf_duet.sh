@@ -88,6 +88,31 @@ num_train_epochs=${NUM_EPOCHS:-5}
 gradient_checkpointing=${GRADIENT_CHECKPOINTING:-false}
 max_steps="${MAX_STEPS:-0}"
 checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+
+short_multicf_agg_tag() {
+    case "$1" in
+        weighted_mean) echo "wm" ;;
+        mean) echo "m" ;;
+        top1) echo "t1" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+short_multicf_weight_tag() {
+    case "$1" in
+        rerank) echo "rr" ;;
+        uniform) echo "uni" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+short_span_mode_tag() {
+    case "$1" in
+        lcs) echo "lc" ;;
+        set_overlap) echo "so" ;;
+        *) echo "$1" ;;
+    esac
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -277,15 +302,18 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                     method_suffix=""
                                                                                                     if [[ "${trainer}" == "MultiCF" ]]; then
                                                                                                         multicf_temp_tag=${multicf_alt_set_temperature//./p}
-                                                                                                        method_suffix=_k${multicf_max_alternates_used}_agg${multicf_alt_agg_mode}_w${multicf_alt_weight_mode}_temp${multicf_temp_tag}
+                                                                                                        multicf_agg_tag=$(short_multicf_agg_tag "${multicf_alt_agg_mode}")
+                                                                                                        multicf_weight_tag=$(short_multicf_weight_tag "${multicf_alt_weight_mode}")
+                                                                                                        method_suffix=_k${multicf_max_alternates_used}_ag${multicf_agg_tag}_w${multicf_weight_tag}_t${multicf_temp_tag}
                                                                                                     elif [[ "${trainer}" == "BoundaryCF" ]]; then
                                                                                                         boundary_local_tag=${boundary_local_retain_weight//./p}
                                                                                                         boundary_margin_tag=${boundary_margin_weight//./p}
-                                                                                                        method_suffix=_lrw${boundary_local_tag}_bmw${boundary_margin_tag}
+                                                                                                        method_suffix=_lr${boundary_local_tag}_bm${boundary_margin_tag}
                                                                                                     elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                        span_mode_tag=$(short_span_mode_tag "${span_mode}")
                                                                                                         span_shared_tag=${span_shared_token_weight//./p}
                                                                                                         span_unique_tag=${span_unique_token_weight//./p}
-                                                                                                        method_suffix=_mode${span_mode}_stw${span_shared_tag}_utw${span_unique_tag}
+                                                                                                        method_suffix=_m${span_mode_tag}_sw${span_shared_tag}_uw${span_unique_tag}
                                                                                                     fi
 
                                                                                                     task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}

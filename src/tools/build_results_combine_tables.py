@@ -8,6 +8,11 @@ import csv
 import re
 from pathlib import Path
 
+from new_method_variant_utils import (
+    base_variant_algorithm,
+    variant_info_from_method_key,
+    variant_sort_key,
+)
 
 SPLITS = ["duet_rare", "duet_popular", "duet_merged", "rwku"]
 LRS = ["1e-4", "5e-5"]
@@ -115,14 +120,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--old-root",
         type=Path,
-        required=True,
         help="Path to the old structured-saves directory (for example metrics-ep5-all-v2/structured-saves).",
     )
     parser.add_argument(
         "--new-root",
         type=Path,
-        required=True,
         help="Path to the new structured-saves directory (for example metrics-ep5-dualfc-new_cf/structured-saves).",
+    )
+    parser.add_argument(
+        "--variant-root",
+        type=Path,
+        help=(
+            "Optional structured-saves directory for a single-root new-method table build "
+            "(for example metrics-new/ep5-dualfc-v2_5/structured-saves-avg)."
+        ),
     )
     parser.add_argument(
         "--output-file",
@@ -296,6 +307,9 @@ def resolve_wrong_generation_methods(
     mapped_method = WRONG_GENERATION_METHOD_MAP.get(method_key)
     if mapped_method is not None:
         return [mapped_method] if mapped_method in source_methods else []
+
+    if method_key in source_methods:
+        return [method_key]
 
     if method_key != "simple_ce":
         return []
@@ -774,6 +788,7 @@ def build_output_text(
     metrics: list[tuple[str, str]],
     caption_prefix: str,
     label_prefix: str,
+    split_lrs: list[tuple[str, str]] | None = None,
 ) -> str:
     abbreviations = [
         f"{metric_abbrev}={metric_name}"
@@ -787,29 +802,29 @@ def build_output_text(
     ]
 
     first_table = True
-    for split in SPLITS:
-        for lr in LRS:
-            row_specs = row_specs_by_split_lr[(split, lr)]
-            bundles = bundles_by_split_lr[(split, lr)]
-            for epoch_column, epoch_label in EPOCH_SPECS:
-                if not first_table:
-                    sections.append("")
-                    sections.append("")
-                sections.append(f"% Split: {split} | LR: {lr} | Epoch: {epoch_label}")
-                sections.append(
-                    build_table(
-                        caption=(
-                            f"{caption_prefix} for {SPLIT_LABELS[split]} at LR={lr}, epoch {epoch_label}. "
-                            "Values are percentages."
-                        ),
-                        label=f"tab:{label_prefix}-{split.replace('_', '-')}-{lr.replace('-', '')}-ep{epoch_label}",
-                        epoch_column=epoch_column,
-                        bundles=bundles,
-                        row_specs=row_specs,
-                        metrics=metrics,
-                    )
+    split_lrs = split_lrs or [(split, lr) for split in SPLITS for lr in LRS]
+    for split, lr in split_lrs:
+        row_specs = row_specs_by_split_lr[(split, lr)]
+        bundles = bundles_by_split_lr[(split, lr)]
+        for epoch_column, epoch_label in EPOCH_SPECS:
+            if not first_table:
+                sections.append("")
+                sections.append("")
+            sections.append(f"% Split: {split} | LR: {lr} | Epoch: {epoch_label}")
+            sections.append(
+                build_table(
+                    caption=(
+                        f"{caption_prefix} for {SPLIT_LABELS[split]} at LR={lr}, epoch {epoch_label}. "
+                        "Values are percentages."
+                    ),
+                    label=f"tab:{label_prefix}-{split.replace('_', '-')}-{lr.replace('-', '')}-ep{epoch_label}",
+                    epoch_column=epoch_column,
+                    bundles=bundles,
+                    row_specs=row_specs,
+                    metrics=metrics,
                 )
-                first_table = False
+            )
+            first_table = False
     sections.append("")
     return "\n".join(sections)
 
@@ -821,34 +836,104 @@ def build_frames(
     metrics: list[tuple[str, str]],
     title_prefix: str,
     compact: bool = False,
+    split_lrs: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     frames: list[str] = []
-    for split in SPLITS:
-        for lr in LRS:
-            row_specs = row_specs_by_split_lr[(split, lr)]
-            bundles = bundles_by_split_lr[(split, lr)]
-            for epoch_column, epoch_label in EPOCH_SPECS:
-                frames.append(
-                    build_slide_frame(
-                        frame_title=f"{title_prefix} | {SPLIT_LABELS[split]} | LR = {lr} | Epoch = {epoch_label}",
-                        epoch_column=epoch_column,
-                        bundles=bundles,
-                        row_specs=row_specs,
-                        metrics=metrics,
-                        compact=compact,
-                    )
+    split_lrs = split_lrs or [(split, lr) for split in SPLITS for lr in LRS]
+    for split, lr in split_lrs:
+        row_specs = row_specs_by_split_lr[(split, lr)]
+        bundles = bundles_by_split_lr[(split, lr)]
+        for epoch_column, epoch_label in EPOCH_SPECS:
+            frames.append(
+                build_slide_frame(
+                    frame_title=f"{title_prefix} | {SPLIT_LABELS[split]} | LR = {lr} | Epoch = {epoch_label}",
+                    epoch_column=epoch_column,
+                    bundles=bundles,
+                    row_specs=row_specs,
+                    metrics=metrics,
+                    compact=compact,
                 )
+            )
     return frames
+
+
+def lr_sort_key(lr: str) -> tuple[int, float | str]:
+    if lr in LRS:
+        return (LRS.index(lr), 0.0)
+    try:
+        return (len(LRS), float(lr))
+    except ValueError:
+        return (len(LRS), lr)
+
+
+def discover_available_split_lrs(roots: list[Path]) -> list[tuple[str, str]]:
+    discovered: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for split in SPLITS:
+        candidate_lrs: set[str] = set()
+        for root in roots:
+            split_root = root / split
+            if not split_root.exists():
+                continue
+            for child in split_root.iterdir():
+                if child.is_dir():
+                    candidate_lrs.add(child.name)
+        for lr in sorted(candidate_lrs, key=lr_sort_key):
+            item = (split, lr)
+            if item not in seen:
+                seen.add(item)
+                discovered.append(item)
+    return discovered
+
+
+def load_variant_row_specs(
+    variant_root: Path,
+    split: str,
+    lr: str,
+) -> list[tuple[str, str, str, str]]:
+    first_metric = FIXED_METRICS[0][0]
+    table_path = variant_root / split / lr / f"{first_metric}.tsv"
+    if not table_path.exists():
+        return []
+
+    rows = load_metric_rows(table_path)
+    method_names = [
+        method_name
+        for method_name in rows
+        if variant_info_from_method_key(method_name) is not None
+    ]
+    method_names.sort(key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name))
+
+    color_by_algorithm = {
+        "multicf": "teal!12",
+        "boundary_cf": "cyan!12",
+        "span_cf": "yellow!12",
+    }
+    row_specs: list[tuple[str, str, str, str]] = []
+    for method_name in method_names:
+        info = variant_info_from_method_key(method_name)
+        if info is None:
+            continue
+        row_specs.append(
+            (
+                "variant",
+                method_name,
+                info.display_name,
+                color_by_algorithm.get(base_variant_algorithm(method_name) or "", ""),
+            )
+        )
+    return row_specs
 
 
 def main() -> None:
     args = parse_args()
-    old_root = args.old_root.expanduser().resolve()
-    new_root = args.new_root.expanduser().resolve()
     output_file = args.output_file.expanduser().resolve()
     output_slides_tex = (
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
+    variant_root = None if args.variant_root is None else args.variant_root.expanduser().resolve()
+    old_root = None if args.old_root is None else args.old_root.expanduser().resolve()
+    new_root = None if args.new_root is None else args.new_root.expanduser().resolve()
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
     simplece_new_root = (
         simnpo_root
@@ -871,6 +956,83 @@ def main() -> None:
         if args.wrong_generations_root is None
         else args.wrong_generations_root.expanduser().resolve()
     )
+
+    if variant_root is not None:
+        if old_root is not None or new_root is not None:
+            raise ValueError("--variant-root cannot be combined with --old-root/--new-root")
+        if output_simplece_file is not None or output_simplece_slides_tex is not None:
+            raise ValueError("SimpleCE-only outputs are not supported with --variant-root")
+
+        wrong_generation_index: dict[
+            str,
+            dict[str, dict[str, dict[str, dict[str, dict[str, str]]]]],
+        ] | None = None
+        wrong_generation_labels_by_source: dict[str, str | None] | None = None
+        available_wrong_generation_labels: set[str] = set()
+        if wrong_generations_root is not None:
+            wrong_generation_index, available_wrong_generation_labels = load_wrong_generation_index(
+                wrong_generations_root
+            )
+            wrong_generation_labels_by_source = {
+                "variant": resolve_wrong_generation_label(variant_root, available_wrong_generation_labels)
+            }
+
+        metrics = discover_metrics(
+            [variant_root],
+            include_wrong_generation_metrics=wrong_generations_root is not None,
+        )
+        split_lrs = discover_available_split_lrs([variant_root])
+        if not split_lrs:
+            raise FileNotFoundError(f"No split/LR tables found under {variant_root}")
+
+        bundles_by_split_lr = {
+            (split, lr): build_bundles(
+                {"variant": variant_root},
+                split,
+                lr,
+                metrics,
+                wrong_generation_index=wrong_generation_index,
+                wrong_generation_labels_by_source=wrong_generation_labels_by_source,
+            )
+            for split, lr in split_lrs
+        }
+        row_specs_by_split_lr = {
+            (split, lr): load_variant_row_specs(variant_root, split, lr)
+            for split, lr in split_lrs
+        }
+
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_text = build_output_text(
+            header_comment="% New-method tables generated by src/tools/build_results_combine_tables.py",
+            row_specs_by_split_lr=row_specs_by_split_lr,
+            bundles_by_split_lr=bundles_by_split_lr,
+            metrics=metrics,
+            caption_prefix="New-method results",
+            label_prefix="new-methods",
+            split_lrs=split_lrs,
+        )
+        output_file.write_text(output_text, encoding="utf-8")
+
+        if output_slides_tex is not None:
+            output_slides_tex.parent.mkdir(parents=True, exist_ok=True)
+            frames = build_frames(
+                row_specs_by_split_lr=row_specs_by_split_lr,
+                bundles_by_split_lr=bundles_by_split_lr,
+                metrics=metrics,
+                title_prefix="New Method Tables",
+                compact=True,
+                split_lrs=split_lrs,
+            )
+            slides_tex = build_slides_tex(
+                title="New Method Tables",
+                subtitle=f"{len(frames)} split/LR/epoch slides",
+                frames=frames,
+            )
+            output_slides_tex.write_text(slides_tex, encoding="utf-8")
+        return
+
+    if old_root is None or new_root is None:
+        raise ValueError("--old-root and --new-root are required unless --variant-root is used")
 
     combined_roots = {"old": old_root, "new": new_root}
     if simnpo_root is not None:
@@ -898,6 +1060,7 @@ def main() -> None:
         list(combined_roots.values()),
         include_wrong_generation_metrics=wrong_generations_root is not None,
     )
+    split_lrs = discover_available_split_lrs(list(combined_roots.values()))
 
     combined_bundles_by_split_lr = {
         (
@@ -911,24 +1074,22 @@ def main() -> None:
             wrong_generation_index=wrong_generation_index,
             wrong_generation_labels_by_source=wrong_generation_labels_by_source,
         )
-        for split in SPLITS
-        for lr in LRS
+        for split, lr in split_lrs
     }
     combined_row_specs_by_split_lr = {}
     combined_slide_row_specs_by_split_lr = {}
-    for split in SPLITS:
-        for lr in LRS:
-            bundles = combined_bundles_by_split_lr[(split, lr)]
-            combined_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
-                build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
-                bundles,
-                metrics,
-            )
-            combined_slide_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
-                build_combined_slide_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
-                bundles,
-                metrics,
-            )
+    for split, lr in split_lrs:
+        bundles = combined_bundles_by_split_lr[(split, lr)]
+        combined_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+            build_combined_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+            bundles,
+            metrics,
+        )
+        combined_slide_row_specs_by_split_lr[(split, lr)] = filter_row_specs(
+            build_combined_slide_row_specs(simnpo_root, simplece_new_root, simplece_old_root),
+            bundles,
+            metrics,
+        )
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_text = build_output_text(
@@ -938,6 +1099,7 @@ def main() -> None:
         metrics=metrics,
         caption_prefix="Combined old/new results",
         label_prefix="combined",
+        split_lrs=split_lrs,
     )
     output_file.write_text(output_text, encoding="utf-8")
 
@@ -949,6 +1111,7 @@ def main() -> None:
             metrics=metrics,
             title_prefix="Combined Tables",
             compact=True,
+            split_lrs=split_lrs,
         )
         slides_tex = build_slides_tex(
             title="Combined DualCF Tables",
@@ -982,13 +1145,11 @@ def main() -> None:
             }
         simplece_row_specs_by_split_lr = {
             (split, lr): load_simplece_row_specs(simplece_source_specs, split, lr, metrics)
-            for split in SPLITS
-            for lr in LRS
+            for split, lr in split_lrs
         }
         simplece_slide_row_specs_by_split_lr = {
             (split, lr): load_simplece_row_specs(simplece_slide_source_specs, split, lr, metrics)
-            for split in SPLITS
-            for lr in LRS
+            for split, lr in split_lrs
         }
         simplece_bundles_by_split_lr = {
             (
@@ -1012,8 +1173,7 @@ def main() -> None:
                     }
                 ),
             )
-            for split in SPLITS
-            for lr in LRS
+            for split, lr in split_lrs
         }
         simplece_output_text = build_output_text(
             header_comment="% SimpleCE-only tables generated by src/tools/build_results_combine_tables.py",
@@ -1022,6 +1182,7 @@ def main() -> None:
             metrics=metrics,
             caption_prefix="SimpleCE ablations",
             label_prefix="simplece",
+            split_lrs=split_lrs,
         )
         output_simplece_file.write_text(simplece_output_text, encoding="utf-8")
 
@@ -1032,6 +1193,7 @@ def main() -> None:
                 bundles_by_split_lr=simplece_bundles_by_split_lr,
                 metrics=metrics,
                 title_prefix="SimpleCE Ablations",
+                split_lrs=split_lrs,
             )
             simplece_slides_tex = build_slides_tex(
                 title="SimpleCE Ablation Tables",

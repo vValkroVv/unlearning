@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from checkpoint_summary_utils import checkpoint_sort_key, collect_eval_summaries
+from new_method_variant_utils import base_variant_algorithm, extract_new_method_variant, variant_sort_key
 
 
 META_COLUMNS = {"label", "checkpoint", "step", "epoch"}
@@ -228,6 +229,9 @@ def extract_method_key(run_name: str) -> str:
         if ablation_tokens:
             return "_".join([method_name] + ablation_tokens)
         return method_name
+    variant_info = extract_new_method_variant(run_name, method_name)
+    if variant_info is not None:
+        return variant_info.method_key
     return method_name
 
 
@@ -372,8 +376,13 @@ def collect_metric_keys(rows: list[dict[str, Any]]) -> list[str]:
     return ordered
 
 
-def method_sort_key(method_name: str) -> tuple[int, str]:
-    return (METHOD_ORDER_INDEX.get(method_name, len(METHOD_ORDER)), method_name)
+def method_sort_key(method_name: str) -> tuple[int, int, str]:
+    variant_key = variant_sort_key(method_name)
+    if variant_key is not None:
+        base_method = base_variant_algorithm(method_name)
+        if base_method is not None:
+            return (METHOD_ORDER_INDEX.get(base_method, len(METHOD_ORDER)), variant_key[1], method_name)
+    return (METHOD_ORDER_INDEX.get(method_name, len(METHOD_ORDER)), 0, method_name)
 
 
 def lr_sort_key(lr: str) -> float:

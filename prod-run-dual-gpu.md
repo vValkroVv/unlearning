@@ -559,39 +559,116 @@ SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scri
 
 ## New Method Runs
 
-Use `MULTICF_MAX_ALTERNATES_USED=8` so `multicf` tests the full available
-external candidate set rather than the trainer default top-4 variant.
+First-pass new-method ablations should freeze the shared routed DualCF core and
+vary only the method-specific knobs. Keep `tau_d`, `tau_a`, `temp_d`,
+`temp_a`, `lambda_neg_max`, `lambda_ret_lo`, `lambda_ret_hi`, `cf_weight`,
+`risk_forget_scale`, and the difficulty / attribution routing flags fixed.
 
-Run the short GPU validation sequence first:
-
-```bash
-# 1. MultiCF smoke, DUET rare, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="multicf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 duet_rare
-
-# 2. BoundaryCF smoke, DUET rare, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="boundary_cf" \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 duet_rare
-
-# 3. MultiCF smoke, RWKU, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="multicf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 rwku
-
-# 4. BoundaryCF smoke, RWKU, lr=1e-4, GPU 2
-SEEDS="42" METHOD_VARIANTS="boundary_cf" \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 rwku
-```
-
-If those are clean, run the full new-method campaign:
+Each command below runs the requested `1e-4` / `all` ablations serially for one
+method. MultiCF is split across two GPUs and uses a reduced counterfactual
+count to avoid the H100 OOM seen with the original `k=6` / `k=8` plan.
+New-method output dirs now abbreviate method tags in the launcher:
+MultiCF uses `agwm`/`agm`/`agt1` and `wrr`/`wuni`,
+BoundaryCF uses `lr`/`bm`,
+SpanCF uses `mlc`/`mso` plus `sw`/`uw`.
+These shorter tags keep run dirs under filesystem name limits.
+Each loop continues to the next spec if one spec fails.
 
 ```bash
-# 5. MultiCF + BoundaryCF, lr=1e-4, GPU 2
-SEEDS="42 179 1137" METHOD_VARIANTS="multicf boundary_cf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+# MultiCF GPU 0: M1, M2, M4
+GPU_ID=1
+for spec in \
+  "M1|2|weighted_mean|rerank|0.7" \
+  "M2|2|weighted_mean|rerank|0.5" \
+  "M4|3|weighted_mean|rerank|0.7"
+do
+  IFS='|' read -r tag max_alts agg_mode weight_mode set_temp <<<"${spec}"
+  echo "[multicf] ${tag}: k=${max_alts} agg=${agg_mode} weight=${weight_mode} temp=${set_temp}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="multicf" \
+    MULTICF_MAX_ALTERNATES_USED="${max_alts}" \
+    MULTICF_ALT_AGG_MODE="${agg_mode}" \
+    MULTICF_ALT_WEIGHT_MODE="${weight_mode}" \
+    MULTICF_ALT_SET_TEMPERATURE="${set_temp}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[multicf] ${tag} done"
+  else
+    echo "[multicf] ${tag} failed, continuing to next spec"
+  fi
+done
 
-# 6. MultiCF + BoundaryCF, lr=5e-5, GPU 1
-SEEDS="42 179 1137" METHOD_VARIANTS="multicf boundary_cf" MULTICF_MAX_ALTERNATES_USED=8 \
-bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+# MultiCF GPU 1: M3, M5, M6
+GPU_ID=2
+for spec in \
+  "M5|3|weighted_mean|rerank|0.5" \
+  "M3|2|weighted_mean|rerank|1.0" \
+  "M6|2|mean|uniform|1.0"
+do
+  IFS='|' read -r tag max_alts agg_mode weight_mode set_temp <<<"${spec}"
+  echo "[multicf] ${tag}: k=${max_alts} agg=${agg_mode} weight=${weight_mode} temp=${set_temp}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="multicf" \
+    MULTICF_MAX_ALTERNATES_USED="${max_alts}" \
+    MULTICF_ALT_AGG_MODE="${agg_mode}" \
+    MULTICF_ALT_WEIGHT_MODE="${weight_mode}" \
+    MULTICF_ALT_SET_TEMPERATURE="${set_temp}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[multicf] ${tag} done"
+  else
+    echo "[multicf] ${tag} failed, continuing to next spec"
+  fi
+done
+
+# BoundaryCF: B1-B6
+GPU_ID=4
+for spec in \
+  "B1|0.75|0.5" \
+  "B2|1.0|0.5" \
+  "B3|0.5|0.5" \
+  "B4|0.5|1.0" \
+  "B5|0.75|1.0" \
+  "B6|1.0|1.0"
+do
+  IFS='|' read -r tag local_retain margin <<<"${spec}"
+  echo "[boundary_cf] ${tag}: local_retain=${local_retain} margin=${margin}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="boundary_cf" \
+    BOUNDARY_LOCAL_RETAIN_WEIGHT="${local_retain}" \
+    BOUNDARY_MARGIN_WEIGHT="${margin}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[boundary_cf] ${tag} done"
+  else
+    echo "[boundary_cf] ${tag} failed, continuing to next spec"
+  fi
+done
+
+# SpanCF: S1-S6
+GPU_ID=5
+for spec in \
+  "S1|lcs|0.10|1.25" \
+  "S2|lcs|0.10|1.0" \
+  "S3|lcs|0.25|1.25" \
+  "S4|lcs|0.0|1.0" \
+  "S5|lcs|0.25|1.0" \
+  "S6|set_overlap|0.10|1.25"
+do
+  IFS='|' read -r tag span_mode shared_weight unique_weight <<<"${spec}"
+  echo "[span_cf] ${tag}: mode=${span_mode} shared=${shared_weight} unique=${unique_weight}"
+  if SEEDS="42 179 1137" \
+    METHOD_VARIANTS="span_cf" \
+    SPAN_MODE="${span_mode}" \
+    SPAN_SHARED_TOKEN_WEIGHT="${shared_weight}" \
+    SPAN_UNIQUE_TOKEN_WEIGHT="${unique_weight}" \
+    bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+  then
+    echo "[span_cf] ${tag} done"
+  else
+    echo "[span_cf] ${tag} failed, continuing to next spec"
+  fi
+done
 ```
 
 Interpret `boundary_cf` DUET-popular results carefully: the current artifact is

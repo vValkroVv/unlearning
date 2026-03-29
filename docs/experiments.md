@@ -56,6 +56,24 @@ python src/tools/analyze_wrong_generations.py \
   --output-root metrics-new/results-combine/wrong-generations \
   --overwrite
 
+## build seed-averaged tables for the 18 v2.5 new-method runs (M1-M6, B1-B6, S1-S6)
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5/extracted/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations \
+  --output-file metrics-new/results-combine-v2_5/combined_tables.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_slides.tex
+
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
 trainer=NPO trainer.method_args.retain_loss_type=KL task_name=llama2_books_NPO_KL \
