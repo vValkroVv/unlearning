@@ -1,0 +1,7 @@
+defaults:
+  - SpanCF
+
+handler: SpanCFSimNPO
+
+method_args:
+  delta: 0.0

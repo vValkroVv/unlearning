@@ -162,6 +162,23 @@ def compute_weighted_npo_per_sample(
     return loss, lose_outputs
 
 
+def compute_weighted_simnpo_per_sample(
+    model,
+    lose_inputs,
+    token_weights,
+    beta: float = 1.0,
+    delta: float = 0.0,
+):
+    lose_loss, lose_outputs = compute_weighted_nll_per_sample(
+        model,
+        lose_inputs,
+        token_weights=token_weights,
+    )
+    lose_loss = lose_loss - float(delta)
+    loss = -2.0 / beta * F.logsigmoid(beta * lose_loss)
+    return loss, lose_outputs
+
+
 def compute_dpo_loss(model, ref_model, win_inputs=None, lose_inputs=None, beta=1.0):
     if win_inputs is None and lose_inputs is None:
         raise ValueError("Both win_inputs and lose_inputs can't be None")

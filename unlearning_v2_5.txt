@@ -187,7 +187,12 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/duet/r2d_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/simnpo_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/simple_ce_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/span_cf_local_retain_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/span_cf_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_local_retain_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_projected_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_sam_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/undial_lora_popular.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/undial_lora.yaml
 │   │       │   └── configs/experiment/unlearn/duet/wga_lora.yaml
@@ -220,7 +225,12 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/rwku/npo_sam_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/simnpo_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/simple_ce_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/span_cf_local_retain_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/span_cf_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_local_retain_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_projected_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_sam_lora.yaml
 │   │       │   └── configs/experiment/unlearn/rwku/wga_lora.yaml
 │   │       ├── configs/experiment/unlearn/tofu
 │   │       │   ├── configs/experiment/unlearn/tofu/default.yaml
@@ -299,6 +309,11 @@ Directory Structure:
 │   │   ├── configs/trainer/SimNPO.yaml
 │   │   ├── configs/trainer/SimpleCE.yaml
 │   │   ├── configs/trainer/SpanCF.yaml
+│   │   ├── configs/trainer/SpanCFLocalRetain.yaml
+│   │   ├── configs/trainer/SpanCFSimNPO.yaml
+│   │   ├── configs/trainer/SpanCFSimNPOLocalRetain.yaml
+│   │   ├── configs/trainer/SpanCFSimNPOProjected.yaml
+│   │   ├── configs/trainer/SpanCFSimNPOSAM.yaml
 │   │   ├── configs/trainer/UNDIAL.yaml
 │   │   └── configs/trainer/WGA.yaml
 │   └── configs/unlearn.yaml
@@ -458,6 +473,7 @@ Directory Structure:
 │   │   ├── src/tools/loku_measure_importance.py
 │   │   ├── src/tools/make_counterfactuals.py
 │   │   ├── src/tools/merge_checkpoint_utility_summaries.py
+│   │   ├── src/tools/merge_local_retain_into_artifact.py
 │   │   ├── src/tools/new_method_variant_utils.py
 │   │   ├── src/tools/retry_invalid_counterfactuals.py
 │   │   ├── src/tools/score_attribution.py
@@ -493,9 +509,14 @@ Directory Structure:
 │       │   ├── src/trainer/unlearn/pop_dynam_b_wga.py
 │       │   ├── src/trainer/unlearn/r2d.py
 │       │   ├── src/trainer/unlearn/rmu.py
+│       │   ├── src/trainer/unlearn/sam_mixin.py
 │       │   ├── src/trainer/unlearn/satimp.py
 │       │   ├── src/trainer/unlearn/simnpo.py
 │       │   ├── src/trainer/unlearn/simple_ce.py
+│       │   ├── src/trainer/unlearn/span_cf_local_retain.py
+│       │   ├── src/trainer/unlearn/span_cf_simnpo_projected.py
+│       │   ├── src/trainer/unlearn/span_cf_simnpo_sam.py
+│       │   ├── src/trainer/unlearn/span_cf_simnpo.py
 │       │   ├── src/trainer/unlearn/span_cf.py
 │       │   ├── src/trainer/unlearn/undial.py
 │       │   └── src/trainer/unlearn/wga.py
@@ -6934,6 +6955,44 @@ export METHOD_VARIANT=loku
 scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
+SpanCF family (new):
+
+```bash
+# SpanCF with asymmetric 4-token weights
+export METHOD_VARIANT=span_cf
+export SPAN_MODE=lcs
+export SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10
+export SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO
+export METHOD_VARIANT=span_cf_simnpo
+export SPAN_SIMNPO_DELTA=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO + local retain
+# Local-retain variants must use the merged artifact path, not dualcf_*.jsonl.
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/span_local_retain_rare_v1.jsonl
+export METHOD_VARIANT=span_cf_simnpo_local_retain
+export SPAN_LOCAL_RETAIN_WEIGHT=0.2
+export SPAN_BOUNDARY_MARGIN_WEIGHT=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO + SAM
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=span_cf_simnpo_sam
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO + projected conflict handling
+export METHOD_VARIANT=span_cf_simnpo_projected
+export SPAN_PROJECTION_COS_THRESHOLD=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
 Every method variant above uses the same trajectory-saving behavior:
 
 - one intermediate `checkpoint-*` save when `CHECKPOINT_EPOCHS=2` and
@@ -6956,6 +7015,8 @@ scripts/rwku/run_dualcf_ablation_v2.sh
 ```
 
 Run the same ablation variants on RWKU after DUET rare / popular are stable.
+For RWKU local-retain variants, set:
+`CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2/span_local_retain_forget_level2_v1.jsonl`.
 
 ## Checkpoint evaluation
 
@@ -14021,6 +14082,11 @@ VARIANT_MATCHERS: dict[str, Callable[[str], bool]] = {
     "multicf": _contains("_multicf_lora_"),
     "boundary_cf": _contains("_boundary_cf_lora_"),
     "span_cf": _contains("_span_cf_lora_"),
+    "span_cf_simnpo": _contains("_span_cf_simnpo_lora_"),
+    "span_cf_local_retain": _contains("_span_cf_local_retain_lora_"),
+    "span_cf_simnpo_local_retain": _contains("_span_cf_simnpo_local_retain_lora_"),
+    "span_cf_simnpo_sam": _contains("_span_cf_simnpo_sam_lora_"),
+    "span_cf_simnpo_projected": _contains("_span_cf_simnpo_projected_lora_"),
     "ga": _contains("_ga_lora_"),
     "ada_pop": _contains("_ada_pop_lora_"),
     "npo": _contains("_npo_lora_"),
@@ -14891,14 +14957,18 @@ All DUET and RWKU launchers now write task directories directly under
 The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
-`scripts/dualcf/run_campaign_one_lr.sh` now includes `ada_pop` in its default
-`METHOD_VARIANTS`, so the campaign path covers DualCF plus GA / AdaPop / NPO /
-SimNPO / NPO-SAM / LoKU / SimpleCE without a separate wrapper edit. The
-standalone AdaPop launchers also accept `BETA_A` and `BETA_B` overrides for the
-dynamic popularity curve while keeping the same checkpoint / cleanup cadence as
-the other baselines. The wrapper also accepts an optional fourth positional
-argument for `SEED`; when set, runs get a matching `_seed<SEED>` suffix. It now
-defaults to `UTILITY=3k`; set `UTILITY=1k` to keep the old Utility-1K panel.
+`scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku"`.
+That keeps routed DualCF ablations plus baselines in one wrapper path.
+New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
+`span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
+`span_cf_simnpo_projected`) are available as explicit `METHOD_VARIANTS` values
+when needed. The standalone AdaPop launchers also accept `BETA_A` and `BETA_B`
+overrides for the dynamic popularity curve while keeping the same checkpoint /
+cleanup cadence as the other baselines. The wrapper also accepts an optional
+fourth positional argument for `SEED`; when set, runs get a matching
+`_seed<SEED>` suffix. It now defaults to `UTILITY=3k`; set `UTILITY=1k` to keep
+the old Utility-1K panel.
 
 ## Hardware profile
 
@@ -15371,7 +15441,9 @@ count to avoid the H100 OOM seen with the original `k=6` / `k=8` plan.
 New-method output dirs now abbreviate method tags in the launcher:
 MultiCF uses `agwm`/`agm`/`agt1` and `wrr`/`wuni`,
 BoundaryCF uses `lr`/`bm`,
-SpanCF uses `mlc`/`mso` plus `sw`/`uw`.
+SpanCF family uses `mlc`/`mso` plus `asw`/`auw`/`osw`/`ouw`, and variant
+suffixes (`dlt`, `lr`, `bm`, `sr`, `sad`, `pct`) for SimNPO/local-retain/SAM/
+projection knobs.
 These shorter tags keep run dirs under filesystem name limits.
 Each loop continues to the next spec if one spec fails.
 
@@ -15446,23 +15518,25 @@ do
   fi
 done
 
-# SpanCF: S1-S6
+# SpanCF: S1-S6 with asymmetric 4-weight routing
 GPU_ID=5
 for spec in \
-  "S1|lcs|0.10|1.25" \
-  "S2|lcs|0.10|1.0" \
-  "S3|lcs|0.25|1.25" \
-  "S4|lcs|0.0|1.0" \
-  "S5|lcs|0.25|1.0" \
-  "S6|set_overlap|0.10|1.25"
+  "S1|lcs|0.10|1.25|0.10|1.25" \
+  "S2|lcs|0.10|1.0|0.10|1.0" \
+  "S3|lcs|0.25|1.25|0.25|1.25" \
+  "S4|lcs|0.0|1.0|0.0|1.0" \
+  "S5|lcs|0.25|1.0|0.25|1.0" \
+  "S6|set_overlap|0.10|1.25|0.10|1.25"
 do
-  IFS='|' read -r tag span_mode shared_weight unique_weight <<<"${spec}"
-  echo "[span_cf] ${tag}: mode=${span_mode} shared=${shared_weight} unique=${unique_weight}"
+  IFS='|' read -r tag span_mode asw auw osw ouw <<<"${spec}"
+  echo "[span_cf] ${tag}: mode=${span_mode} asw=${asw} auw=${auw} osw=${osw} ouw=${ouw}"
   if SEEDS="42 179 1137" \
     METHOD_VARIANTS="span_cf" \
     SPAN_MODE="${span_mode}" \
-    SPAN_SHARED_TOKEN_WEIGHT="${shared_weight}" \
-    SPAN_UNIQUE_TOKEN_WEIGHT="${unique_weight}" \
+    SPAN_ALT_SHARED_TOKEN_WEIGHT="${asw}" \
+    SPAN_ALT_UNIQUE_TOKEN_WEIGHT="${auw}" \
+    SPAN_ORIG_SHARED_TOKEN_WEIGHT="${osw}" \
+    SPAN_ORIG_UNIQUE_TOKEN_WEIGHT="${ouw}" \
     bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
   then
     echo "[span_cf] ${tag} done"
@@ -15470,7 +15544,66 @@ do
     echo "[span_cf] ${tag} failed, continuing to next spec"
   fi
 done
+
+### Utility preserving
+
+# SpanCFSimNPO
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# SpanCFSimNPO + local retain
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_local_retain" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_LOCAL_RETAIN_WEIGHT=0.20 \
+SPAN_BOUNDARY_MARGIN_WEIGHT=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# SpanCFSimNPO + SAM
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_sam" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# SpanCFSimNPO + projected gradient conflict handling
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_projected" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_PROJECTION_COS_THRESHOLD=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 ```
+
+Local-retain methods (`span_cf_local_retain`, `span_cf_simnpo_local_retain`)
+automatically resolve to:
+
+- `${ARTIFACT_ROOT}/duet/*/span_local_retain_<forget_label>_v1.jsonl`
+- `${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/span_local_retain_forget_level2_v1.jsonl`
+
+The remaining Span variants resolve to the base DualCF v2 artifacts.
 
 Interpret `boundary_cf` DUET-popular results carefully: the current artifact is
 mostly fallback hard negatives there, not true lexical near-miss boundaries.
@@ -17720,6 +17853,120 @@ Validation:
 - not completed in this turn:
   - real-panel `src/eval.py` endpoint eval against `configs/eval/lm_eval_utility_3k.yaml`
   - end-to-end DUET or RWKU checkpoint utility sweep with actual 3K JSONLs
+
+## 2026-03-30 SpanCF Variant Pack (SimNPO, Local Retain, Asymmetric Weights, SAM, Projection)
+
+Files:
+
+- `src/trainer/utils.py`
+- `src/trainer/unlearn/dual_cf.py`
+- `src/trainer/unlearn/boundary_cf.py`
+- `src/trainer/unlearn/span_cf.py`
+- `src/trainer/unlearn/span_cf_simnpo.py`
+- `src/trainer/unlearn/span_cf_local_retain.py`
+- `src/trainer/unlearn/sam_mixin.py`
+- `src/trainer/unlearn/npo_sam.py`
+- `src/trainer/unlearn/span_cf_simnpo_sam.py`
+- `src/trainer/unlearn/span_cf_simnpo_projected.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/SpanCF.yaml`
+- `configs/trainer/SpanCFSimNPO.yaml`
+- `configs/trainer/SpanCFLocalRetain.yaml`
+- `configs/trainer/SpanCFSimNPOLocalRetain.yaml`
+- `configs/trainer/SpanCFSimNPOSAM.yaml`
+- `configs/trainer/SpanCFSimNPOProjected.yaml`
+- `configs/data/datasets/DUET_QA_forget_span_local_retain.yaml`
+- `configs/data/datasets/RWKU_QA_forget_span_local_retain.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_local_retain_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_local_retain_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_sam_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_projected_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_local_retain_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_local_retain_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_sam_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_projected_lora.yaml`
+- `src/tools/merge_local_retain_into_artifact.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/new_method_variant_utils.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- added `compute_weighted_simnpo_per_sample(...)` in `src/trainer/utils.py` to
+  mirror SimNPO transform on token-weighted per-sample NLL vectors
+- split SpanCF internals into branch hooks and moved from 2 token-weight knobs
+  to 4 branch-specific knobs:
+  - `alt_shared_token_weight`
+  - `alt_unique_token_weight`
+  - `orig_shared_token_weight`
+  - `orig_unique_token_weight`
+  with backward compatibility via legacy `shared_token_weight` /
+  `unique_token_weight`
+- added `SpanCFSimNPO` and configs/experiments for DUET and RWKU
+- added local-retain-only path for SpanCF:
+  - merged-artifact tool `merge_local_retain_into_artifact.py`
+  - local-retain dataset configs using `QABoundaryCFDataset` with merged inputs
+  - `SpanCFLocalRetain` and `SpanCFSimNPOLocalRetain` trainers/configs
+- extracted reusable `SAMMixin` from `NPOSAM` and added `SpanCFSimNPOSAM`
+- added projected variant `SpanCFSimNPOProjected` with manual gradient
+  composition and retain-conflict projection on the negative branch
+- extended DUET/RWKU wrappers to dispatch the new method variants and pass new
+  span-family env knobs:
+  - `SPAN_ALT_*`, `SPAN_ORIG_*`
+  - `SPAN_SIMNPO_DELTA`
+  - `SPAN_LOCAL_RETAIN_WEIGHT`, `SPAN_BOUNDARY_MARGIN_WEIGHT`
+  - `SPAN_SAM_*`
+  - `SPAN_PROJECTION_*`
+- updated campaign artifact resolution:
+  - span local-retain variants map to `span_local_retain_*.jsonl`
+  - span base/simnpo/sam/projected map to DualCF v2 artifacts
+- updated save-check / structured tables / wrong-generation analyzers to
+  recognize new method names and the extended Span suffix schema
+- synced runbooks with the new Span command surface and artifact mapping
+- `SpanCFSimNPOSAM` now preserves routed retain weighting by reusing
+  `alpha_eff` instead of falling back to fixed `alpha` inside the shared
+  SAM training step
+- `SpanCFSimNPOProjected` now:
+  - preserves routed retain weighting via `alpha_eff`
+  - uses one global negative-vs-retain conflict cosine / projection coefficient,
+    matching the intended FALCON-style projection pattern more closely than the
+    earlier per-parameter projection pass
+- `prod-run-dual-gpu.md` now keeps the previous ablation style for the
+  SpanCF family:
+  - one launcher command pattern via `run_campaign_one_lr.sh`
+  - per-spec env changes through a shell loop for the `S1-S6` SpanCF block
+  - four explicit utility-preserving runs for:
+    - `span_cf_simnpo`
+    - `span_cf_simnpo_local_retain`
+    - `span_cf_simnpo_sam`
+    - `span_cf_simnpo_projected`
+
+Validation:
+
+- completed locally in this turn:
+  - `bash -n scripts/duet/run_dualcf_ablation_v2.sh scripts/rwku/run_dualcf_ablation_v2.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh scripts/dualcf/run_campaign_one_lr.sh`
+  - `python -m py_compile src/trainer/utils.py src/trainer/unlearn/dual_cf.py src/trainer/unlearn/boundary_cf.py src/trainer/unlearn/npo_sam.py src/trainer/unlearn/span_cf.py src/trainer/unlearn/sam_mixin.py src/trainer/unlearn/span_cf_simnpo.py src/trainer/unlearn/span_cf_local_retain.py src/trainer/unlearn/span_cf_simnpo_sam.py src/trainer/unlearn/span_cf_simnpo_projected.py src/trainer/__init__.py src/tools/merge_local_retain_into_artifact.py src/tools/validate_dual_cf_artifact.py src/tools/build_structured_saves.py src/tools/build_results_combine_tables.py src/tools/export_unlearning_sanity_checks.py src/tools/analyze_wrong_generations.py src/tools/new_method_variant_utils.py check_saves.py`
+  - synthetic local-retain merge smoke:
+    - `python src/tools/merge_local_retain_into_artifact.py --base <tmp_base.jsonl> --boundary <tmp_boundary.jsonl> --output <tmp_merged.jsonl>`
+    - `python src/tools/validate_dual_cf_artifact.py --input <tmp_merged.jsonl> --strict --require-local-retain`
+  - targeted retain-weight / projection regression check by code inspection plus:
+    - `python -m py_compile src/trainer/unlearn/sam_mixin.py src/trainer/unlearn/span_cf_simnpo_sam.py src/trainer/unlearn/span_cf_simnpo_projected.py`
+- not completed in this turn:
+  - end-to-end DUET/RWKU `src/train.py` smoke with real artifacts
+  - full `rare -> popular -> merged` campaign rerun with the new Span variants
 
 </content>
 
@@ -21612,6 +21859,74 @@ task_name: duet_undial_lora_popular
 
 </content>
 
+<content full_path="configs/experiment/unlearn/duet/span_cf_local_retain_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFLocalRetain
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget_span_local_retain
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+cf_dataset_path: json
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget_span_local_retain:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: duet_span_cf_local_retain_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/duet/span_cf_lora.yaml">
 # @package _global_
 
@@ -21677,6 +21992,74 @@ trainer:
     ddp_find_unused_parameters: false
 
 task_name: duet_span_cf_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/duet/span_cf_simnpo_projected_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPOProjected
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget_dual_cf
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+cf_dataset_path: json
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: duet_span_cf_simnpo_projected_lora
 
 </content>
 
@@ -21890,6 +22273,142 @@ task_name: duet_wga_lora
 
 </content>
 
+<content full_path="configs/experiment/unlearn/duet/span_cf_simnpo_local_retain_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPOLocalRetain
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget_span_local_retain
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+cf_dataset_path: json
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget_span_local_retain:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: duet_span_cf_simnpo_local_retain_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/duet/span_cf_simnpo_sam_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPOSAM
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget_dual_cf
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+cf_dataset_path: json
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: duet_span_cf_simnpo_sam_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/duet/undial_lora.yaml">
 # @package _global_
 
@@ -22033,6 +22552,74 @@ trainer:
     retain_loss_type: NLL
 
 task_name: duet_simple_ce_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/duet/span_cf_simnpo_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPO
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget_dual_cf
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+cf_dataset_path: json
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: duet_span_cf_simnpo_lora
 
 </content>
 
@@ -23670,6 +24257,77 @@ task_name: rwku_boundary_cf_lora
 
 </content>
 
+<content full_path="configs/experiment/unlearn/rwku/span_cf_local_retain_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFLocalRetain
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget_span_local_retain
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+cf_dataset_path: json
+cf_dataset_name: null
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget_span_local_retain:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          name: ${cf_dataset_name}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: rwku_span_cf_local_retain_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/rwku/span_cf_lora.yaml">
 # @package _global_
 
@@ -23811,6 +24469,77 @@ trainer:
     retain_loss_type: NLL
 
 task_name: rwku_npo_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/rwku/span_cf_simnpo_projected_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPOProjected
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget_dual_cf
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+cf_dataset_path: json
+cf_dataset_name: null
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          name: ${cf_dataset_name}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: rwku_span_cf_simnpo_projected_lora
 
 </content>
 
@@ -23958,6 +24687,148 @@ task_name: rwku_wga_lora
 
 </content>
 
+<content full_path="configs/experiment/unlearn/rwku/span_cf_simnpo_local_retain_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPOLocalRetain
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget_span_local_retain
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+cf_dataset_path: json
+cf_dataset_name: null
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget_span_local_retain:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          name: ${cf_dataset_name}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: rwku_span_cf_simnpo_local_retain_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/rwku/span_cf_simnpo_sam_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPOSAM
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget_dual_cf
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+cf_dataset_path: json
+cf_dataset_name: null
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          name: ${cf_dataset_name}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: rwku_span_cf_simnpo_sam_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/rwku/simple_ce_lora.yaml">
 # @package _global_
 
@@ -24031,6 +24902,77 @@ trainer:
     retain_loss_type: NLL
 
 task_name: rwku_simple_ce_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/rwku/span_cf_simnpo_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: SpanCFSimNPO
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget_dual_cf
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+cf_dataset_path: json
+cf_dataset_name: null
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          name: ${cf_dataset_name}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: rwku_span_cf_simnpo_lora
 
 </content>
 
@@ -26507,11 +27449,34 @@ collators:
 
 </content>
 
+<content full_path="configs/trainer/SpanCFSimNPO.yaml">
+defaults:
+  - SpanCF
+
+handler: SpanCFSimNPO
+
+method_args:
+  delta: 0.0
+
+</content>
+
 <content full_path="configs/trainer/GradAscent.yaml">
 defaults:
   - finetune
 
 handler: GradAscent
+</content>
+
+<content full_path="configs/trainer/SpanCFLocalRetain.yaml">
+defaults:
+  - SpanCF
+
+handler: SpanCFLocalRetain
+
+method_args:
+  local_retain_weight: 0.2
+  boundary_margin_weight: 0.0
+
 </content>
 
 <content full_path="configs/trainer/MultiCF.yaml">
@@ -26558,6 +27523,18 @@ method_args:
   conflict_cos_threshold: 0.0
 
   retain_mode: cosine
+
+</content>
+
+<content full_path="configs/trainer/SpanCFSimNPOLocalRetain.yaml">
+defaults:
+  - SpanCFSimNPO
+
+handler: SpanCFSimNPOLocalRetain
+
+method_args:
+  local_retain_weight: 0.2
+  boundary_margin_weight: 0.0
 
 </content>
 
@@ -26678,6 +27655,19 @@ method_args:
 
 </content>
 
+<content full_path="configs/trainer/SpanCFSimNPOSAM.yaml">
+defaults:
+  - SpanCFSimNPO
+
+handler: SpanCFSimNPOSAM
+
+method_args:
+  sam_rho: 0.01
+  sam_adaptive: false
+  sam_eps: 1e-12
+
+</content>
+
 <content full_path="configs/trainer/SpanCF.yaml">
 defaults:
   - DualCF
@@ -26686,8 +27676,10 @@ handler: SpanCF
 
 method_args:
   span_mode: lcs
-  shared_token_weight: 0.25
-  unique_token_weight: 1.0
+  alt_shared_token_weight: 0.25
+  alt_unique_token_weight: 1.0
+  orig_shared_token_weight: 0.25
+  orig_unique_token_weight: 1.0
 
 </content>
 
@@ -26859,6 +27851,18 @@ method_args:
   r2d_m: null
   r2d_rewind_step: null
   r2d_eta: null
+
+</content>
+
+<content full_path="configs/trainer/SpanCFSimNPOProjected.yaml">
+defaults:
+  - SpanCFSimNPO
+
+handler: SpanCFSimNPOProjected
+
+method_args:
+  projection_cos_threshold: 0.0
+  projection_eps: 1e-12
 
 </content>
 
@@ -28933,6 +29937,41 @@ case "${METHOD_VARIANT}" in
     export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_lora.yaml}
     exec bash "${script_dir}/dual_cf_duet.sh"
     ;;
+  span_cf_simnpo)
+    export TRAINER=${TRAINER:-SpanCFSimNPO}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPO}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_simnpo_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
+  span_cf_local_retain)
+    export TRAINER=${TRAINER:-SpanCFLocalRetain}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_local_retain}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFLocalRetain}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_local_retain_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
+  span_cf_simnpo_local_retain)
+    export TRAINER=${TRAINER:-SpanCFSimNPOLocalRetain}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_local_retain}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOLocalRetain}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_simnpo_local_retain_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
+  span_cf_simnpo_sam)
+    export TRAINER=${TRAINER:-SpanCFSimNPOSAM}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_sam}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOSAM}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_simnpo_sam_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
+  span_cf_simnpo_projected)
+    export TRAINER=${TRAINER:-SpanCFSimNPOProjected}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_projected}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOProjected}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_simnpo_projected_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
   ga)
     exec bash "${script_dir}/ga_duet.sh"
     ;;
@@ -30756,6 +31795,13 @@ short_span_mode_tag() {
         *) echo "$1" ;;
     esac
 }
+
+short_bool_tag() {
+    case "$1" in
+        true|1|yes|on|TRUE|True) echo "t" ;;
+        *) echo "f" ;;
+    esac
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -30871,8 +31917,18 @@ multicf_alt_set_temperature="${MULTICF_ALT_SET_TEMPERATURE:-0.7}"
 boundary_local_retain_weight="${BOUNDARY_LOCAL_RETAIN_WEIGHT:-0.5}"
 boundary_margin_weight="${BOUNDARY_MARGIN_WEIGHT:-1.0}"
 span_mode="${SPAN_MODE:-lcs}"
-span_shared_token_weight="${SPAN_SHARED_TOKEN_WEIGHT:-0.25}"
-span_unique_token_weight="${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}"
+span_alt_shared_token_weight="${SPAN_ALT_SHARED_TOKEN_WEIGHT:-${SPAN_SHARED_TOKEN_WEIGHT:-0.25}}"
+span_alt_unique_token_weight="${SPAN_ALT_UNIQUE_TOKEN_WEIGHT:-${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}}"
+span_orig_shared_token_weight="${SPAN_ORIG_SHARED_TOKEN_WEIGHT:-${SPAN_SHARED_TOKEN_WEIGHT:-0.25}}"
+span_orig_unique_token_weight="${SPAN_ORIG_UNIQUE_TOKEN_WEIGHT:-${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}}"
+span_simnpo_delta="${SPAN_SIMNPO_DELTA:-0.0}"
+span_local_retain_weight="${SPAN_LOCAL_RETAIN_WEIGHT:-0.2}"
+span_boundary_margin_weight="${SPAN_BOUNDARY_MARGIN_WEIGHT:-0.0}"
+span_sam_rho="${SPAN_SAM_RHO:-0.01}"
+span_sam_adaptive="${SPAN_SAM_ADAPTIVE:-false}"
+span_sam_eps="${SPAN_SAM_EPS:-1e-12}"
+span_projection_cos_threshold="${SPAN_PROJECTION_COS_THRESHOLD:-0.0}"
+span_projection_eps="${SPAN_PROJECTION_EPS:-1e-12}"
 
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
@@ -30952,11 +32008,31 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                         boundary_local_tag=${boundary_local_retain_weight//./p}
                                                                                                         boundary_margin_tag=${boundary_margin_weight//./p}
                                                                                                         method_suffix=_lr${boundary_local_tag}_bm${boundary_margin_tag}
-                                                                                                    elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                    elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         span_mode_tag=$(short_span_mode_tag "${span_mode}")
-                                                                                                        span_shared_tag=${span_shared_token_weight//./p}
-                                                                                                        span_unique_tag=${span_unique_token_weight//./p}
-                                                                                                        method_suffix=_m${span_mode_tag}_sw${span_shared_tag}_uw${span_unique_tag}
+                                                                                                        span_alt_shared_tag=${span_alt_shared_token_weight//./p}
+                                                                                                        span_alt_unique_tag=${span_alt_unique_token_weight//./p}
+                                                                                                        span_orig_shared_tag=${span_orig_shared_token_weight//./p}
+                                                                                                        span_orig_unique_tag=${span_orig_unique_token_weight//./p}
+                                                                                                        method_suffix=_m${span_mode_tag}_asw${span_alt_shared_tag}_auw${span_alt_unique_tag}_osw${span_orig_shared_tag}_ouw${span_orig_unique_tag}
+                                                                                                        if [[ "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                            span_delta_tag=${span_simnpo_delta//./p}
+                                                                                                            method_suffix=${method_suffix}_dlt${span_delta_tag}
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" ]]; then
+                                                                                                            span_local_tag=${span_local_retain_weight//./p}
+                                                                                                            boundary_margin_tag=${span_boundary_margin_weight//./p}
+                                                                                                            method_suffix=${method_suffix}_lr${span_local_tag}_bm${boundary_margin_tag}
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFSimNPOSAM" ]]; then
+                                                                                                            span_sam_rho_tag=${span_sam_rho//./p}
+                                                                                                            span_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
+                                                                                                            method_suffix=${method_suffix}_sr${span_sam_rho_tag}_sad${span_sam_adaptive_tag}
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                            span_proj_threshold_tag=${span_projection_cos_threshold//./p}
+                                                                                                            method_suffix=${method_suffix}_pct${span_proj_threshold_tag}
+                                                                                                        fi
                                                                                                     fi
 
                                                                                                     task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
@@ -31011,7 +32087,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             trainer.method_args.gamma=${gamma}
                                                                                                             trainer.method_args.retain_loss_type=NLL
                                                                                                         )
-                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" ]]; then
+                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.tau_d=${tau_d}
                                                                                                                 trainer.method_args.tau_a=${tau_a}
@@ -31044,12 +32120,38 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                                 trainer.method_args.local_retain_weight=${boundary_local_retain_weight}
                                                                                                                 trainer.method_args.boundary_margin_weight=${boundary_margin_weight}
                                                                                                             )
-                                                                                                        elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                        elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.span_mode=${span_mode}
-                                                                                                                trainer.method_args.shared_token_weight=${span_shared_token_weight}
-                                                                                                                trainer.method_args.unique_token_weight=${span_unique_token_weight}
+                                                                                                                trainer.method_args.alt_shared_token_weight=${span_alt_shared_token_weight}
+                                                                                                                trainer.method_args.alt_unique_token_weight=${span_alt_unique_token_weight}
+                                                                                                                trainer.method_args.orig_shared_token_weight=${span_orig_shared_token_weight}
+                                                                                                                trainer.method_args.orig_unique_token_weight=${span_orig_unique_token_weight}
                                                                                                             )
+                                                                                                            if [[ "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                                extra_method_args+=(
+                                                                                                                    trainer.method_args.delta=${span_simnpo_delta}
+                                                                                                                )
+                                                                                                            fi
+                                                                                                            if [[ "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" ]]; then
+                                                                                                                extra_method_args+=(
+                                                                                                                    trainer.method_args.local_retain_weight=${span_local_retain_weight}
+                                                                                                                    trainer.method_args.boundary_margin_weight=${span_boundary_margin_weight}
+                                                                                                                )
+                                                                                                            fi
+                                                                                                            if [[ "${trainer}" == "SpanCFSimNPOSAM" ]]; then
+                                                                                                                extra_method_args+=(
+                                                                                                                    trainer.method_args.sam_rho=${span_sam_rho}
+                                                                                                                    trainer.method_args.sam_adaptive=${span_sam_adaptive}
+                                                                                                                    trainer.method_args.sam_eps=${span_sam_eps}
+                                                                                                                )
+                                                                                                            fi
+                                                                                                            if [[ "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                                extra_method_args+=(
+                                                                                                                    trainer.method_args.projection_cos_threshold=${span_projection_cos_threshold}
+                                                                                                                    trainer.method_args.projection_eps=${span_projection_eps}
+                                                                                                                )
+                                                                                                            fi
                                                                                                         fi
 
                                                                                                         train_cmd=(
@@ -33830,7 +34932,10 @@ resolve_duet_artifact_for_method() {
     boundary_cf)
       echo "${ARTIFACT_ROOT}/duet/${forget_label}_llama31_8b_v2/boundarycf_${forget_label}_v1.jsonl"
       ;;
-    span_cf)
+    span_cf_local_retain|span_cf_simnpo_local_retain)
+      echo "${ARTIFACT_ROOT}/duet/${forget_label}_llama31_8b_v2/span_local_retain_${forget_label}_v1.jsonl"
+      ;;
+    span_cf|span_cf_simnpo|span_cf_simnpo_sam|span_cf_simnpo_projected)
       case "${forget_label}" in
         rare) echo "${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl" ;;
         popular) echo "${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl" ;;
@@ -33865,7 +34970,10 @@ resolve_rwku_artifact_for_method() {
     boundary_cf)
       echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/boundarycf_forget_level2_v1.jsonl"
       ;;
-    span_cf|*)
+    span_cf_local_retain|span_cf_simnpo_local_retain)
+      echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/span_local_retain_forget_level2_v1.jsonl"
+      ;;
+    span_cf|span_cf_simnpo|span_cf_simnpo_sam|span_cf_simnpo_projected|*)
       echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/dualcf_forget_level2_v2.jsonl"
       ;;
   esac
@@ -37239,6 +38347,41 @@ case "${METHOD_VARIANT}" in
     export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_lora.yaml}
     exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
+  span_cf_simnpo)
+    export TRAINER=${TRAINER:-SpanCFSimNPO}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPO}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_local_retain)
+    export TRAINER=${TRAINER:-SpanCFLocalRetain}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_local_retain}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFLocalRetain}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_local_retain_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_simnpo_local_retain)
+    export TRAINER=${TRAINER:-SpanCFSimNPOLocalRetain}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_local_retain}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOLocalRetain}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_local_retain_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_simnpo_sam)
+    export TRAINER=${TRAINER:-SpanCFSimNPOSAM}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_sam}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOSAM}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_sam_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_simnpo_projected)
+    export TRAINER=${TRAINER:-SpanCFSimNPOProjected}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_projected}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOProjected}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_projected_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
   ga)
     exec bash "${script_dir}/ga_rwku.sh"
     ;;
@@ -39924,6 +41067,13 @@ short_span_mode_tag() {
         *) echo "$1" ;;
     esac
 }
+
+short_bool_tag() {
+    case "$1" in
+        true|1|yes|on|TRUE|True) echo "t" ;;
+        *) echo "f" ;;
+    esac
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -40027,8 +41177,18 @@ multicf_alt_set_temperature="${MULTICF_ALT_SET_TEMPERATURE:-0.7}"
 boundary_local_retain_weight="${BOUNDARY_LOCAL_RETAIN_WEIGHT:-0.5}"
 boundary_margin_weight="${BOUNDARY_MARGIN_WEIGHT:-1.0}"
 span_mode="${SPAN_MODE:-lcs}"
-span_shared_token_weight="${SPAN_SHARED_TOKEN_WEIGHT:-0.25}"
-span_unique_token_weight="${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}"
+span_alt_shared_token_weight="${SPAN_ALT_SHARED_TOKEN_WEIGHT:-${SPAN_SHARED_TOKEN_WEIGHT:-0.25}}"
+span_alt_unique_token_weight="${SPAN_ALT_UNIQUE_TOKEN_WEIGHT:-${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}}"
+span_orig_shared_token_weight="${SPAN_ORIG_SHARED_TOKEN_WEIGHT:-${SPAN_SHARED_TOKEN_WEIGHT:-0.25}}"
+span_orig_unique_token_weight="${SPAN_ORIG_UNIQUE_TOKEN_WEIGHT:-${SPAN_UNIQUE_TOKEN_WEIGHT:-1.0}}"
+span_simnpo_delta="${SPAN_SIMNPO_DELTA:-0.0}"
+span_local_retain_weight="${SPAN_LOCAL_RETAIN_WEIGHT:-0.2}"
+span_boundary_margin_weight="${SPAN_BOUNDARY_MARGIN_WEIGHT:-0.0}"
+span_sam_rho="${SPAN_SAM_RHO:-0.01}"
+span_sam_adaptive="${SPAN_SAM_ADAPTIVE:-false}"
+span_sam_eps="${SPAN_SAM_EPS:-1e-12}"
+span_projection_cos_threshold="${SPAN_PROJECTION_COS_THRESHOLD:-0.0}"
+span_projection_eps="${SPAN_PROJECTION_EPS:-1e-12}"
 
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
@@ -40097,11 +41257,31 @@ for lr in "${lrs[@]}"; do
                                                                                                     boundary_local_tag=${boundary_local_retain_weight//./p}
                                                                                                     boundary_margin_tag=${boundary_margin_weight//./p}
                                                                                                     method_suffix=_lr${boundary_local_tag}_bm${boundary_margin_tag}
-                                                                                                elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                     span_mode_tag=$(short_span_mode_tag "${span_mode}")
-                                                                                                    span_shared_tag=${span_shared_token_weight//./p}
-                                                                                                    span_unique_tag=${span_unique_token_weight//./p}
-                                                                                                    method_suffix=_m${span_mode_tag}_sw${span_shared_tag}_uw${span_unique_tag}
+                                                                                                    span_alt_shared_tag=${span_alt_shared_token_weight//./p}
+                                                                                                    span_alt_unique_tag=${span_alt_unique_token_weight//./p}
+                                                                                                    span_orig_shared_tag=${span_orig_shared_token_weight//./p}
+                                                                                                    span_orig_unique_tag=${span_orig_unique_token_weight//./p}
+                                                                                                    method_suffix=_m${span_mode_tag}_asw${span_alt_shared_tag}_auw${span_alt_unique_tag}_osw${span_orig_shared_tag}_ouw${span_orig_unique_tag}
+                                                                                                    if [[ "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                        span_delta_tag=${span_simnpo_delta//./p}
+                                                                                                        method_suffix=${method_suffix}_dlt${span_delta_tag}
+                                                                                                    fi
+                                                                                                    if [[ "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" ]]; then
+                                                                                                        span_local_tag=${span_local_retain_weight//./p}
+                                                                                                        boundary_margin_tag=${span_boundary_margin_weight//./p}
+                                                                                                        method_suffix=${method_suffix}_lr${span_local_tag}_bm${boundary_margin_tag}
+                                                                                                    fi
+                                                                                                    if [[ "${trainer}" == "SpanCFSimNPOSAM" ]]; then
+                                                                                                        span_sam_rho_tag=${span_sam_rho//./p}
+                                                                                                        span_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
+                                                                                                        method_suffix=${method_suffix}_sr${span_sam_rho_tag}_sad${span_sam_adaptive_tag}
+                                                                                                    fi
+                                                                                                    if [[ "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                        span_proj_threshold_tag=${span_projection_cos_threshold//./p}
+                                                                                                        method_suffix=${method_suffix}_pct${span_proj_threshold_tag}
+                                                                                                    fi
                                                                                                 fi
 
                                                                                                 task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
@@ -40156,7 +41336,7 @@ for lr in "${lrs[@]}"; do
                                                                                                         trainer.method_args.gamma=${gamma}
                                                                                                         trainer.method_args.retain_loss_type=NLL
                                                                                                     )
-                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" ]]; then
+                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.tau_d=${tau_d}
                                                                                                             trainer.method_args.tau_a=${tau_a}
@@ -40189,12 +41369,38 @@ for lr in "${lrs[@]}"; do
                                                                                                             trainer.method_args.local_retain_weight=${boundary_local_retain_weight}
                                                                                                             trainer.method_args.boundary_margin_weight=${boundary_margin_weight}
                                                                                                         )
-                                                                                                    elif [[ "${trainer}" == "SpanCF" ]]; then
+                                                                                                    elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.span_mode=${span_mode}
-                                                                                                            trainer.method_args.shared_token_weight=${span_shared_token_weight}
-                                                                                                            trainer.method_args.unique_token_weight=${span_unique_token_weight}
+                                                                                                            trainer.method_args.alt_shared_token_weight=${span_alt_shared_token_weight}
+                                                                                                            trainer.method_args.alt_unique_token_weight=${span_alt_unique_token_weight}
+                                                                                                            trainer.method_args.orig_shared_token_weight=${span_orig_shared_token_weight}
+                                                                                                            trainer.method_args.orig_unique_token_weight=${span_orig_unique_token_weight}
                                                                                                         )
+                                                                                                        if [[ "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.delta=${span_simnpo_delta}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.local_retain_weight=${span_local_retain_weight}
+                                                                                                                trainer.method_args.boundary_margin_weight=${span_boundary_margin_weight}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFSimNPOSAM" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.sam_rho=${span_sam_rho}
+                                                                                                                trainer.method_args.sam_adaptive=${span_sam_adaptive}
+                                                                                                                trainer.method_args.sam_eps=${span_sam_eps}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.projection_cos_threshold=${span_projection_cos_threshold}
+                                                                                                                trainer.method_args.projection_eps=${span_projection_eps}
+                                                                                                            )
+                                                                                                        fi
                                                                                                     fi
 
                                                                                                     train_cmd=(
@@ -46962,6 +48168,7 @@ def parse_args():
     parser.add_argument("--max-alt-length-chars", type=int, default=None)
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--check-overlap-ratio", type=float, default=None)
+    parser.add_argument("--require-local-retain", action="store_true")
     parser.add_argument("--strict", action="store_true")
     return parser.parse_args()
 
@@ -47038,6 +48245,34 @@ def main():
                 if not isinstance(value, (int, float)) or not math.isfinite(value):
                     bad_rows.append((line_no, f"{score_key} is not finite numeric: {value!r}"))
 
+            if args.require_local_retain:
+                for key in (
+                    "local_retain_question",
+                    "local_retain_answer",
+                    "local_retain_index",
+                ):
+                    if key not in row:
+                        bad_rows.append((line_no, f"missing local retain key: {key}"))
+                if "local_retain_question" in row and (
+                    not isinstance(row["local_retain_question"], str)
+                    or not row["local_retain_question"].strip()
+                ):
+                    bad_rows.append((line_no, "empty or non-string local_retain_question"))
+                if "local_retain_answer" in row and (
+                    not isinstance(row["local_retain_answer"], str)
+                    or not row["local_retain_answer"].strip()
+                ):
+                    bad_rows.append((line_no, "empty or non-string local_retain_answer"))
+                if "local_retain_index" in row and not isinstance(
+                    row["local_retain_index"], (int, float)
+                ):
+                    bad_rows.append(
+                        (
+                            line_no,
+                            f"local_retain_index is not numeric: {row['local_retain_index']!r}",
+                        )
+                    )
+
             invalid_reason = counterfactual_invalid_reason(
                 row["alternate"],
                 row["answer"],
@@ -47111,7 +48346,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -47146,6 +48381,11 @@ METHOD_DISPLAY = {
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
     "simple_ce": "Simple-CE",
+    "span_cf_simnpo": "SpanCF-SimNPO",
+    "span_cf_local_retain": "SpanCF-LocalRetain",
+    "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
+    "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
+    "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
     "falcon": "FALCON",
 }
 METHOD_ORDER = [
@@ -47161,6 +48401,11 @@ METHOD_ORDER = [
     "dpo_cf",
     "simnpo",
     "simple_ce",
+    "span_cf_simnpo",
+    "span_cf_local_retain",
+    "span_cf_simnpo_local_retain",
+    "span_cf_simnpo_sam",
+    "span_cf_simnpo_projected",
     "falcon",
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
@@ -48051,6 +49296,105 @@ def main() -> None:
             "Note: no checkpoint-level generation logs matched the requested eval filename. "
             "These reports cover final eval logs only."
         )
+
+
+if __name__ == "__main__":
+    main()
+
+</content>
+
+<content full_path="src/tools/merge_local_retain_into_artifact.py">
+#!/usr/bin/env python3
+"""Merge local retain fields from a BoundaryCF artifact into a base DualCF/SpanCF artifact."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+SRC_ROOT = Path(__file__).resolve().parent.parent
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from tools.dual_cf_artifact_utils import read_jsonl, save_jsonl  # noqa: E402
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-artifact-path", required=True)
+    parser.add_argument("--boundary-artifact-path", required=True)
+    parser.add_argument("--output-path", required=True)
+    parser.add_argument("--mapping-key", default="index")
+    parser.add_argument("--copy-boundary-score", action="store_true")
+    return parser.parse_args()
+
+
+def load_rows(path: str):
+    path_obj = Path(path)
+    if path_obj.suffix.lower() == ".json":
+        with path_obj.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, list):
+            raise TypeError(f"Expected a JSON list at {path_obj}, got {type(payload)}")
+        return payload
+    return read_jsonl(str(path_obj))
+
+
+def keyed_rows(rows, key_field: str, label: str):
+    keyed = {}
+    for row_idx, row in enumerate(rows):
+        if key_field not in row:
+            raise KeyError(f"{label} row {row_idx} is missing `{key_field}`.")
+        key = str(row[key_field])
+        if key in keyed:
+            raise ValueError(f"{label} contains duplicate `{key_field}`={key}.")
+        keyed[key] = row
+    return keyed
+
+
+def main():
+    args = parse_args()
+    base_rows = load_rows(args.base_artifact_path)
+    boundary_rows = load_rows(args.boundary_artifact_path)
+    boundary_by_key = keyed_rows(boundary_rows, args.mapping_key, "boundary artifact")
+
+    merged_rows = []
+    for row_idx, row in enumerate(base_rows):
+        if args.mapping_key not in row:
+            raise KeyError(f"base artifact row {row_idx} is missing `{args.mapping_key}`.")
+        key = str(row[args.mapping_key])
+        boundary_row = boundary_by_key.get(key)
+        if boundary_row is None:
+            raise KeyError(
+                f"Missing boundary artifact row for `{args.mapping_key}`={key}."
+            )
+
+        updated = dict(row)
+        for field in (
+            "local_retain_question",
+            "local_retain_answer",
+            "local_retain_index",
+        ):
+            if field not in boundary_row:
+                raise KeyError(
+                    f"boundary artifact row `{args.mapping_key}`={key} is missing `{field}`."
+                )
+            updated[field] = boundary_row[field]
+
+        if args.copy_boundary_score:
+            updated["boundary_score"] = float(boundary_row.get("boundary_score", 0.0))
+        else:
+            updated["boundary_score"] = 0.0
+
+        merged_rows.append(updated)
+
+    save_jsonl(merged_rows, args.output_path)
+    print(
+        f"[merge_local_retain_into_artifact] saved rows={len(merged_rows)} path={args.output_path}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
@@ -50668,6 +52012,11 @@ METHOD_ORDER = [
     "multicf",
     "boundary_cf",
     "span_cf",
+    "span_cf_simnpo",
+    "span_cf_local_retain",
+    "span_cf_simnpo_local_retain",
+    "span_cf_simnpo_sam",
+    "span_cf_simnpo_projected",
     "ga",
     "ada_pop",
     "npo",
@@ -50678,7 +52027,7 @@ METHOD_ORDER = [
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|simple_ce|multicf|boundary_cf|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
@@ -52212,7 +53561,7 @@ if __name__ == "__main__":
 
 <content full_path="src/tools/new_method_variant_utils.py">
 #!/usr/bin/env python3
-"""Shared helpers for MultiCF / BoundaryCF / SpanCF run variants."""
+"""Shared helpers for MultiCF, BoundaryCF, and the SpanCF family run variants."""
 
 from __future__ import annotations
 
@@ -52228,9 +53577,15 @@ BOUNDARY_RUN_RE = re.compile(
     r"_lr(?P<local>[^_]+)_bm(?P<margin>[^_]+)"
     r"_(?:dOn|dOff)_(?:aOn|aOff)(?:_seed\d+)?$"
 )
-SPAN_RUN_RE = re.compile(
-    r"_m(?P<mode>[^_]+)_sw(?P<shared>[^_]+)_uw(?P<unique>[^_]+)"
-    r"_(?:dOn|dOff)_(?:aOn|aOff)(?:_seed\d+)?$"
+SPAN_TAIL_RE = re.compile(r"_(?:dOn|dOff)_(?:aOn|aOff)(?:_seed\d+)?$")
+SPAN_OLD_BODY_RE = re.compile(r"m(?P<mode>[^_]+)_sw(?P<shared>[^_]+)_uw(?P<unique>[^_]+)")
+SPAN_NEW_BODY_RE = re.compile(
+    r"m(?P<mode>[^_]+)_asw(?P<alt_shared>[^_]+)_auw(?P<alt_unique>[^_]+)"
+    r"_osw(?P<orig_shared>[^_]+)_ouw(?P<orig_unique>[^_]+)"
+    r"(?:_dlt(?P<delta>[^_]+))?"
+    r"(?:_lr(?P<local>[^_]+)_bm(?P<margin>[^_]+))?"
+    r"(?:_sr(?P<sam_rho>[^_]+)_sad(?P<sam_adaptive>[^_]+))?"
+    r"(?:_pct(?P<proj_threshold>[^_]+))?"
 )
 
 MULTICF_KEY_RE = re.compile(
@@ -52238,9 +53593,6 @@ MULTICF_KEY_RE = re.compile(
 )
 BOUNDARY_KEY_RE = re.compile(
     r"^boundary_cf_(?:(?P<tag>b\d+)|lr(?P<local>[^_]+)_bm(?P<margin>[^_]+))$"
-)
-SPAN_KEY_RE = re.compile(
-    r"^span_cf_(?:(?P<tag>s\d+)|m(?P<mode>[^_]+)_sw(?P<shared>[^_]+)_uw(?P<unique>[^_]+))$"
 )
 
 MULTICF_TAGS = {
@@ -52285,11 +53637,28 @@ SPAN_MODE_DISPLAY = {
     "lc": "lcs",
     "so": "set_overlap",
 }
+BOOL_TOKEN_DISPLAY = {
+    "t": "true",
+    "f": "false",
+}
+SPAN_VARIANT_FAMILIES = {
+    "span_cf": "SpanCF",
+    "span_cf_simnpo": "SpanCF-SimNPO",
+    "span_cf_local_retain": "SpanCF-LocalRetain",
+    "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
+    "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
+    "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
+}
 
 VARIANT_ALGORITHM_ORDER = {
     "multicf": 0,
     "boundary_cf": 1,
     "span_cf": 2,
+    "span_cf_simnpo": 3,
+    "span_cf_local_retain": 4,
+    "span_cf_simnpo_local_retain": 5,
+    "span_cf_simnpo_sam": 6,
+    "span_cf_simnpo_projected": 7,
 }
 
 
@@ -52306,12 +53675,13 @@ def format_numeric_token(token: str) -> str:
 
 
 def base_variant_algorithm(method_key: str) -> str | None:
+    for prefix in sorted(SPAN_VARIANT_FAMILIES, key=len, reverse=True):
+        if method_key == prefix or method_key.startswith(f"{prefix}_"):
+            return prefix
     if method_key.startswith("multicf_"):
         return "multicf"
     if method_key.startswith("boundary_cf_"):
         return "boundary_cf"
-    if method_key.startswith("span_cf_"):
-        return "span_cf"
     return None
 
 
@@ -52347,20 +53717,103 @@ def _boundary_info(*, tag: str | None, local: str, margin: str) -> MethodVariant
     )
 
 
-def _span_info(*, tag: str | None, mode: str, shared: str, unique: str) -> MethodVariantInfo:
-    method_key = f"span_cf_{tag}" if tag is not None else f"span_cf_m{mode}_sw{shared}_uw{unique}"
-    display_prefix = f"SpanCF {tag.upper()}" if tag is not None else "SpanCF"
-    display_name = (
-        f"{display_prefix} (mode={SPAN_MODE_DISPLAY.get(mode, mode)} "
-        f"shared={format_numeric_token(shared)} unique={format_numeric_token(unique)})"
-    )
+def _span_info(
+    *,
+    method_name: str,
+    tag: str | None,
+    mode: str,
+    alt_shared: str,
+    alt_unique: str,
+    orig_shared: str,
+    orig_unique: str,
+    delta: str | None = None,
+    local: str | None = None,
+    margin: str | None = None,
+    sam_rho: str | None = None,
+    sam_adaptive: str | None = None,
+    proj_threshold: str | None = None,
+) -> MethodVariantInfo:
+    prefix = SPAN_VARIANT_FAMILIES.get(method_name, method_name)
     order_index = int(tag[1:]) if tag is not None and tag[1:].isdigit() else 999
+
+    if tag is not None:
+        method_key = f"{method_name}_{tag}"
+        display_name = f"{prefix} {tag.upper()}"
+        return MethodVariantInfo(
+            method_key=method_key,
+            display_name=display_name,
+            algorithm=method_name,
+            order_index=order_index,
+        )
+
+    parts = [
+        f"m{mode}",
+        f"asw{alt_shared}",
+        f"auw{alt_unique}",
+        f"osw{orig_shared}",
+        f"ouw{orig_unique}",
+    ]
+    display_parts = [
+        f"mode={SPAN_MODE_DISPLAY.get(mode, mode)}",
+        f"alt_shared={format_numeric_token(alt_shared)}",
+        f"alt_unique={format_numeric_token(alt_unique)}",
+        f"orig_shared={format_numeric_token(orig_shared)}",
+        f"orig_unique={format_numeric_token(orig_unique)}",
+    ]
+    if delta is not None:
+        parts.append(f"dlt{delta}")
+        display_parts.append(f"delta={format_numeric_token(delta)}")
+    if local is not None and margin is not None:
+        parts.extend((f"lr{local}", f"bm{margin}"))
+        display_parts.append(f"local_retain={format_numeric_token(local)}")
+        display_parts.append(f"margin={format_numeric_token(margin)}")
+    if sam_rho is not None and sam_adaptive is not None:
+        parts.extend((f"sr{sam_rho}", f"sad{sam_adaptive}"))
+        display_parts.append(f"sam_rho={format_numeric_token(sam_rho)}")
+        display_parts.append(
+            f"sam_adaptive={BOOL_TOKEN_DISPLAY.get(sam_adaptive, sam_adaptive)}"
+        )
+    if proj_threshold is not None:
+        parts.append(f"pct{proj_threshold}")
+        display_parts.append(f"proj_threshold={format_numeric_token(proj_threshold)}")
+
     return MethodVariantInfo(
-        method_key=method_key,
-        display_name=display_name,
-        algorithm="span_cf",
+        method_key=f"{method_name}_{'_'.join(parts)}",
+        display_name=f"{prefix} ({' '.join(display_parts)})",
+        algorithm=method_name,
         order_index=order_index,
     )
+
+
+def _parse_span_tokens_from_text(text: str) -> dict[str, str] | None:
+    legacy_match = SPAN_OLD_BODY_RE.search(text)
+    if legacy_match is not None:
+        mode = legacy_match.group("mode")
+        shared = legacy_match.group("shared")
+        unique = legacy_match.group("unique")
+        return {
+            "mode": mode,
+            "alt_shared": shared,
+            "alt_unique": unique,
+            "orig_shared": shared,
+            "orig_unique": unique,
+        }
+
+    modern_match = SPAN_NEW_BODY_RE.search(text)
+    if modern_match is not None:
+        payload = {
+            "mode": modern_match.group("mode"),
+            "alt_shared": modern_match.group("alt_shared"),
+            "alt_unique": modern_match.group("alt_unique"),
+            "orig_shared": modern_match.group("orig_shared"),
+            "orig_unique": modern_match.group("orig_unique"),
+        }
+        for key in ("delta", "local", "margin", "sam_rho", "sam_adaptive", "proj_threshold"):
+            value = modern_match.groupdict().get(key)
+            if value is not None:
+                payload[key] = value
+        return payload
+    return None
 
 
 def extract_new_method_variant(run_name: str, method_name: str) -> MethodVariantInfo | None:
@@ -52374,23 +53827,69 @@ def extract_new_method_variant(run_name: str, method_name: str) -> MethodVariant
             match.group("weight"),
             match.group("temp"),
         )
-        return _multicf_info(tag=MULTICF_TAGS.get(tokens), k=tokens[0], agg=tokens[1], weight=tokens[2], temp=tokens[3])
+        return _multicf_info(
+            tag=MULTICF_TAGS.get(tokens),
+            k=tokens[0],
+            agg=tokens[1],
+            weight=tokens[2],
+            temp=tokens[3],
+        )
 
     if method_name == "boundary_cf":
         match = BOUNDARY_RUN_RE.search(run_name)
         if match is None:
             return None
         tokens = (match.group("local"), match.group("margin"))
-        return _boundary_info(tag=BOUNDARY_TAGS.get(tokens), local=tokens[0], margin=tokens[1])
+        return _boundary_info(
+            tag=BOUNDARY_TAGS.get(tokens),
+            local=tokens[0],
+            margin=tokens[1],
+        )
 
-    if method_name == "span_cf":
-        match = SPAN_RUN_RE.search(run_name)
-        if match is None:
+    if method_name in SPAN_VARIANT_FAMILIES:
+        if SPAN_TAIL_RE.search(run_name) is None:
             return None
-        tokens = (match.group("mode"), match.group("shared"), match.group("unique"))
-        return _span_info(tag=SPAN_TAGS.get(tokens), mode=tokens[0], shared=tokens[1], unique=tokens[2])
+        tokens = _parse_span_tokens_from_text(run_name)
+        if tokens is None:
+            return None
+
+        tag = None
+        if method_name == "span_cf" and (
+            tokens["alt_shared"] == tokens["orig_shared"]
+            and tokens["alt_unique"] == tokens["orig_unique"]
+        ):
+            tag = SPAN_TAGS.get(
+                (tokens["mode"], tokens["alt_shared"], tokens["alt_unique"])
+            )
+        return _span_info(method_name=method_name, tag=tag, **tokens)
 
     return None
+
+
+def _span_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
+    method_name = base_variant_algorithm(method_key)
+    if method_name not in SPAN_VARIANT_FAMILIES:
+        return None
+    if method_key == method_name:
+        return None
+
+    remainder = method_key[len(method_name) + 1 :]
+    if method_name == "span_cf" and remainder in SPAN_TOKENS_BY_TAG:
+        mode, shared, unique = SPAN_TOKENS_BY_TAG[remainder]
+        return _span_info(
+            method_name=method_name,
+            tag=remainder,
+            mode=mode,
+            alt_shared=shared,
+            alt_unique=unique,
+            orig_shared=shared,
+            orig_unique=unique,
+        )
+
+    tokens = _parse_span_tokens_from_text(remainder)
+    if tokens is None:
+        return None
+    return _span_info(method_name=method_name, tag=None, **tokens)
 
 
 def variant_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
@@ -52400,9 +53899,26 @@ def variant_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
         if tag is not None:
             tokens = MULTICF_TOKENS_BY_TAG.get(tag)
             if tokens is not None:
-                return _multicf_info(tag=tag, k=tokens[0], agg=tokens[1], weight=tokens[2], temp=tokens[3])
-            return MethodVariantInfo(method_key=method_key, display_name=f"MultiCF {tag.upper()}", algorithm="multicf", order_index=999)
-        return _multicf_info(tag=None, k=match.group("k"), agg=match.group("agg"), weight=match.group("weight"), temp=match.group("temp"))
+                return _multicf_info(
+                    tag=tag,
+                    k=tokens[0],
+                    agg=tokens[1],
+                    weight=tokens[2],
+                    temp=tokens[3],
+                )
+            return MethodVariantInfo(
+                method_key=method_key,
+                display_name=f"MultiCF {tag.upper()}",
+                algorithm="multicf",
+                order_index=999,
+            )
+        return _multicf_info(
+            tag=None,
+            k=match.group("k"),
+            agg=match.group("agg"),
+            weight=match.group("weight"),
+            temp=match.group("temp"),
+        )
 
     match = BOUNDARY_KEY_RE.fullmatch(method_key)
     if match is not None:
@@ -52411,20 +53927,19 @@ def variant_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
             tokens = BOUNDARY_TOKENS_BY_TAG.get(tag)
             if tokens is not None:
                 return _boundary_info(tag=tag, local=tokens[0], margin=tokens[1])
-            return MethodVariantInfo(method_key=method_key, display_name=f"BoundaryCF {tag.upper()}", algorithm="boundary_cf", order_index=999)
-        return _boundary_info(tag=None, local=match.group("local"), margin=match.group("margin"))
+            return MethodVariantInfo(
+                method_key=method_key,
+                display_name=f"BoundaryCF {tag.upper()}",
+                algorithm="boundary_cf",
+                order_index=999,
+            )
+        return _boundary_info(
+            tag=None,
+            local=match.group("local"),
+            margin=match.group("margin"),
+        )
 
-    match = SPAN_KEY_RE.fullmatch(method_key)
-    if match is not None:
-        tag = match.group("tag")
-        if tag is not None:
-            tokens = SPAN_TOKENS_BY_TAG.get(tag)
-            if tokens is not None:
-                return _span_info(tag=tag, mode=tokens[0], shared=tokens[1], unique=tokens[2])
-            return MethodVariantInfo(method_key=method_key, display_name=f"SpanCF {tag.upper()}", algorithm="span_cf", order_index=999)
-        return _span_info(tag=None, mode=match.group("mode"), shared=match.group("shared"), unique=match.group("unique"))
-
-    return None
+    return _span_info_from_method_key(method_key)
 
 
 def variant_sort_key(method_key: str) -> tuple[int, int, str] | None:
@@ -52889,6 +54404,11 @@ WRONG_GENERATION_METHOD_MAP = {
     "multicf": "multicf",
     "boundary_cf": "boundary_cf",
     "span_cf": "span_cf",
+    "span_cf_simnpo": "span_cf_simnpo",
+    "span_cf_local_retain": "span_cf_local_retain",
+    "span_cf_simnpo_local_retain": "span_cf_simnpo_local_retain",
+    "span_cf_simnpo_sam": "span_cf_simnpo_sam",
+    "span_cf_simnpo_projected": "span_cf_simnpo_projected",
     "ga": "ga",
     "ada_pop": "ada_pop",
     "npo": "npo",
@@ -52939,6 +54459,11 @@ COMBINED_ROW_SPECS = [
     ("new", "multicf", "MultiCF", "teal!12"),
     ("new", "boundary_cf", "BoundaryCF", "cyan!12"),
     ("new", "span_cf", "SpanCF", "yellow!12"),
+    ("new", "span_cf_simnpo", "SpanCF-SimNPO", "yellow!18"),
+    ("new", "span_cf_local_retain", "SpanCF-LocalRetain", "lime!12"),
+    ("new", "span_cf_simnpo_local_retain", "SpanCF-SimNPO-LocalRetain", "lime!18"),
+    ("new", "span_cf_simnpo_sam", "SpanCF-SimNPO-SAM", "orange!12"),
+    ("new", "span_cf_simnpo_projected", "SpanCF-SimNPO-Projected", "red!12"),
 ]
 SIMNPO_ROW_SPEC = ("simnpo", "simnpo", "SimNPO", "red!12")
 COMBINED_SIMPLECE_METHODS = [
@@ -53749,6 +55274,11 @@ def load_variant_row_specs(
         "multicf": "teal!12",
         "boundary_cf": "cyan!12",
         "span_cf": "yellow!12",
+        "span_cf_simnpo": "yellow!18",
+        "span_cf_local_retain": "lime!12",
+        "span_cf_simnpo_local_retain": "lime!18",
+        "span_cf_simnpo_sam": "orange!12",
+        "span_cf_simnpo_projected": "red!12",
     }
     row_specs: list[tuple[str, str, str, str]] = []
     for method_name in method_names:
@@ -54075,7 +55605,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 COS_SIM_EVAL_FILENAME = "COS_SIM_EVAL.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -54106,6 +55636,11 @@ METHOD_DISPLAY = {
     "multicf": "MultiCF",
     "boundary_cf": "BoundaryCF",
     "span_cf": "SpanCF",
+    "span_cf_simnpo": "SpanCF-SimNPO",
+    "span_cf_local_retain": "SpanCF-LocalRetain",
+    "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
+    "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
+    "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
     "falcon": "FALCON",
 }
 METHOD_ORDER = [
@@ -54124,6 +55659,11 @@ METHOD_ORDER = [
     "multicf",
     "boundary_cf",
     "span_cf",
+    "span_cf_simnpo",
+    "span_cf_local_retain",
+    "span_cf_simnpo_local_retain",
+    "span_cf_simnpo_sam",
+    "span_cf_simnpo_projected",
     "falcon",
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
@@ -55929,6 +57469,13 @@ from trainer.unlearn.dual_cf import DualCF
 from trainer.unlearn.multicf import MultiCF
 from trainer.unlearn.boundary_cf import BoundaryCF
 from trainer.unlearn.span_cf import SpanCF
+from trainer.unlearn.span_cf_simnpo import SpanCFSimNPO
+from trainer.unlearn.span_cf_local_retain import (
+    SpanCFLocalRetain,
+    SpanCFSimNPOLocalRetain,
+)
+from trainer.unlearn.span_cf_simnpo_sam import SpanCFSimNPOSAM
+from trainer.unlearn.span_cf_simnpo_projected import SpanCFSimNPOProjected
 from trainer.callbacks import JsonlTraceCallback, SaveOnEpochsCallback
 
 
@@ -56031,6 +57578,11 @@ _register_trainer(DualCF)
 _register_trainer(MultiCF)
 _register_trainer(BoundaryCF)
 _register_trainer(SpanCF)
+_register_trainer(SpanCFSimNPO)
+_register_trainer(SpanCFLocalRetain)
+_register_trainer(SpanCFSimNPOLocalRetain)
+_register_trainer(SpanCFSimNPOSAM)
+_register_trainer(SpanCFSimNPOProjected)
 
 </content>
 
@@ -56196,6 +57748,23 @@ def compute_weighted_npo_per_sample(
 
     lose_log_ratio = -(lose_loss - lose_ref_loss)
     loss = -2.0 / beta * F.logsigmoid(beta * (-lose_log_ratio))
+    return loss, lose_outputs
+
+
+def compute_weighted_simnpo_per_sample(
+    model,
+    lose_inputs,
+    token_weights,
+    beta: float = 1.0,
+    delta: float = 0.0,
+):
+    lose_loss, lose_outputs = compute_weighted_nll_per_sample(
+        model,
+        lose_inputs,
+        token_weights=token_weights,
+    )
+    lose_loss = lose_loss - float(delta)
+    loss = -2.0 / beta * F.logsigmoid(beta * lose_loss)
     return loss, lose_outputs
 
 
@@ -57091,7 +58660,34 @@ class DualCF(GradDiff):
         routing: dict,
         forget_inputs,
     ) -> torch.Tensor:
-        return routing["forget_scale"] * (self.cf_weight * cf_vec + routing["lambda_neg"] * neg_vec)
+        return self._forget_term_components(
+            cf_vec=cf_vec,
+            neg_vec=neg_vec,
+            routing=routing,
+            forget_inputs=forget_inputs,
+        )["per_sample_forget_loss"]
+
+    def _forget_term_components(
+        self,
+        cf_vec: torch.Tensor,
+        neg_vec: torch.Tensor,
+        routing: dict,
+        forget_inputs,
+    ) -> dict:
+        del forget_inputs
+        per_sample_cf_loss = routing["forget_scale"] * (self.cf_weight * cf_vec)
+        per_sample_neg_loss = routing["forget_scale"] * (
+            routing["lambda_neg"] * neg_vec
+        )
+        per_sample_forget_loss = per_sample_cf_loss + per_sample_neg_loss
+        return {
+            "per_sample_cf_loss": per_sample_cf_loss,
+            "per_sample_neg_loss": per_sample_neg_loss,
+            "per_sample_forget_loss": per_sample_forget_loss,
+            "cf_loss": per_sample_cf_loss.mean(),
+            "neg_loss": per_sample_neg_loss.mean(),
+            "forget_loss": per_sample_forget_loss.mean(),
+        }
 
     def _extra_log_components(self, components: dict) -> dict:
         return {}
@@ -57110,13 +58706,12 @@ class DualCF(GradDiff):
             batch_size=batch_size,
             device=device,
         )
-        per_sample_forget_loss = self._forget_term_vector(
+        forget_terms = self._forget_term_components(
             cf_vec=cf_vec,
             neg_vec=neg_vec,
             routing=routing,
             forget_inputs=forget_inputs,
         )
-        forget_loss = per_sample_forget_loss.mean()
 
         components = {
             "forget_inputs": forget_inputs,
@@ -57124,9 +58719,8 @@ class DualCF(GradDiff):
             "cf_vec": cf_vec,
             "neg_vec": neg_vec,
             "outputs": outputs,
-            "per_sample_forget_loss": per_sample_forget_loss,
-            "forget_loss": forget_loss,
             **routing,
+            **forget_terms,
         }
         extra_logs = {}
         extra_logs.update(cf_logs)
@@ -57209,6 +58803,305 @@ class DualCF(GradDiff):
         loss = self.gamma * components["forget_loss"] + components["alpha_eff"] * retain_loss
         self._maybe_log(components=components, retain_loss=retain_loss, loss=loss)
         return (loss, components["outputs"]) if return_outputs else loss
+
+</content>
+
+<content full_path="src/trainer/unlearn/span_cf_simnpo_projected.py">
+import torch
+
+from trainer.unlearn.sam_mixin import ManualGradMixin
+from trainer.unlearn.span_cf_simnpo import SpanCFSimNPO
+
+
+class SpanCFSimNPOProjected(ManualGradMixin, SpanCFSimNPO):
+    LOG_PREFIX = "span_simnpo_proj"
+
+    def __init__(
+        self,
+        projection_cos_threshold=0.0,
+        projection_eps=1e-12,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.projection_cos_threshold = float(projection_cos_threshold)
+        self.projection_eps = float(projection_eps)
+
+    def _resolve_projection(self, neg_grads, retain_grads, device):
+        dot = torch.zeros((), device=device, dtype=torch.float32)
+        neg_norm_sq = torch.zeros((), device=device, dtype=torch.float32)
+        retain_norm_sq = torch.zeros((), device=device, dtype=torch.float32)
+
+        for g_neg, g_retain in zip(neg_grads, retain_grads):
+            if g_neg is None or g_retain is None:
+                continue
+            neg_fp32 = g_neg.float()
+            retain_fp32 = g_retain.float()
+            dot = dot + (neg_fp32 * retain_fp32).sum()
+            neg_norm_sq = neg_norm_sq + (neg_fp32 * neg_fp32).sum()
+            retain_norm_sq = retain_norm_sq + (retain_fp32 * retain_fp32).sum()
+
+        eps = float(self.projection_eps)
+        cos = dot / (
+            torch.sqrt(neg_norm_sq + eps) * torch.sqrt(retain_norm_sq + eps) + eps
+        )
+        cos_value = float(cos.detach().item())
+        has_retain_grad = float(retain_norm_sq.detach().item()) > 0.0
+        conflict = bool(cos_value < self.projection_cos_threshold and has_retain_grad)
+        coeff = (dot / (retain_norm_sq + eps)) if conflict else None
+        return conflict, cos_value, coeff
+
+    def training_step(self, model: torch.nn.Module, inputs) -> torch.Tensor:
+        if self.is_deepspeed_enabled:
+            raise NotImplementedError(
+                "[SpanCFSimNPOProjected] DeepSpeed is not supported in this integration."
+            )
+        if getattr(self.accelerator, "num_processes", 1) > 1:
+            raise NotImplementedError(
+                "[SpanCFSimNPOProjected] Multi-process training is not supported in this integration."
+            )
+
+        model.train()
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self.optimizer.train()
+
+        inputs = self._prepare_inputs(inputs)
+        params = self._trainable_params(model)
+        if not params:
+            raise RuntimeError("[SpanCFSimNPOProjected] No trainable parameters found.")
+
+        grad_acc_steps = max(1, int(self.args.gradient_accumulation_steps))
+        grad_scale = 1.0 / grad_acc_steps
+
+        prev_grads = self._stash_grads(params)
+        self._clear_grads_set_to_none(params)
+
+        with self.compute_loss_context_manager():
+            components = self._compute_core_components(model, inputs)
+            cf_loss = components["cf_loss"]
+            neg_loss = components["neg_loss"]
+
+        cf_grads = torch.autograd.grad(
+            cf_loss,
+            params,
+            retain_graph=True,
+            create_graph=False,
+            allow_unused=True,
+        )
+        neg_grads = torch.autograd.grad(
+            neg_loss,
+            params,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=True,
+        )
+
+        self._clear_grads_set_to_none(params)
+        with self.compute_loss_context_manager():
+            retain_loss = self.compute_retain_loss(
+                model=model,
+                retain_inputs=self._retain_inputs(inputs),
+            )
+        retain_grads = torch.autograd.grad(
+            retain_loss,
+            params,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=True,
+        )
+
+        conflict, cos_value, proj_coeff = self._resolve_projection(
+            neg_grads=neg_grads,
+            retain_grads=retain_grads,
+            device=components["forget_loss"].device,
+        )
+
+        retain_weight = components["alpha_eff"]
+        combined_grads = []
+        for g_cf, g_neg, g_retain in zip(cf_grads, neg_grads, retain_grads):
+            grad = None
+            if g_cf is not None:
+                grad = self.gamma * g_cf
+            if g_neg is not None:
+                if conflict and proj_coeff is not None and g_retain is not None:
+                    g_neg = g_neg - proj_coeff.to(
+                        device=g_neg.device,
+                        dtype=g_neg.dtype,
+                    ) * g_retain
+                neg_component = self.gamma * g_neg
+                grad = neg_component if grad is None else grad + neg_component
+            if g_retain is not None:
+                retain_component = retain_weight.to(
+                    device=g_retain.device,
+                    dtype=g_retain.dtype,
+                ) * g_retain
+                grad = retain_component if grad is None else grad + retain_component
+            combined_grads.append(grad)
+
+        self._set_final_grads(params, combined_grads, prev_grads, grad_scale)
+
+        total_loss = self.gamma * components["forget_loss"] + retain_weight * retain_loss
+        conflict_ratio = 1.0 if conflict else 0.0
+        try:
+            self._maybe_log(
+                components=components,
+                retain_loss=retain_loss,
+                loss=total_loss,
+                extra_logs={
+                    f"{self.log_prefix}_grad_cos": cos_value,
+                    f"{self.log_prefix}_conflict_ratio": conflict_ratio,
+                    f"{self.log_prefix}_conflict": 1.0 if conflict else 0.0,
+                    f"{self.log_prefix}_projection_threshold": self.projection_cos_threshold,
+                },
+            )
+        except Exception:
+            pass
+
+        return total_loss.detach() * grad_scale
+
+</content>
+
+<content full_path="src/trainer/unlearn/span_cf_local_retain.py">
+from trainer.unlearn.span_cf import SpanCF
+from trainer.unlearn.span_cf_simnpo import SpanCFSimNPO
+
+
+class _SpanCFLocalRetainMixin:
+    def __init__(
+        self,
+        local_retain_weight=0.2,
+        boundary_margin_weight=0.0,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.local_retain_weight = float(local_retain_weight)
+        self.boundary_margin_weight = float(boundary_margin_weight)
+
+    def _local_retain_inputs(self, inputs):
+        local_retain_inputs = inputs["forget"]["local_retain"]
+        return {
+            "input_ids": local_retain_inputs["input_ids"],
+            "attention_mask": local_retain_inputs["attention_mask"],
+            "labels": local_retain_inputs["labels"],
+        }
+
+    def _optional_boundary_score_tensor(self, forget_inputs, keys, device, batch_size):
+        for key in keys:
+            value = self._optional_score_tensor(
+                forget_inputs=forget_inputs,
+                key=key,
+                device=device,
+                batch_size=batch_size,
+            )
+            if value is not None:
+                return value
+        return None
+
+    def _forget_term_components(self, cf_vec, neg_vec, routing, forget_inputs):
+        payload = super()._forget_term_components(
+            cf_vec=cf_vec,
+            neg_vec=neg_vec,
+            routing=routing,
+            forget_inputs=forget_inputs,
+        )
+        boundary_score = self._optional_score_tensor(
+            forget_inputs=forget_inputs,
+            key="boundary_score",
+            device=cf_vec.device,
+            batch_size=int(cf_vec.shape[0]),
+        )
+        if boundary_score is None or self.boundary_margin_weight == 0.0:
+            return payload
+
+        margin = 1.0 + self.boundary_margin_weight * boundary_score.clamp_min(0.0)
+        payload["per_sample_cf_loss"] = payload["per_sample_cf_loss"] * margin
+        payload["per_sample_neg_loss"] = payload["per_sample_neg_loss"] * margin
+        payload["per_sample_forget_loss"] = (
+            payload["per_sample_cf_loss"] + payload["per_sample_neg_loss"]
+        )
+        payload["cf_loss"] = payload["per_sample_cf_loss"].mean()
+        payload["neg_loss"] = payload["per_sample_neg_loss"].mean()
+        payload["forget_loss"] = payload["per_sample_forget_loss"].mean()
+        return payload
+
+    def _extra_log_components(self, components: dict) -> dict:
+        payload = super()._extra_log_components(components)
+        forget_inputs = components["forget_inputs"]
+        batch_size = int(components["cf_vec"].shape[0])
+        device = components["cf_vec"].device
+        boundary_score = self._optional_score_tensor(
+            forget_inputs=forget_inputs,
+            key="boundary_score",
+            device=device,
+            batch_size=batch_size,
+        )
+        relation = self._optional_boundary_score_tensor(
+            forget_inputs=forget_inputs,
+            keys=("boundary_relation", "boundary_relation_score"),
+            device=device,
+            batch_size=batch_size,
+        )
+        overlap = self._optional_boundary_score_tensor(
+            forget_inputs=forget_inputs,
+            keys=("boundary_overlap", "boundary_lexical_overlap"),
+            device=device,
+            batch_size=batch_size,
+        )
+        if boundary_score is not None:
+            payload[f"{self.log_prefix}_score_mean"] = float(
+                boundary_score.mean().detach().item()
+            )
+            payload[f"{self.log_prefix}_margin_factor_mean"] = float(
+                (
+                    1.0 + self.boundary_margin_weight * boundary_score.clamp_min(0.0)
+                ).mean().detach().item()
+            )
+        if relation is not None:
+            payload[f"{self.log_prefix}_relation_mean"] = float(
+                relation.mean().detach().item()
+            )
+        if overlap is not None:
+            payload[f"{self.log_prefix}_overlap_mean"] = float(
+                overlap.mean().detach().item()
+            )
+        return payload
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        components = self._compute_core_components(model, inputs)
+        retain_loss = self.compute_retain_loss(
+            model=model,
+            retain_inputs=self._retain_inputs(inputs),
+        )
+        local_retain_loss = self.compute_retain_loss(
+            model=model,
+            retain_inputs=self._local_retain_inputs(inputs),
+        )
+        loss = (
+            self.gamma * components["forget_loss"]
+            + components["alpha_eff"] * retain_loss
+            + self.local_retain_weight * local_retain_loss
+        )
+        self._maybe_log(
+            components=components,
+            retain_loss=retain_loss,
+            loss=loss,
+            extra_logs={
+                f"{self.log_prefix}_local_retain_loss": float(
+                    local_retain_loss.detach().item()
+                ),
+                f"{self.log_prefix}_local_retain_weight": self.local_retain_weight,
+            },
+        )
+        return (loss, components["outputs"]) if return_outputs else loss
+
+
+class SpanCFLocalRetain(_SpanCFLocalRetainMixin, SpanCF):
+    LOG_PREFIX = "span_local"
+
+
+class SpanCFSimNPOLocalRetain(_SpanCFLocalRetainMixin, SpanCFSimNPO):
+    LOG_PREFIX = "span_simnpo_local"
 
 </content>
 
@@ -57814,19 +59707,63 @@ class SpanCF(DualCF):
     def __init__(
         self,
         span_mode="lcs",
-        shared_token_weight=0.25,
-        unique_token_weight=1.0,
+        alt_shared_token_weight=None,
+        alt_unique_token_weight=None,
+        orig_shared_token_weight=None,
+        orig_unique_token_weight=None,
+        shared_token_weight=None,
+        unique_token_weight=None,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.span_mode = str(span_mode)
-        self.shared_token_weight = float(shared_token_weight)
-        self.unique_token_weight = float(unique_token_weight)
+
+        legacy_shared = (
+            float(shared_token_weight) if shared_token_weight is not None else None
+        )
+        legacy_unique = (
+            float(unique_token_weight) if unique_token_weight is not None else None
+        )
+        self.alt_shared_token_weight = float(
+            0.25
+            if alt_shared_token_weight is None and legacy_shared is None
+            else (
+                legacy_shared
+                if alt_shared_token_weight is None
+                else alt_shared_token_weight
+            )
+        )
+        self.alt_unique_token_weight = float(
+            1.0
+            if alt_unique_token_weight is None and legacy_unique is None
+            else (
+                legacy_unique
+                if alt_unique_token_weight is None
+                else alt_unique_token_weight
+            )
+        )
+        self.orig_shared_token_weight = float(
+            self.alt_shared_token_weight
+            if orig_shared_token_weight is None
+            else orig_shared_token_weight
+        )
+        self.orig_unique_token_weight = float(
+            self.alt_unique_token_weight
+            if orig_unique_token_weight is None
+            else orig_unique_token_weight
+        )
+        self.shared_token_weight = self.alt_shared_token_weight
+        self.unique_token_weight = self.alt_unique_token_weight
 
         if self.span_mode not in {"lcs", "set_overlap"}:
             raise ValueError("SpanCF span_mode must be `lcs` or `set_overlap`.")
-        if self.shared_token_weight < 0.0 or self.unique_token_weight < 0.0:
+        if min(
+            self.alt_shared_token_weight,
+            self.alt_unique_token_weight,
+            self.orig_shared_token_weight,
+            self.orig_unique_token_weight,
+        ) < 0.0:
             raise ValueError("SpanCF token weights must be non-negative.")
 
     def _shared_positions(self, tokens: list[int], other_tokens: list[int]) -> set[int]:
@@ -57861,7 +59798,13 @@ class SpanCF(DualCF):
                 col_idx -= 1
         return shared
 
-    def _build_token_diff_weights(self, labels: torch.Tensor, other_labels: torch.Tensor):
+    def _build_token_diff_weights(
+        self,
+        labels: torch.Tensor,
+        other_labels: torch.Tensor,
+        shared_weight: float,
+        unique_weight: float,
+    ):
         weights = torch.zeros(labels.shape, device=labels.device, dtype=torch.float32)
         shared_fractions = []
         unique_fractions = []
@@ -57880,9 +59823,7 @@ class SpanCF(DualCF):
             row_weights = []
             for token_idx in range(len(tokens)):
                 row_weights.append(
-                    self.shared_token_weight
-                    if token_idx in shared_positions
-                    else self.unique_token_weight
+                    shared_weight if token_idx in shared_positions else unique_weight
                 )
 
             weights[batch_idx, valid_mask] = torch.tensor(
@@ -57908,24 +59849,26 @@ class SpanCF(DualCF):
             ),
         }
 
-    def _compute_core_components(self, model, inputs):
-        forget_inputs = inputs["forget"]
-        original_inputs = forget_inputs["original"]
-        alternate_inputs = forget_inputs["alternate"]
-
+    def _compute_cf_vec(self, model, original_inputs, alternate_inputs):
         cf_weights, cf_stats = self._build_token_diff_weights(
             alternate_inputs["labels"],
             original_inputs["labels"],
+            shared_weight=self.alt_shared_token_weight,
+            unique_weight=self.alt_unique_token_weight,
         )
-        neg_weights, neg_stats = self._build_token_diff_weights(
-            original_inputs["labels"],
-            alternate_inputs["labels"],
-        )
-
         cf_vec, outputs = compute_weighted_nll_per_sample(
             model,
             alternate_inputs,
             token_weights=cf_weights,
+        )
+        return cf_vec, outputs, cf_stats
+
+    def _compute_neg_vec(self, model, original_inputs, alternate_inputs):
+        neg_weights, neg_stats = self._build_token_diff_weights(
+            original_inputs["labels"],
+            alternate_inputs["labels"],
+            shared_weight=self.orig_shared_token_weight,
+            unique_weight=self.orig_unique_token_weight,
         )
         neg_vec, _ = compute_weighted_npo_per_sample(
             model,
@@ -57933,6 +59876,23 @@ class SpanCF(DualCF):
             original_inputs,
             token_weights=neg_weights,
             beta=self.beta,
+        )
+        return neg_vec, neg_stats
+
+    def _compute_core_components(self, model, inputs):
+        forget_inputs = inputs["forget"]
+        original_inputs = forget_inputs["original"]
+        alternate_inputs = forget_inputs["alternate"]
+
+        cf_vec, outputs, cf_stats = self._compute_cf_vec(
+            model,
+            original_inputs,
+            alternate_inputs,
+        )
+        neg_vec, neg_stats = self._compute_neg_vec(
+            model,
+            original_inputs,
+            alternate_inputs,
         )
 
         batch_size = int(cf_vec.shape[0])
@@ -57942,13 +59902,12 @@ class SpanCF(DualCF):
             batch_size=batch_size,
             device=device,
         )
-        per_sample_forget_loss = self._forget_term_vector(
+        forget_terms = self._forget_term_components(
             cf_vec=cf_vec,
             neg_vec=neg_vec,
             routing=routing,
             forget_inputs=forget_inputs,
         )
-        forget_loss = per_sample_forget_loss.mean()
 
         components = {
             "forget_inputs": forget_inputs,
@@ -57956,9 +59915,8 @@ class SpanCF(DualCF):
             "cf_vec": cf_vec,
             "neg_vec": neg_vec,
             "outputs": outputs,
-            "per_sample_forget_loss": per_sample_forget_loss,
-            "forget_loss": forget_loss,
             **routing,
+            **forget_terms,
             "extra_logs": {
                 f"{self.log_prefix}_alt_shared_token_frac": cf_stats["shared_fraction_mean"],
                 f"{self.log_prefix}_alt_unique_token_frac": cf_stats["unique_fraction_mean"],
@@ -58716,7 +60674,7 @@ class AdaPopCallback(TrainerCallback):
 
 </content>
 
-<content full_path="src/trainer/unlearn/npo_sam.py">
+<content full_path="src/trainer/unlearn/sam_mixin.py">
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -58724,38 +60682,13 @@ from typing import List, Optional, Sequence
 
 import torch
 
-from trainer.unlearn.npo import NPO
-from trainer.utils import compute_dpo_loss
-
 
 @dataclass
 class _SAMState:
     e_ws: List[Optional[torch.Tensor]]
 
 
-class NPOSAM(NPO):
-    """
-    NPO + SAM (Sharpness-Aware Minimization), as used in Unlearn-Smooth.
-
-    SAM is implemented with a two-pass update:
-    1) compute gradients at current weights, then perturb parameters by +e(w)
-    2) compute gradients at perturbed weights (actual update gradients)
-    3) restore original weights
-    """
-
-    def __init__(
-        self,
-        sam_rho: float = 0.01,
-        sam_adaptive: bool = False,
-        sam_eps: float = 1e-12,
-        *args,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-        self.sam_rho = float(sam_rho)
-        self.sam_adaptive = bool(sam_adaptive)
-        self.sam_eps = float(sam_eps)
-
+class ManualGradMixin:
     def _trainable_params(self, model: torch.nn.Module) -> List[torch.nn.Parameter]:
         return [p for p in model.parameters() if p.requires_grad]
 
@@ -58771,6 +60704,34 @@ class NPOSAM(NPO):
     def _clear_grads_set_to_none(self, params: List[torch.nn.Parameter]) -> None:
         for p in params:
             p.grad = None
+
+    def _set_final_grads(
+        self,
+        params: List[torch.nn.Parameter],
+        second_pass_grads: Sequence[Optional[torch.Tensor]],
+        prev_grads: List[Optional[torch.Tensor]],
+        grad_scale: float,
+    ) -> None:
+        for p, g2, g_prev in zip(params, second_pass_grads, prev_grads):
+            grad = None
+            if g2 is not None:
+                grad = g2.detach() * grad_scale
+
+            if g_prev is not None:
+                if grad is None:
+                    grad = g_prev
+                else:
+                    grad = grad + g_prev
+
+            p.grad = grad
+
+
+class SAMMixin(ManualGradMixin):
+    SAM_LOG_PREFIX = "sam"
+
+    def _manual_retain_weight(self, inputs, components=None):
+        del inputs, components
+        return self.alpha
 
     @torch.no_grad()
     def _grad_norm(
@@ -58838,25 +60799,165 @@ class NPOSAM(NPO):
                 continue
             p.sub_(e_w)
 
-    def _set_final_grads(
-        self,
-        params: List[torch.nn.Parameter],
-        second_pass_grads: Sequence[Optional[torch.Tensor]],
-        prev_grads: List[Optional[torch.Tensor]],
-        grad_scale: float,
-    ) -> None:
-        for p, g2, g_prev in zip(params, second_pass_grads, prev_grads):
+    def training_step(self, model: torch.nn.Module, inputs) -> torch.Tensor:
+        if self.is_deepspeed_enabled:
+            raise NotImplementedError(
+                f"[{self.__class__.__name__}] DeepSpeed is not supported in this integration."
+            )
+        if getattr(self.accelerator, "num_processes", 1) > 1:
+            raise NotImplementedError(
+                f"[{self.__class__.__name__}] Multi-process training is not supported in this integration."
+            )
+
+        model.train()
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self.optimizer.train()
+
+        inputs = self._prepare_inputs(inputs)
+        params = self._trainable_params(model)
+        if not params:
+            raise RuntimeError(f"[{self.__class__.__name__}] No trainable parameters found.")
+
+        grad_acc_steps = max(1, int(self.args.gradient_accumulation_steps))
+        grad_scale = 1.0 / grad_acc_steps
+        self._last_manual_components = None
+
+        prev_grads = self._stash_grads(params)
+        self._clear_grads_set_to_none(params)
+
+        with self.compute_loss_context_manager():
+            forget_loss_1 = self._compute_forget_loss_only(model, inputs)
+        grads_1 = torch.autograd.grad(
+            forget_loss_1,
+            params,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=True,
+        )
+
+        grad_norm = self._grad_norm(params, grads_1)
+        sam_state = self._perturb_weights(params, grads_1, grad_norm)
+
+        try:
+            self._clear_grads_set_to_none(params)
+            with self.compute_loss_context_manager():
+                forget_loss_2 = self._compute_forget_loss_only(model, inputs)
+            forget_grads = torch.autograd.grad(
+                forget_loss_2,
+                params,
+                retain_graph=False,
+                create_graph=False,
+                allow_unused=True,
+            )
+        finally:
+            self._restore_weights(params, sam_state)
+
+        self._clear_grads_set_to_none(params)
+        with self.compute_loss_context_manager():
+            retain_loss = self._compute_retain_loss_only(model, inputs)
+        retain_grads = torch.autograd.grad(
+            retain_loss,
+            params,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=True,
+        )
+
+        retain_weight = self._manual_retain_weight(
+            inputs=inputs,
+            components=getattr(self, "_last_manual_components", None),
+        )
+        retain_weight_value = (
+            float(retain_weight.detach().item())
+            if torch.is_tensor(retain_weight)
+            else float(retain_weight)
+        )
+
+        combined_grads: List[Optional[torch.Tensor]] = []
+        for g_forget, g_retain in zip(forget_grads, retain_grads):
             grad = None
-            if g2 is not None:
-                grad = g2.detach() * grad_scale
-
-            if g_prev is not None:
-                if grad is None:
-                    grad = g_prev
+            if g_forget is not None:
+                grad = self.gamma * g_forget
+            if g_retain is not None:
+                if torch.is_tensor(retain_weight):
+                    retain_scale = retain_weight.to(
+                        device=g_retain.device,
+                        dtype=g_retain.dtype,
+                    )
                 else:
-                    grad = grad + g_prev
+                    retain_scale = retain_weight
+                retain_component = retain_scale * g_retain
+                grad = retain_component if grad is None else grad + retain_component
+            combined_grads.append(grad)
 
-            p.grad = grad
+        self._set_final_grads(params, combined_grads, prev_grads, grad_scale)
+
+        if torch.is_tensor(retain_weight):
+            retain_weight_loss = retain_weight.to(
+                device=retain_loss.device,
+                dtype=retain_loss.dtype,
+            )
+        else:
+            retain_weight_loss = retain_weight
+        total_loss = self.gamma * forget_loss_2 + retain_weight_loss * retain_loss
+        prefix = str(getattr(self, "SAM_LOG_PREFIX", self.__class__.__name__.lower()))
+        extra_logs = {
+            f"{prefix}_forget_loss_1": float(forget_loss_1.detach().item()),
+            f"{prefix}_forget_loss_2": float(forget_loss_2.detach().item()),
+            f"{prefix}_retain_loss": float(retain_loss.detach().item()),
+            f"{prefix}_retain_weight": retain_weight_value,
+            f"{prefix}_grad_norm": float(grad_norm.detach().item()),
+            f"{prefix}_rho": float(self.sam_rho),
+            f"{prefix}_adaptive": 1.0 if self.sam_adaptive else 0.0,
+        }
+        try:
+            components = getattr(self, "_last_manual_components", None)
+            if components is not None and hasattr(self, "_maybe_log"):
+                self._maybe_log(
+                    components=components,
+                    retain_loss=retain_loss,
+                    loss=total_loss,
+                    extra_logs=extra_logs,
+                )
+            else:
+                self.log(extra_logs)
+        except Exception:
+            pass
+
+        return total_loss.detach() * grad_scale
+
+</content>
+
+<content full_path="src/trainer/unlearn/npo_sam.py">
+from trainer.unlearn.npo import NPO
+from trainer.unlearn.sam_mixin import SAMMixin
+from trainer.utils import compute_dpo_loss
+
+
+class NPOSAM(SAMMixin, NPO):
+    """
+    NPO + SAM (Sharpness-Aware Minimization), as used in Unlearn-Smooth.
+
+    SAM is implemented with a two-pass update:
+    1) compute gradients at current weights, then perturb parameters by +e(w)
+    2) compute gradients at perturbed weights (actual update gradients)
+    3) restore original weights
+    """
+
+    def __init__(
+        self,
+        sam_rho: float = 0.01,
+        sam_adaptive: bool = False,
+        sam_eps: float = 1e-12,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.sam_rho = float(sam_rho)
+        self.sam_adaptive = bool(sam_adaptive)
+        self.sam_eps = float(sam_eps)
+
+    SAM_LOG_PREFIX = "npo_sam"
 
     def _compute_forget_loss_only(self, model, inputs):
         forget_inputs = inputs["forget"]
@@ -58880,103 +60981,6 @@ class NPOSAM(NPO):
             "labels": retain_inputs["labels"],
         }
         return self.compute_retain_loss(model=model, retain_inputs=retain_inputs)
-
-    def training_step(self, model: torch.nn.Module, inputs) -> torch.Tensor:
-        if self.is_deepspeed_enabled:
-            raise NotImplementedError(
-                "[NPOSAM] DeepSpeed is not supported in this integration."
-            )
-        if getattr(self.accelerator, "num_processes", 1) > 1:
-            raise NotImplementedError(
-                "[NPOSAM] Multi-process training is not supported in this integration."
-            )
-
-        model.train()
-        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
-            self.optimizer.train()
-
-        inputs = self._prepare_inputs(inputs)
-        params = self._trainable_params(model)
-        if not params:
-            raise RuntimeError("[NPOSAM] No trainable parameters found.")
-
-        grad_acc_steps = max(1, int(self.args.gradient_accumulation_steps))
-        grad_scale = 1.0 / grad_acc_steps
-
-        prev_grads = self._stash_grads(params)
-        self._clear_grads_set_to_none(params)
-
-        # 1) Forget pass at current weights (for SAM perturbation direction).
-        with self.compute_loss_context_manager():
-            forget_loss_1 = self._compute_forget_loss_only(model, inputs)
-        grads_1 = torch.autograd.grad(
-            forget_loss_1,
-            params,
-            retain_graph=False,
-            create_graph=False,
-            allow_unused=True,
-        )
-
-        grad_norm = self._grad_norm(params, grads_1)
-        sam_state = self._perturb_weights(params, grads_1, grad_norm)
-
-        # 2) Forget pass at perturbed weights (SAM second pass).
-        try:
-            self._clear_grads_set_to_none(params)
-            with self.compute_loss_context_manager():
-                forget_loss_2 = self._compute_forget_loss_only(model, inputs)
-            forget_grads = torch.autograd.grad(
-                forget_loss_2,
-                params,
-                retain_graph=False,
-                create_graph=False,
-                allow_unused=True,
-            )
-        finally:
-            # Restore weights even if an exception occurs.
-            self._restore_weights(params, sam_state)
-
-        # 3) Retain gradient at restored (unperturbed) weights.
-        self._clear_grads_set_to_none(params)
-        with self.compute_loss_context_manager():
-            retain_loss = self._compute_retain_loss_only(model, inputs)
-        retain_grads = torch.autograd.grad(
-            retain_loss,
-            params,
-            retain_graph=False,
-            create_graph=False,
-            allow_unused=True,
-        )
-
-        # 4) Combine forget and retain gradients with NPO weights.
-        combined_grads: List[Optional[torch.Tensor]] = []
-        for g_forget, g_retain in zip(forget_grads, retain_grads):
-            grad = None
-            if g_forget is not None:
-                grad = self.gamma * g_forget
-            if g_retain is not None:
-                retain_component = self.alpha * g_retain
-                grad = retain_component if grad is None else grad + retain_component
-            combined_grads.append(grad)
-
-        self._set_final_grads(params, combined_grads, prev_grads, grad_scale)
-
-        try:
-            self.log(
-                {
-                    "npo_sam_forget_loss_1": float(forget_loss_1.detach().item()),
-                    "npo_sam_forget_loss_2": float(forget_loss_2.detach().item()),
-                    "npo_sam_retain_loss": float(retain_loss.detach().item()),
-                    "npo_sam_grad_norm": float(grad_norm.detach().item()),
-                    "npo_sam_rho": float(self.sam_rho),
-                    "npo_sam_adaptive": 1.0 if self.sam_adaptive else 0.0,
-                }
-            )
-        except Exception:
-            pass
-
-        total_loss = self.gamma * forget_loss_2 + self.alpha * retain_loss
-        return total_loss.detach() * grad_scale
 
 </content>
 
@@ -59255,6 +61259,47 @@ class LoKU(GradDiff):
 
         self._save_fila_base_model(output_dir=out_dir)
         return result
+
+</content>
+
+<content full_path="src/trainer/unlearn/span_cf_simnpo_sam.py">
+from trainer.unlearn.sam_mixin import SAMMixin
+from trainer.unlearn.span_cf_simnpo import SpanCFSimNPO
+
+
+class SpanCFSimNPOSAM(SAMMixin, SpanCFSimNPO):
+    LOG_PREFIX = "span_simnpo_sam"
+    SAM_LOG_PREFIX = "span_simnpo_sam"
+
+    def __init__(
+        self,
+        sam_rho: float = 0.01,
+        sam_adaptive: bool = False,
+        sam_eps: float = 1e-12,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.sam_rho = float(sam_rho)
+        self.sam_adaptive = bool(sam_adaptive)
+        self.sam_eps = float(sam_eps)
+
+    def _compute_forget_loss_only(self, model, inputs):
+        components = self._compute_core_components(model, inputs)
+        self._last_manual_components = components
+        return components["forget_loss"]
+
+    def _compute_retain_loss_only(self, model, inputs):
+        return self.compute_retain_loss(
+            model=model,
+            retain_inputs=self._retain_inputs(inputs),
+        )
+
+    def _manual_retain_weight(self, inputs, components=None):
+        del inputs
+        if components is None:
+            return self.alpha
+        return components["alpha_eff"]
 
 </content>
 
@@ -59855,6 +61900,36 @@ class WGA(GradDiff):
 
 </content>
 
+<content full_path="src/trainer/unlearn/span_cf_simnpo.py">
+from trainer.unlearn.span_cf import SpanCF
+from trainer.utils import compute_weighted_simnpo_per_sample
+
+
+class SpanCFSimNPO(SpanCF):
+    LOG_PREFIX = "span_simnpo"
+
+    def __init__(self, delta=0.0, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.delta = float(delta)
+
+    def _compute_neg_vec(self, model, original_inputs, alternate_inputs):
+        neg_weights, neg_stats = self._build_token_diff_weights(
+            original_inputs["labels"],
+            alternate_inputs["labels"],
+            shared_weight=self.orig_shared_token_weight,
+            unique_weight=self.orig_unique_token_weight,
+        )
+        neg_vec, _ = compute_weighted_simnpo_per_sample(
+            model,
+            original_inputs,
+            token_weights=neg_weights,
+            beta=self.beta,
+            delta=self.delta,
+        )
+        return neg_vec, neg_stats
+
+</content>
+
 <content full_path="src/trainer/unlearn/dpo.py">
 from trainer.utils import compute_dpo_loss
 from trainer.unlearn.grad_diff import GradDiff
@@ -60146,8 +62221,8 @@ class BoundaryCF(DualCF):
             "labels": local_retain_inputs["labels"],
         }
 
-    def _forget_term_vector(self, cf_vec, neg_vec, routing, forget_inputs):
-        per_sample = super()._forget_term_vector(
+    def _forget_term_components(self, cf_vec, neg_vec, routing, forget_inputs):
+        payload = super()._forget_term_components(
             cf_vec=cf_vec,
             neg_vec=neg_vec,
             routing=routing,
@@ -60160,9 +62235,17 @@ class BoundaryCF(DualCF):
             batch_size=int(cf_vec.shape[0]),
         )
         if boundary_score is None or self.boundary_margin_weight == 0.0:
-            return per_sample
+            return payload
         margin = 1.0 + self.boundary_margin_weight * boundary_score.clamp_min(0.0)
-        return per_sample * margin
+        payload["per_sample_cf_loss"] = payload["per_sample_cf_loss"] * margin
+        payload["per_sample_neg_loss"] = payload["per_sample_neg_loss"] * margin
+        payload["per_sample_forget_loss"] = (
+            payload["per_sample_cf_loss"] + payload["per_sample_neg_loss"]
+        )
+        payload["cf_loss"] = payload["per_sample_cf_loss"].mean()
+        payload["neg_loss"] = payload["per_sample_neg_loss"].mean()
+        payload["forget_loss"] = payload["per_sample_forget_loss"].mean()
+        return payload
 
     def _extra_log_components(self, components: dict) -> dict:
         forget_inputs = components["forget_inputs"]

@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument("--max-alt-length-chars", type=int, default=None)
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--check-overlap-ratio", type=float, default=None)
+    parser.add_argument("--require-local-retain", action="store_true")
     parser.add_argument("--strict", action="store_true")
     return parser.parse_args()
 
@@ -104,6 +105,34 @@ def main():
                 value = row.get(score_key)
                 if not isinstance(value, (int, float)) or not math.isfinite(value):
                     bad_rows.append((line_no, f"{score_key} is not finite numeric: {value!r}"))
+
+            if args.require_local_retain:
+                for key in (
+                    "local_retain_question",
+                    "local_retain_answer",
+                    "local_retain_index",
+                ):
+                    if key not in row:
+                        bad_rows.append((line_no, f"missing local retain key: {key}"))
+                if "local_retain_question" in row and (
+                    not isinstance(row["local_retain_question"], str)
+                    or not row["local_retain_question"].strip()
+                ):
+                    bad_rows.append((line_no, "empty or non-string local_retain_question"))
+                if "local_retain_answer" in row and (
+                    not isinstance(row["local_retain_answer"], str)
+                    or not row["local_retain_answer"].strip()
+                ):
+                    bad_rows.append((line_no, "empty or non-string local_retain_answer"))
+                if "local_retain_index" in row and not isinstance(
+                    row["local_retain_index"], (int, float)
+                ):
+                    bad_rows.append(
+                        (
+                            line_no,
+                            f"local_retain_index is not numeric: {row['local_retain_index']!r}",
+                        )
+                    )
 
             invalid_reason = counterfactual_invalid_reason(
                 row["alternate"],

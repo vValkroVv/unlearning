@@ -177,7 +177,34 @@ class DualCF(GradDiff):
         routing: dict,
         forget_inputs,
     ) -> torch.Tensor:
-        return routing["forget_scale"] * (self.cf_weight * cf_vec + routing["lambda_neg"] * neg_vec)
+        return self._forget_term_components(
+            cf_vec=cf_vec,
+            neg_vec=neg_vec,
+            routing=routing,
+            forget_inputs=forget_inputs,
+        )["per_sample_forget_loss"]
+
+    def _forget_term_components(
+        self,
+        cf_vec: torch.Tensor,
+        neg_vec: torch.Tensor,
+        routing: dict,
+        forget_inputs,
+    ) -> dict:
+        del forget_inputs
+        per_sample_cf_loss = routing["forget_scale"] * (self.cf_weight * cf_vec)
+        per_sample_neg_loss = routing["forget_scale"] * (
+            routing["lambda_neg"] * neg_vec
+        )
+        per_sample_forget_loss = per_sample_cf_loss + per_sample_neg_loss
+        return {
+            "per_sample_cf_loss": per_sample_cf_loss,
+            "per_sample_neg_loss": per_sample_neg_loss,
+            "per_sample_forget_loss": per_sample_forget_loss,
+            "cf_loss": per_sample_cf_loss.mean(),
+            "neg_loss": per_sample_neg_loss.mean(),
+            "forget_loss": per_sample_forget_loss.mean(),
+        }
 
     def _extra_log_components(self, components: dict) -> dict:
         return {}
@@ -196,13 +223,12 @@ class DualCF(GradDiff):
             batch_size=batch_size,
             device=device,
         )
-        per_sample_forget_loss = self._forget_term_vector(
+        forget_terms = self._forget_term_components(
             cf_vec=cf_vec,
             neg_vec=neg_vec,
             routing=routing,
             forget_inputs=forget_inputs,
         )
-        forget_loss = per_sample_forget_loss.mean()
 
         components = {
             "forget_inputs": forget_inputs,
@@ -210,9 +236,8 @@ class DualCF(GradDiff):
             "cf_vec": cf_vec,
             "neg_vec": neg_vec,
             "outputs": outputs,
-            "per_sample_forget_loss": per_sample_forget_loss,
-            "forget_loss": forget_loss,
             **routing,
+            **forget_terms,
         }
         extra_logs = {}
         extra_logs.update(cf_logs)

@@ -90,14 +90,18 @@ All DUET and RWKU launchers now write task directories directly under
 The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
-`scripts/dualcf/run_campaign_one_lr.sh` now includes `ada_pop` in its default
-`METHOD_VARIANTS`, so the campaign path covers DualCF plus GA / AdaPop / NPO /
-SimNPO / NPO-SAM / LoKU / SimpleCE without a separate wrapper edit. The
-standalone AdaPop launchers also accept `BETA_A` and `BETA_B` overrides for the
-dynamic popularity curve while keeping the same checkpoint / cleanup cadence as
-the other baselines. The wrapper also accepts an optional fourth positional
-argument for `SEED`; when set, runs get a matching `_seed<SEED>` suffix. It now
-defaults to `UTILITY=3k`; set `UTILITY=1k` to keep the old Utility-1K panel.
+`scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku"`.
+That keeps routed DualCF ablations plus baselines in one wrapper path.
+New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
+`span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
+`span_cf_simnpo_projected`) are available as explicit `METHOD_VARIANTS` values
+when needed. The standalone AdaPop launchers also accept `BETA_A` and `BETA_B`
+overrides for the dynamic popularity curve while keeping the same checkpoint /
+cleanup cadence as the other baselines. The wrapper also accepts an optional
+fourth positional argument for `SEED`; when set, runs get a matching
+`_seed<SEED>` suffix. It now defaults to `UTILITY=3k`; set `UTILITY=1k` to keep
+the old Utility-1K panel.
 
 ## Hardware profile
 
@@ -570,7 +574,9 @@ count to avoid the H100 OOM seen with the original `k=6` / `k=8` plan.
 New-method output dirs now abbreviate method tags in the launcher:
 MultiCF uses `agwm`/`agm`/`agt1` and `wrr`/`wuni`,
 BoundaryCF uses `lr`/`bm`,
-SpanCF uses `mlc`/`mso` plus `sw`/`uw`.
+SpanCF family uses `mlc`/`mso` plus `asw`/`auw`/`osw`/`ouw`, and variant
+suffixes (`dlt`, `lr`, `bm`, `sr`, `sad`, `pct`) for SimNPO/local-retain/SAM/
+projection knobs.
 These shorter tags keep run dirs under filesystem name limits.
 Each loop continues to the next spec if one spec fails.
 
@@ -645,23 +651,25 @@ do
   fi
 done
 
-# SpanCF: S1-S6
+# SpanCF: S1-S6 with asymmetric 4-weight routing
 GPU_ID=5
 for spec in \
-  "S1|lcs|0.10|1.25" \
-  "S2|lcs|0.10|1.0" \
-  "S3|lcs|0.25|1.25" \
-  "S4|lcs|0.0|1.0" \
-  "S5|lcs|0.25|1.0" \
-  "S6|set_overlap|0.10|1.25"
+  "S1|lcs|0.10|1.25|0.10|1.25" \
+  "S2|lcs|0.10|1.0|0.10|1.0" \
+  "S3|lcs|0.25|1.25|0.25|1.25" \
+  "S4|lcs|0.0|1.0|0.0|1.0" \
+  "S5|lcs|0.25|1.0|0.25|1.0" \
+  "S6|set_overlap|0.10|1.25|0.10|1.25"
 do
-  IFS='|' read -r tag span_mode shared_weight unique_weight <<<"${spec}"
-  echo "[span_cf] ${tag}: mode=${span_mode} shared=${shared_weight} unique=${unique_weight}"
+  IFS='|' read -r tag span_mode asw auw osw ouw <<<"${spec}"
+  echo "[span_cf] ${tag}: mode=${span_mode} asw=${asw} auw=${auw} osw=${osw} ouw=${ouw}"
   if SEEDS="42 179 1137" \
     METHOD_VARIANTS="span_cf" \
     SPAN_MODE="${span_mode}" \
-    SPAN_SHARED_TOKEN_WEIGHT="${shared_weight}" \
-    SPAN_UNIQUE_TOKEN_WEIGHT="${unique_weight}" \
+    SPAN_ALT_SHARED_TOKEN_WEIGHT="${asw}" \
+    SPAN_ALT_UNIQUE_TOKEN_WEIGHT="${auw}" \
+    SPAN_ORIG_SHARED_TOKEN_WEIGHT="${osw}" \
+    SPAN_ORIG_UNIQUE_TOKEN_WEIGHT="${ouw}" \
     bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
   then
     echo "[span_cf] ${tag} done"
@@ -669,7 +677,66 @@ do
     echo "[span_cf] ${tag} failed, continuing to next spec"
   fi
 done
+
+### Utility preserving
+
+# SpanCFSimNPO
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# SpanCFSimNPO + local retain
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_local_retain" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_LOCAL_RETAIN_WEIGHT=0.20 \
+SPAN_BOUNDARY_MARGIN_WEIGHT=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# SpanCFSimNPO + SAM
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_sam" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# SpanCFSimNPO + projected gradient conflict handling
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_projected" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_PROJECTION_COS_THRESHOLD=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 ```
+
+Local-retain methods (`span_cf_local_retain`, `span_cf_simnpo_local_retain`)
+automatically resolve to:
+
+- `${ARTIFACT_ROOT}/duet/*/span_local_retain_<forget_label>_v1.jsonl`
+- `${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/span_local_retain_forget_level2_v1.jsonl`
+
+The remaining Span variants resolve to the base DualCF v2 artifacts.
 
 Interpret `boundary_cf` DUET-popular results carefully: the current artifact is
 mostly fallback hard negatives there, not true lexical near-miss boundaries.

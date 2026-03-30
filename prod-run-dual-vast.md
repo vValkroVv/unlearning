@@ -401,6 +401,44 @@ export METHOD_VARIANT=loku
 scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
+SpanCF family (new):
+
+```bash
+# SpanCF with asymmetric 4-token weights
+export METHOD_VARIANT=span_cf
+export SPAN_MODE=lcs
+export SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10
+export SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO
+export METHOD_VARIANT=span_cf_simnpo
+export SPAN_SIMNPO_DELTA=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO + local retain
+# Local-retain variants must use the merged artifact path, not dualcf_*.jsonl.
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/span_local_retain_rare_v1.jsonl
+export METHOD_VARIANT=span_cf_simnpo_local_retain
+export SPAN_LOCAL_RETAIN_WEIGHT=0.2
+export SPAN_BOUNDARY_MARGIN_WEIGHT=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO + SAM
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=span_cf_simnpo_sam
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# SpanCFSimNPO + projected conflict handling
+export METHOD_VARIANT=span_cf_simnpo_projected
+export SPAN_PROJECTION_COS_THRESHOLD=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+```
+
 Every method variant above uses the same trajectory-saving behavior:
 
 - one intermediate `checkpoint-*` save when `CHECKPOINT_EPOCHS=2` and
@@ -423,6 +461,8 @@ scripts/rwku/run_dualcf_ablation_v2.sh
 ```
 
 Run the same ablation variants on RWKU after DUET rare / popular are stable.
+For RWKU local-retain variants, set:
+`CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/rwku/llama32_1b_level2_v2/span_local_retain_forget_level2_v1.jsonl`.
 
 ## Checkpoint evaluation
 

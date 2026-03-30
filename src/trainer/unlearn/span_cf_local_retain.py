@@ -1,13 +1,12 @@
-from trainer.unlearn.dual_cf import DualCF
+from trainer.unlearn.span_cf import SpanCF
+from trainer.unlearn.span_cf_simnpo import SpanCFSimNPO
 
 
-class BoundaryCF(DualCF):
-    LOG_PREFIX = "boundary"
-
+class _SpanCFLocalRetainMixin:
     def __init__(
         self,
-        local_retain_weight=0.5,
-        boundary_margin_weight=1.0,
+        local_retain_weight=0.2,
+        boundary_margin_weight=0.0,
         *args,
         **kwargs,
     ):
@@ -22,6 +21,18 @@ class BoundaryCF(DualCF):
             "attention_mask": local_retain_inputs["attention_mask"],
             "labels": local_retain_inputs["labels"],
         }
+
+    def _optional_boundary_score_tensor(self, forget_inputs, keys, device, batch_size):
+        for key in keys:
+            value = self._optional_score_tensor(
+                forget_inputs=forget_inputs,
+                key=key,
+                device=device,
+                batch_size=batch_size,
+            )
+            if value is not None:
+                return value
+        return None
 
     def _forget_term_components(self, cf_vec, neg_vec, routing, forget_inputs):
         payload = super()._forget_term_components(
@@ -38,6 +49,7 @@ class BoundaryCF(DualCF):
         )
         if boundary_score is None or self.boundary_margin_weight == 0.0:
             return payload
+
         margin = 1.0 + self.boundary_margin_weight * boundary_score.clamp_min(0.0)
         payload["per_sample_cf_loss"] = payload["per_sample_cf_loss"] * margin
         payload["per_sample_neg_loss"] = payload["per_sample_neg_loss"] * margin
@@ -50,12 +62,15 @@ class BoundaryCF(DualCF):
         return payload
 
     def _extra_log_components(self, components: dict) -> dict:
+        payload = super()._extra_log_components(components)
         forget_inputs = components["forget_inputs"]
         batch_size = int(components["cf_vec"].shape[0])
         device = components["cf_vec"].device
-        payload = {}
         boundary_score = self._optional_score_tensor(
-            forget_inputs, "boundary_score", device=device, batch_size=batch_size
+            forget_inputs=forget_inputs,
+            key="boundary_score",
+            device=device,
+            batch_size=batch_size,
         )
         relation = self._optional_boundary_score_tensor(
             forget_inputs=forget_inputs,
@@ -88,18 +103,6 @@ class BoundaryCF(DualCF):
             )
         return payload
 
-    def _optional_boundary_score_tensor(self, forget_inputs, keys, device, batch_size):
-        for key in keys:
-            value = self._optional_score_tensor(
-                forget_inputs=forget_inputs,
-                key=key,
-                device=device,
-                batch_size=batch_size,
-            )
-            if value is not None:
-                return value
-        return None
-
     def compute_loss(self, model, inputs, return_outputs=False):
         components = self._compute_core_components(model, inputs)
         retain_loss = self.compute_retain_loss(
@@ -127,3 +130,11 @@ class BoundaryCF(DualCF):
             },
         )
         return (loss, components["outputs"]) if return_outputs else loss
+
+
+class SpanCFLocalRetain(_SpanCFLocalRetainMixin, SpanCF):
+    LOG_PREFIX = "span_local"
+
+
+class SpanCFSimNPOLocalRetain(_SpanCFLocalRetainMixin, SpanCFSimNPO):
+    LOG_PREFIX = "span_simnpo_local"

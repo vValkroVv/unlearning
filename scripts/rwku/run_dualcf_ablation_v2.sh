@@ -48,6 +48,41 @@ case "${METHOD_VARIANT}" in
     export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_lora.yaml}
     exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
+  span_cf_simnpo)
+    export TRAINER=${TRAINER:-SpanCFSimNPO}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPO}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_local_retain)
+    export TRAINER=${TRAINER:-SpanCFLocalRetain}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_local_retain}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFLocalRetain}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_local_retain_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_simnpo_local_retain)
+    export TRAINER=${TRAINER:-SpanCFSimNPOLocalRetain}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_local_retain}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOLocalRetain}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_local_retain_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_simnpo_sam)
+    export TRAINER=${TRAINER:-SpanCFSimNPOSAM}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_sam}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOSAM}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_sam_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  span_cf_simnpo_projected)
+    export TRAINER=${TRAINER:-SpanCFSimNPOProjected}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_projected}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSimNPOProjected}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/span_cf_simnpo_projected_lora.yaml}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
   ga)
     exec bash "${script_dir}/ga_rwku.sh"
     ;;

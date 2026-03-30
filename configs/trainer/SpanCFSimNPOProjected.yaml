@@ -1,0 +1,8 @@
+defaults:
+  - SpanCFSimNPO
+
+handler: SpanCFSimNPOProjected
+
+method_args:
+  projection_cos_threshold: 0.0
+  projection_eps: 1e-12

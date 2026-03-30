@@ -1,0 +1,8 @@
+defaults:
+  - SpanCFSimNPO
+
+handler: SpanCFSimNPOLocalRetain
+
+method_args:
+  local_retain_weight: 0.2
+  boundary_margin_weight: 0.0

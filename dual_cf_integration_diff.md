@@ -2240,3 +2240,117 @@ Validation:
 - not completed in this turn:
   - real-panel `src/eval.py` endpoint eval against `configs/eval/lm_eval_utility_3k.yaml`
   - end-to-end DUET or RWKU checkpoint utility sweep with actual 3K JSONLs
+
+## 2026-03-30 SpanCF Variant Pack (SimNPO, Local Retain, Asymmetric Weights, SAM, Projection)
+
+Files:
+
+- `src/trainer/utils.py`
+- `src/trainer/unlearn/dual_cf.py`
+- `src/trainer/unlearn/boundary_cf.py`
+- `src/trainer/unlearn/span_cf.py`
+- `src/trainer/unlearn/span_cf_simnpo.py`
+- `src/trainer/unlearn/span_cf_local_retain.py`
+- `src/trainer/unlearn/sam_mixin.py`
+- `src/trainer/unlearn/npo_sam.py`
+- `src/trainer/unlearn/span_cf_simnpo_sam.py`
+- `src/trainer/unlearn/span_cf_simnpo_projected.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/SpanCF.yaml`
+- `configs/trainer/SpanCFSimNPO.yaml`
+- `configs/trainer/SpanCFLocalRetain.yaml`
+- `configs/trainer/SpanCFSimNPOLocalRetain.yaml`
+- `configs/trainer/SpanCFSimNPOSAM.yaml`
+- `configs/trainer/SpanCFSimNPOProjected.yaml`
+- `configs/data/datasets/DUET_QA_forget_span_local_retain.yaml`
+- `configs/data/datasets/RWKU_QA_forget_span_local_retain.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_local_retain_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_local_retain_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_sam_lora.yaml`
+- `configs/experiment/unlearn/duet/span_cf_simnpo_projected_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_local_retain_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_local_retain_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_sam_lora.yaml`
+- `configs/experiment/unlearn/rwku/span_cf_simnpo_projected_lora.yaml`
+- `src/tools/merge_local_retain_into_artifact.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/new_method_variant_utils.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- added `compute_weighted_simnpo_per_sample(...)` in `src/trainer/utils.py` to
+  mirror SimNPO transform on token-weighted per-sample NLL vectors
+- split SpanCF internals into branch hooks and moved from 2 token-weight knobs
+  to 4 branch-specific knobs:
+  - `alt_shared_token_weight`
+  - `alt_unique_token_weight`
+  - `orig_shared_token_weight`
+  - `orig_unique_token_weight`
+  with backward compatibility via legacy `shared_token_weight` /
+  `unique_token_weight`
+- added `SpanCFSimNPO` and configs/experiments for DUET and RWKU
+- added local-retain-only path for SpanCF:
+  - merged-artifact tool `merge_local_retain_into_artifact.py`
+  - local-retain dataset configs using `QABoundaryCFDataset` with merged inputs
+  - `SpanCFLocalRetain` and `SpanCFSimNPOLocalRetain` trainers/configs
+- extracted reusable `SAMMixin` from `NPOSAM` and added `SpanCFSimNPOSAM`
+- added projected variant `SpanCFSimNPOProjected` with manual gradient
+  composition and retain-conflict projection on the negative branch
+- extended DUET/RWKU wrappers to dispatch the new method variants and pass new
+  span-family env knobs:
+  - `SPAN_ALT_*`, `SPAN_ORIG_*`
+  - `SPAN_SIMNPO_DELTA`
+  - `SPAN_LOCAL_RETAIN_WEIGHT`, `SPAN_BOUNDARY_MARGIN_WEIGHT`
+  - `SPAN_SAM_*`
+  - `SPAN_PROJECTION_*`
+- updated campaign artifact resolution:
+  - span local-retain variants map to `span_local_retain_*.jsonl`
+  - span base/simnpo/sam/projected map to DualCF v2 artifacts
+- updated save-check / structured tables / wrong-generation analyzers to
+  recognize new method names and the extended Span suffix schema
+- synced runbooks with the new Span command surface and artifact mapping
+- `SpanCFSimNPOSAM` now preserves routed retain weighting by reusing
+  `alpha_eff` instead of falling back to fixed `alpha` inside the shared
+  SAM training step
+- `SpanCFSimNPOProjected` now:
+  - preserves routed retain weighting via `alpha_eff`
+  - uses one global negative-vs-retain conflict cosine / projection coefficient,
+    matching the intended FALCON-style projection pattern more closely than the
+    earlier per-parameter projection pass
+- `prod-run-dual-gpu.md` now keeps the previous ablation style for the
+  SpanCF family:
+  - one launcher command pattern via `run_campaign_one_lr.sh`
+  - per-spec env changes through a shell loop for the `S1-S6` SpanCF block
+  - four explicit utility-preserving runs for:
+    - `span_cf_simnpo`
+    - `span_cf_simnpo_local_retain`
+    - `span_cf_simnpo_sam`
+    - `span_cf_simnpo_projected`
+
+Validation:
+
+- completed locally in this turn:
+  - `bash -n scripts/duet/run_dualcf_ablation_v2.sh scripts/rwku/run_dualcf_ablation_v2.sh scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh scripts/dualcf/run_campaign_one_lr.sh`
+  - `python -m py_compile src/trainer/utils.py src/trainer/unlearn/dual_cf.py src/trainer/unlearn/boundary_cf.py src/trainer/unlearn/npo_sam.py src/trainer/unlearn/span_cf.py src/trainer/unlearn/sam_mixin.py src/trainer/unlearn/span_cf_simnpo.py src/trainer/unlearn/span_cf_local_retain.py src/trainer/unlearn/span_cf_simnpo_sam.py src/trainer/unlearn/span_cf_simnpo_projected.py src/trainer/__init__.py src/tools/merge_local_retain_into_artifact.py src/tools/validate_dual_cf_artifact.py src/tools/build_structured_saves.py src/tools/build_results_combine_tables.py src/tools/export_unlearning_sanity_checks.py src/tools/analyze_wrong_generations.py src/tools/new_method_variant_utils.py check_saves.py`
+  - synthetic local-retain merge smoke:
+    - `python src/tools/merge_local_retain_into_artifact.py --base <tmp_base.jsonl> --boundary <tmp_boundary.jsonl> --output <tmp_merged.jsonl>`
+    - `python src/tools/validate_dual_cf_artifact.py --input <tmp_merged.jsonl> --strict --require-local-retain`
+  - targeted retain-weight / projection regression check by code inspection plus:
+    - `python -m py_compile src/trainer/unlearn/sam_mixin.py src/trainer/unlearn/span_cf_simnpo_sam.py src/trainer/unlearn/span_cf_simnpo_projected.py`
+- not completed in this turn:
+  - end-to-end DUET/RWKU `src/train.py` smoke with real artifacts
+  - full `rare -> popular -> merged` campaign rerun with the new Span variants

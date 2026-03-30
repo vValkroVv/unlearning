@@ -48,6 +48,11 @@ WRONG_GENERATION_METHOD_MAP = {
     "multicf": "multicf",
     "boundary_cf": "boundary_cf",
     "span_cf": "span_cf",
+    "span_cf_simnpo": "span_cf_simnpo",
+    "span_cf_local_retain": "span_cf_local_retain",
+    "span_cf_simnpo_local_retain": "span_cf_simnpo_local_retain",
+    "span_cf_simnpo_sam": "span_cf_simnpo_sam",
+    "span_cf_simnpo_projected": "span_cf_simnpo_projected",
     "ga": "ga",
     "ada_pop": "ada_pop",
     "npo": "npo",
@@ -98,6 +103,11 @@ COMBINED_ROW_SPECS = [
     ("new", "multicf", "MultiCF", "teal!12"),
     ("new", "boundary_cf", "BoundaryCF", "cyan!12"),
     ("new", "span_cf", "SpanCF", "yellow!12"),
+    ("new", "span_cf_simnpo", "SpanCF-SimNPO", "yellow!18"),
+    ("new", "span_cf_local_retain", "SpanCF-LocalRetain", "lime!12"),
+    ("new", "span_cf_simnpo_local_retain", "SpanCF-SimNPO-LocalRetain", "lime!18"),
+    ("new", "span_cf_simnpo_sam", "SpanCF-SimNPO-SAM", "orange!12"),
+    ("new", "span_cf_simnpo_projected", "SpanCF-SimNPO-Projected", "red!12"),
 ]
 SIMNPO_ROW_SPEC = ("simnpo", "simnpo", "SimNPO", "red!12")
 COMBINED_SIMPLECE_METHODS = [
@@ -908,6 +918,11 @@ def load_variant_row_specs(
         "multicf": "teal!12",
         "boundary_cf": "cyan!12",
         "span_cf": "yellow!12",
+        "span_cf_simnpo": "yellow!18",
+        "span_cf_local_retain": "lime!12",
+        "span_cf_simnpo_local_retain": "lime!18",
+        "span_cf_simnpo_sam": "orange!12",
+        "span_cf_simnpo_projected": "red!12",
     }
     row_specs: list[tuple[str, str, str, str]] = []
     for method_name in method_names:

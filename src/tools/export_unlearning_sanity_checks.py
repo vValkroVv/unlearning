@@ -22,7 +22,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 COS_SIM_EVAL_FILENAME = "COS_SIM_EVAL.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -53,6 +53,11 @@ METHOD_DISPLAY = {
     "multicf": "MultiCF",
     "boundary_cf": "BoundaryCF",
     "span_cf": "SpanCF",
+    "span_cf_simnpo": "SpanCF-SimNPO",
+    "span_cf_local_retain": "SpanCF-LocalRetain",
+    "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
+    "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
+    "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
     "falcon": "FALCON",
 }
 METHOD_ORDER = [
@@ -71,6 +76,11 @@ METHOD_ORDER = [
     "multicf",
     "boundary_cf",
     "span_cf",
+    "span_cf_simnpo",
+    "span_cf_local_retain",
+    "span_cf_simnpo_local_retain",
+    "span_cf_simnpo_sam",
+    "span_cf_simnpo_projected",
     "falcon",
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}

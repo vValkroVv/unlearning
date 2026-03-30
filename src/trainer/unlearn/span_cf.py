@@ -13,19 +13,63 @@ class SpanCF(DualCF):
     def __init__(
         self,
         span_mode="lcs",
-        shared_token_weight=0.25,
-        unique_token_weight=1.0,
+        alt_shared_token_weight=None,
+        alt_unique_token_weight=None,
+        orig_shared_token_weight=None,
+        orig_unique_token_weight=None,
+        shared_token_weight=None,
+        unique_token_weight=None,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.span_mode = str(span_mode)
-        self.shared_token_weight = float(shared_token_weight)
-        self.unique_token_weight = float(unique_token_weight)
+
+        legacy_shared = (
+            float(shared_token_weight) if shared_token_weight is not None else None
+        )
+        legacy_unique = (
+            float(unique_token_weight) if unique_token_weight is not None else None
+        )
+        self.alt_shared_token_weight = float(
+            0.25
+            if alt_shared_token_weight is None and legacy_shared is None
+            else (
+                legacy_shared
+                if alt_shared_token_weight is None
+                else alt_shared_token_weight
+            )
+        )
+        self.alt_unique_token_weight = float(
+            1.0
+            if alt_unique_token_weight is None and legacy_unique is None
+            else (
+                legacy_unique
+                if alt_unique_token_weight is None
+                else alt_unique_token_weight
+            )
+        )
+        self.orig_shared_token_weight = float(
+            self.alt_shared_token_weight
+            if orig_shared_token_weight is None
+            else orig_shared_token_weight
+        )
+        self.orig_unique_token_weight = float(
+            self.alt_unique_token_weight
+            if orig_unique_token_weight is None
+            else orig_unique_token_weight
+        )
+        self.shared_token_weight = self.alt_shared_token_weight
+        self.unique_token_weight = self.alt_unique_token_weight
 
         if self.span_mode not in {"lcs", "set_overlap"}:
             raise ValueError("SpanCF span_mode must be `lcs` or `set_overlap`.")
-        if self.shared_token_weight < 0.0 or self.unique_token_weight < 0.0:
+        if min(
+            self.alt_shared_token_weight,
+            self.alt_unique_token_weight,
+            self.orig_shared_token_weight,
+            self.orig_unique_token_weight,
+        ) < 0.0:
             raise ValueError("SpanCF token weights must be non-negative.")
 
     def _shared_positions(self, tokens: list[int], other_tokens: list[int]) -> set[int]:
@@ -60,7 +104,13 @@ class SpanCF(DualCF):
                 col_idx -= 1
         return shared
 
-    def _build_token_diff_weights(self, labels: torch.Tensor, other_labels: torch.Tensor):
+    def _build_token_diff_weights(
+        self,
+        labels: torch.Tensor,
+        other_labels: torch.Tensor,
+        shared_weight: float,
+        unique_weight: float,
+    ):
         weights = torch.zeros(labels.shape, device=labels.device, dtype=torch.float32)
         shared_fractions = []
         unique_fractions = []
@@ -79,9 +129,7 @@ class SpanCF(DualCF):
             row_weights = []
             for token_idx in range(len(tokens)):
                 row_weights.append(
-                    self.shared_token_weight
-                    if token_idx in shared_positions
-                    else self.unique_token_weight
+                    shared_weight if token_idx in shared_positions else unique_weight
                 )
 
             weights[batch_idx, valid_mask] = torch.tensor(
@@ -107,24 +155,26 @@ class SpanCF(DualCF):
             ),
         }
 
-    def _compute_core_components(self, model, inputs):
-        forget_inputs = inputs["forget"]
-        original_inputs = forget_inputs["original"]
-        alternate_inputs = forget_inputs["alternate"]
-
+    def _compute_cf_vec(self, model, original_inputs, alternate_inputs):
         cf_weights, cf_stats = self._build_token_diff_weights(
             alternate_inputs["labels"],
             original_inputs["labels"],
+            shared_weight=self.alt_shared_token_weight,
+            unique_weight=self.alt_unique_token_weight,
         )
-        neg_weights, neg_stats = self._build_token_diff_weights(
-            original_inputs["labels"],
-            alternate_inputs["labels"],
-        )
-
         cf_vec, outputs = compute_weighted_nll_per_sample(
             model,
             alternate_inputs,
             token_weights=cf_weights,
+        )
+        return cf_vec, outputs, cf_stats
+
+    def _compute_neg_vec(self, model, original_inputs, alternate_inputs):
+        neg_weights, neg_stats = self._build_token_diff_weights(
+            original_inputs["labels"],
+            alternate_inputs["labels"],
+            shared_weight=self.orig_shared_token_weight,
+            unique_weight=self.orig_unique_token_weight,
         )
         neg_vec, _ = compute_weighted_npo_per_sample(
             model,
@@ -132,6 +182,23 @@ class SpanCF(DualCF):
             original_inputs,
             token_weights=neg_weights,
             beta=self.beta,
+        )
+        return neg_vec, neg_stats
+
+    def _compute_core_components(self, model, inputs):
+        forget_inputs = inputs["forget"]
+        original_inputs = forget_inputs["original"]
+        alternate_inputs = forget_inputs["alternate"]
+
+        cf_vec, outputs, cf_stats = self._compute_cf_vec(
+            model,
+            original_inputs,
+            alternate_inputs,
+        )
+        neg_vec, neg_stats = self._compute_neg_vec(
+            model,
+            original_inputs,
+            alternate_inputs,
         )
 
         batch_size = int(cf_vec.shape[0])
@@ -141,13 +208,12 @@ class SpanCF(DualCF):
             batch_size=batch_size,
             device=device,
         )
-        per_sample_forget_loss = self._forget_term_vector(
+        forget_terms = self._forget_term_components(
             cf_vec=cf_vec,
             neg_vec=neg_vec,
             routing=routing,
             forget_inputs=forget_inputs,
         )
-        forget_loss = per_sample_forget_loss.mean()
 
         components = {
             "forget_inputs": forget_inputs,
@@ -155,9 +221,8 @@ class SpanCF(DualCF):
             "cf_vec": cf_vec,
             "neg_vec": neg_vec,
             "outputs": outputs,
-            "per_sample_forget_loss": per_sample_forget_loss,
-            "forget_loss": forget_loss,
             **routing,
+            **forget_terms,
             "extra_logs": {
                 f"{self.log_prefix}_alt_shared_token_frac": cf_stats["shared_fraction_mean"],
                 f"{self.log_prefix}_alt_unique_token_frac": cf_stats["unique_fraction_mean"],

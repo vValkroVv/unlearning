@@ -1,0 +1,9 @@
+defaults:
+  - SpanCFSimNPO
+
+handler: SpanCFSimNPOSAM
+
+method_args:
+  sam_rho: 0.01
+  sam_adaptive: false
+  sam_eps: 1e-12

@@ -27,6 +27,13 @@ from trainer.unlearn.dual_cf import DualCF
 from trainer.unlearn.multicf import MultiCF
 from trainer.unlearn.boundary_cf import BoundaryCF
 from trainer.unlearn.span_cf import SpanCF
+from trainer.unlearn.span_cf_simnpo import SpanCFSimNPO
+from trainer.unlearn.span_cf_local_retain import (
+    SpanCFLocalRetain,
+    SpanCFSimNPOLocalRetain,
+)
+from trainer.unlearn.span_cf_simnpo_sam import SpanCFSimNPOSAM
+from trainer.unlearn.span_cf_simnpo_projected import SpanCFSimNPOProjected
 from trainer.callbacks import JsonlTraceCallback, SaveOnEpochsCallback
 
 
@@ -129,3 +136,8 @@ _register_trainer(DualCF)
 _register_trainer(MultiCF)
 _register_trainer(BoundaryCF)
 _register_trainer(SpanCF)
+_register_trainer(SpanCFSimNPO)
+_register_trainer(SpanCFLocalRetain)
+_register_trainer(SpanCFSimNPOLocalRetain)
+_register_trainer(SpanCFSimNPOSAM)
+_register_trainer(SpanCFSimNPOProjected)
