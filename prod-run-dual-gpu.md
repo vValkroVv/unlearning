@@ -576,8 +576,10 @@ MultiCF uses `agwm`/`agm`/`agt1` and `wrr`/`wuni`,
 BoundaryCF uses `lr`/`bm`,
 SpanCF family uses `mlc`/`mso` plus `asw`/`auw`/`osw`/`ouw`, and variant
 suffixes (`dlt`, `lr`, `bm`, `sr`, `sad`, `pct`) for SimNPO/local-retain/SAM/
-projection knobs.
-These shorter tags keep run dirs under filesystem name limits.
+projection knobs. If a DualCF-family run name still exceeds the filesystem
+component limit, the DUET/RWKU launchers now auto-compact the long shared-config
+middle block to `_cfg<hash>` while keeping the benchmark/model/split/method
+prefix, the real learning-rate token, and the variant suffix parseable.
 Each loop continues to the next spec if one spec fails.
 
 ```bash
@@ -680,7 +682,11 @@ done
 
 ### Utility preserving
 
-# SpanCFSimNPO
+The four commands below use that same compact-name fallback automatically, so
+the local-retain / SAM / projected SpanCF runs no longer fail on
+`mkdir ... File name too long`.
+
+# 1) SpanCFSimNPO
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo" \
 SPAN_MODE=lcs \
@@ -691,7 +697,7 @@ SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_SIMNPO_DELTA=0.0 \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# SpanCFSimNPO + local retain
+# 2) SpanCFSimNPO + local retain
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_local_retain" \
 SPAN_MODE=lcs \
@@ -700,11 +706,11 @@ SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
 SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_SIMNPO_DELTA=0.0 \
-SPAN_LOCAL_RETAIN_WEIGHT=0.20 \
+SPAN_LOCAL_RETAIN_WEIGHT=0.15 \
 SPAN_BOUNDARY_MARGIN_WEIGHT=0.0 \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# SpanCFSimNPO + SAM
+# 3) SpanCFSimNPO + SAM
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_sam" \
 SPAN_MODE=lcs \
@@ -717,7 +723,7 @@ SPAN_SAM_RHO=0.01 \
 SPAN_SAM_ADAPTIVE=false \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# SpanCFSimNPO + projected gradient conflict handling
+# 4) SpanCFSimNPO + projected gradient conflict handling
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_projected" \
 SPAN_MODE=lcs \

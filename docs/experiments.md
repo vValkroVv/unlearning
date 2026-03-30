@@ -74,6 +74,38 @@ python src/tools/build_results_combine_tables.py \
   --output-file metrics-new/results-combine-v2_5/combined_tables.txt \
   --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_slides.tex
 
+## build seed-averaged tables for the general-utility SpanCFSimNPO follow-up runs
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --variant-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --variant-method-key span_cf_s2 \
+  --variant-method-key span_cf_s4 \
+  --variant-algorithm span_cf_simnpo \
+  --variant-algorithm span_cf_simnpo_local_retain \
+  --variant-algorithm span_cf_simnpo_sam \
+  --variant-algorithm span_cf_simnpo_projected \
+  --variant-display compact \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --output-file metrics-new/results-combine-v2_5/combined_tables_utility.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_utility_slides.tex
+
+Note: the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
+`span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`, and
+`span_cf_simnpo_projected`, but no plain `span_cf_simnpo` save directories, so
+the generated utility tables currently contain 5 methods rather than 6.
+
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
 trainer=NPO trainer.method_args.retain_loss_type=KL task_name=llama2_books_NPO_KL \

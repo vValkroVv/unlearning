@@ -2354,3 +2354,31 @@ Validation:
 - not completed in this turn:
   - end-to-end DUET/RWKU `src/train.py` smoke with real artifacts
   - full `rare -> popular -> merged` campaign rerun with the new Span variants
+
+## 2026-03-30 Compact DualCF Run Names For Filesystem Safety
+
+Files:
+
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- added a compact-name fallback in the DUET/RWKU DualCF-family launchers:
+  - keep the benchmark/model/split/method prefix unchanged
+  - keep the true `_lr...` token and the method-specific suffix unchanged
+  - replace only the long shared-config middle block with `_cfg<sha1-10>`
+    when the basename would exceed `MAX_TASK_NAME_LEN` (default `220`)
+- this keeps downstream parsing compatible because method names, learning-rate
+  tokens, and Span tails still appear in the run dir name
+- updated GPU and VAST runbooks to document the automatic compact-name fallback
+  for the utility-preserving SpanCF commands
+
+Validation:
+
+- completed locally in this turn:
+  - `bash -n scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
+- not completed in this turn:
+  - end-to-end DUET/RWKU launcher smoke against real runs

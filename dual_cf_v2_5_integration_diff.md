@@ -822,3 +822,103 @@ Caveats:
   runs from `prod-run-dual-gpu.md`
 - wrong-generation columns are blank at epoch 2 because this archive only has
   final per-example `DUET_EVAL.json` logs, not checkpoint-level generation logs
+
+## 2026-03-30 Multi-Root Utility Table Extraction for SpanCFSimNPO Follow-Ups
+
+Files:
+
+- `src/tools/build_results_combine_tables.py`
+- `docs/experiments.md`
+
+Updates:
+
+- `build_results_combine_tables.py` now accepts repeated `--variant-root`
+  arguments in variant-only mode and can merge method rows from multiple
+  structured-saves trees into one output table
+- added optional variant selection filters:
+  - `--variant-method-key` for exact method keys such as `span_cf_s2`
+  - `--variant-algorithm` for algorithm families such as
+    `span_cf_simnpo_local_retain`
+- added `--variant-display compact` so variant-only tables can render short
+  family labels like `SpanCF-SimNPO-LocalRetain` instead of appending the full
+  parameter list in row names
+- variant-only table generation now drops split/LR buckets that have no
+  matching rows after selection instead of emitting empty tables
+- this supports mixed comparisons such as:
+  - `SpanCF S2` and `SpanCF S4` from `metrics-new/ep5-dualfc-v2_5`
+  - `SpanCFSimNPO` follow-up methods from
+    `metrics-new/ep5-dualfc-v2_5-general-utility`
+
+Validated command sequence:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --variant-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --variant-method-key span_cf_s2 \
+  --variant-method-key span_cf_s4 \
+  --variant-algorithm span_cf_simnpo \
+  --variant-algorithm span_cf_simnpo_local_retain \
+  --variant-algorithm span_cf_simnpo_sam \
+  --variant-algorithm span_cf_simnpo_projected \
+  --variant-display compact \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --output-file metrics-new/results-combine-v2_5/combined_tables_utility.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_utility_slides.tex
+```
+
+Observed outputs:
+
+- `metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg`
+- `metrics-new/results-combine-v2_5/wrong-generations-utility`
+- `metrics-new/results-combine-v2_5/combined_tables_utility.txt`
+- `metrics-new/results-combine-v2_5/combined_tables_utility_slides.tex`
+
+Validation actually completed in this turn:
+
+- `python -m py_compile` on:
+  - `src/tools/build_results_combine_tables.py`
+  - `src/tools/build_structured_saves.py`
+  - `src/tools/analyze_wrong_generations.py`
+  - `src/tools/new_method_variant_utils.py`
+- real `build_structured_saves.py --average-seeds` run on
+  `metrics-new/ep5-dualfc-v2_5-general-utility/saves-clean`
+- real `analyze_wrong_generations.py` run with both:
+  - `metrics-new/ep5-dualfc-v2_5`
+  - `metrics-new/ep5-dualfc-v2_5-general-utility`
+- real multi-root `build_results_combine_tables.py --variant-root ...` run into
+  `metrics-new/results-combine-v2_5/combined_tables_utility.txt`
+- output check confirmed 8 tables total:
+  - 4 splits
+  - 2 epochs
+  - only `1e-4` buckets
+
+Caveats:
+
+- the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
+  averaged rows for:
+  - `span_cf_simnpo_local_retain`
+  - `span_cf_simnpo_sam`
+  - `span_cf_simnpo_projected`
+- no plain `span_cf_simnpo` run directories were present in that archive, so
+  the generated utility tables currently contain 5 method rows per table:
+  - `SpanCF S2`
+  - `SpanCF S4`
+  - `SpanCF-SimNPO-LocalRetain`
+  - `SpanCF-SimNPO-SAM`
+  - `SpanCF-SimNPO-Projected`
+- wrong-generation columns remain blank for epoch 2 and for the new utility
+  rows at epoch 5 because only final per-example `DUET_EVAL.json` logs were
+  available for these inputs

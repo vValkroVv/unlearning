@@ -140,9 +140,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--variant-root",
         type=Path,
+        action="append",
         help=(
-            "Optional structured-saves directory for a single-root new-method table build "
+            "Optional structured-saves directory for a variant-only table build. "
+            "Can be passed multiple times to combine methods from multiple structured-saves roots "
             "(for example metrics-new/ep5-dualfc-v2_5/structured-saves-avg)."
+        ),
+    )
+    parser.add_argument(
+        "--variant-algorithm",
+        action="append",
+        help=(
+            "Optional variant algorithm family filter. Can be repeated. "
+            "Examples: span_cf_simnpo_local_retain, span_cf_simnpo_sam."
+        ),
+    )
+    parser.add_argument(
+        "--variant-method-key",
+        action="append",
+        help=(
+            "Optional exact variant method key filter. Can be repeated. "
+            "Examples: span_cf_s2, span_cf_s4."
+        ),
+    )
+    parser.add_argument(
+        "--variant-display",
+        choices=("full", "compact"),
+        default="full",
+        help=(
+            "How to render variant row labels in variant-only tables. "
+            "`full` keeps parameter details, `compact` keeps only the method family/tag label."
         ),
     )
     parser.add_argument(
@@ -897,23 +924,15 @@ def discover_available_split_lrs(roots: list[Path]) -> list[tuple[str, str]]:
 
 
 def load_variant_row_specs(
-    variant_root: Path,
+    variant_sources: list[tuple[str, Path]],
     split: str,
     lr: str,
+    *,
+    selected_algorithms: set[str] | None = None,
+    selected_method_keys: set[str] | None = None,
+    display_mode: str = "full",
 ) -> list[tuple[str, str, str, str]]:
     first_metric = FIXED_METRICS[0][0]
-    table_path = variant_root / split / lr / f"{first_metric}.tsv"
-    if not table_path.exists():
-        return []
-
-    rows = load_metric_rows(table_path)
-    method_names = [
-        method_name
-        for method_name in rows
-        if variant_info_from_method_key(method_name) is not None
-    ]
-    method_names.sort(key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name))
-
     color_by_algorithm = {
         "multicf": "teal!12",
         "boundary_cf": "cyan!12",
@@ -924,6 +943,56 @@ def load_variant_row_specs(
         "span_cf_simnpo_sam": "orange!12",
         "span_cf_simnpo_projected": "red!12",
     }
+
+    def include_method(method_name: str) -> bool:
+        info = variant_info_from_method_key(method_name)
+        if info is None:
+            return False
+        if selected_algorithms or selected_method_keys:
+            if selected_method_keys and method_name in selected_method_keys:
+                return True
+            algorithm = base_variant_algorithm(method_name) or info.algorithm
+            return bool(selected_algorithms and algorithm in selected_algorithms)
+        return True
+
+    source_by_method: dict[str, str] = {}
+    for source_name, variant_root in variant_sources:
+        table_path = variant_root / split / lr / f"{first_metric}.tsv"
+        if not table_path.exists():
+            continue
+        rows = load_metric_rows(table_path)
+        for method_name in rows:
+            if method_name in source_by_method:
+                continue
+            if include_method(method_name):
+                source_by_method[method_name] = source_name
+
+    method_names = sorted(
+        source_by_method,
+        key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name),
+    )
+
+    def variant_display_name(method_name: str) -> str:
+        info = variant_info_from_method_key(method_name)
+        if info is None:
+            return method_name
+        if display_mode != "compact":
+            return info.display_name
+
+        algorithm = base_variant_algorithm(method_name) or info.algorithm
+        if info.order_index != 999:
+            return info.display_name
+        return {
+            "multicf": "MultiCF",
+            "boundary_cf": "BoundaryCF",
+            "span_cf": "SpanCF",
+            "span_cf_simnpo": "SpanCF-SimNPO",
+            "span_cf_local_retain": "SpanCF-LocalRetain",
+            "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
+            "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
+            "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
+        }.get(algorithm, info.display_name)
+
     row_specs: list[tuple[str, str, str, str]] = []
     for method_name in method_names:
         info = variant_info_from_method_key(method_name)
@@ -931,9 +1000,9 @@ def load_variant_row_specs(
             continue
         row_specs.append(
             (
-                "variant",
+                source_by_method[method_name],
                 method_name,
-                info.display_name,
+                variant_display_name(method_name),
                 color_by_algorithm.get(base_variant_algorithm(method_name) or "", ""),
             )
         )
@@ -946,7 +1015,11 @@ def main() -> None:
     output_slides_tex = (
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
-    variant_root = None if args.variant_root is None else args.variant_root.expanduser().resolve()
+    variant_roots = (
+        []
+        if args.variant_root is None
+        else [root.expanduser().resolve() for root in args.variant_root]
+    )
     old_root = None if args.old_root is None else args.old_root.expanduser().resolve()
     new_root = None if args.new_root is None else args.new_root.expanduser().resolve()
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
@@ -972,11 +1045,27 @@ def main() -> None:
         else args.wrong_generations_root.expanduser().resolve()
     )
 
-    if variant_root is not None:
+    if variant_roots:
         if old_root is not None or new_root is not None:
             raise ValueError("--variant-root cannot be combined with --old-root/--new-root")
         if output_simplece_file is not None or output_simplece_slides_tex is not None:
             raise ValueError("SimpleCE-only outputs are not supported with --variant-root")
+
+        variant_sources = [
+            ("variant", variant_roots[0])
+        ] if len(variant_roots) == 1 else [
+            (f"variant{index + 1}", root) for index, root in enumerate(variant_roots)
+        ]
+        selected_algorithms = (
+            None
+            if not args.variant_algorithm
+            else {value.strip() for value in args.variant_algorithm if value and value.strip()}
+        )
+        selected_method_keys = (
+            None
+            if not args.variant_method_key
+            else {value.strip() for value in args.variant_method_key if value and value.strip()}
+        )
 
         wrong_generation_index: dict[
             str,
@@ -989,20 +1078,22 @@ def main() -> None:
                 wrong_generations_root
             )
             wrong_generation_labels_by_source = {
-                "variant": resolve_wrong_generation_label(variant_root, available_wrong_generation_labels)
+                source_name: resolve_wrong_generation_label(root, available_wrong_generation_labels)
+                for source_name, root in variant_sources
             }
 
         metrics = discover_metrics(
-            [variant_root],
+            [root for _source_name, root in variant_sources],
             include_wrong_generation_metrics=wrong_generations_root is not None,
         )
-        split_lrs = discover_available_split_lrs([variant_root])
+        split_lrs = discover_available_split_lrs([root for _source_name, root in variant_sources])
         if not split_lrs:
-            raise FileNotFoundError(f"No split/LR tables found under {variant_root}")
+            roots_text = ", ".join(str(root) for _source_name, root in variant_sources)
+            raise FileNotFoundError(f"No split/LR tables found under {roots_text}")
 
         bundles_by_split_lr = {
             (split, lr): build_bundles(
-                {"variant": variant_root},
+                {source_name: root for source_name, root in variant_sources},
                 split,
                 lr,
                 metrics,
@@ -1012,9 +1103,23 @@ def main() -> None:
             for split, lr in split_lrs
         }
         row_specs_by_split_lr = {
-            (split, lr): load_variant_row_specs(variant_root, split, lr)
+            (split, lr): load_variant_row_specs(
+                variant_sources,
+                split,
+                lr,
+                selected_algorithms=selected_algorithms,
+                selected_method_keys=selected_method_keys,
+                display_mode=args.variant_display,
+            )
             for split, lr in split_lrs
         }
+        split_lrs = [
+            (split, lr)
+            for split, lr in split_lrs
+            if row_specs_by_split_lr[(split, lr)]
+        ]
+        if not split_lrs:
+            raise FileNotFoundError("No matching variant rows found for the requested selection.")
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_text = build_output_text(

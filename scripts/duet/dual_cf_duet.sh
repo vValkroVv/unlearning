@@ -120,6 +120,43 @@ short_bool_tag() {
         *) echo "f" ;;
     esac
 }
+
+hash_text() {
+    python - "$1" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()[:10])
+PY
+}
+
+compact_task_name_if_needed() {
+    local task_name="$1"
+    local task_prefix="$2"
+    local lora_r_tag="$3"
+    local lora_alpha_tag="$4"
+    local dropout_compact_tag="$5"
+    local lr_tag="$6"
+    local compact_hash_input="$7"
+    local method_suffix="$8"
+    local difficulty_tag="$9"
+    local attribution_tag="${10}"
+    local run_tag_extra="${11:-}"
+    local max_len="${MAX_TASK_NAME_LEN:-220}"
+
+    if [[ ${#task_name} -le ${max_len} ]]; then
+        printf '%s\n' "${task_name}"
+        return
+    fi
+
+    local config_hash
+    config_hash=$(hash_text "${compact_hash_input}")
+    local compact_name="${task_prefix}_lora_r${lora_r_tag}_la${lora_alpha_tag}_ld${dropout_compact_tag}_lr${lr_tag}_cfg${config_hash}${method_suffix}_${difficulty_tag}_${attribution_tag}"
+    if [[ -n "${run_tag_extra}" ]]; then
+        compact_name="${compact_name}_${run_tag_extra}"
+    fi
+    printf '%s\n' "${compact_name}"
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -353,9 +390,15 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                         fi
                                                                                                     fi
 
-                                                                                                    task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
-                                                                                                    if [[ -n "${run_tag_extra}" ]]; then
-                                                                                                        task_name="${task_name}_${run_tag_extra}"
+                                                                                                    task_prefix=duet_${base_model}_${forget_label}_${method_name}
+                                                                                                    shared_name_suffix=_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}
+                                                                                                    compact_hash_input=${shared_name_suffix}_trainer${trainer}_experiment${experiment}
+                                                                                                    task_name_full=${task_prefix}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}${shared_name_suffix}${method_suffix}_${difficulty_tag}_${attribution_tag}
+                                                                                                    task_name=$(compact_task_name_if_needed "${task_name_full}" "${task_prefix}" "${lora_r}" "${lora_alpha}" "${dropout_tag}" "${lr}" "${compact_hash_input}" "${method_suffix}" "${difficulty_tag}" "${attribution_tag}" "${run_tag_extra}")
+                                                                                                    if [[ "${task_name}" != "${task_name_full}" ]]; then
+                                                                                                        echo "[duet][${run_label}] Compacting task name for filesystem safety:"
+                                                                                                        echo "  full=${task_name_full}"
+                                                                                                        echo "  compact=${task_name}"
                                                                                                     fi
                                                                                                     run_dir=${output_root}/${task_name}
                                                                                                     eval_dir=${run_dir}/evals

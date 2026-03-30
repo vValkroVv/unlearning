@@ -403,6 +403,11 @@ scripts/duet/run_dualcf_ablation_v2.sh
 
 SpanCF family (new):
 
+If a DUET/RWKU DualCF-family run name would exceed the filesystem component
+limit, the shared launchers now auto-compact the long shared-config middle
+block to `_cfg<hash>` while keeping the benchmark/model/split/method prefix,
+learning-rate token, and Span suffix parseable for downstream tooling.
+
 ```bash
 # SpanCF with asymmetric 4-token weights
 export METHOD_VARIANT=span_cf

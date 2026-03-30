@@ -2562,6 +2562,106 @@ Caveats:
 - wrong-generation columns are blank at epoch 2 because this archive only has
   final per-example `DUET_EVAL.json` logs, not checkpoint-level generation logs
 
+## 2026-03-30 Multi-Root Utility Table Extraction for SpanCFSimNPO Follow-Ups
+
+Files:
+
+- `src/tools/build_results_combine_tables.py`
+- `docs/experiments.md`
+
+Updates:
+
+- `build_results_combine_tables.py` now accepts repeated `--variant-root`
+  arguments in variant-only mode and can merge method rows from multiple
+  structured-saves trees into one output table
+- added optional variant selection filters:
+  - `--variant-method-key` for exact method keys such as `span_cf_s2`
+  - `--variant-algorithm` for algorithm families such as
+    `span_cf_simnpo_local_retain`
+- added `--variant-display compact` so variant-only tables can render short
+  family labels like `SpanCF-SimNPO-LocalRetain` instead of appending the full
+  parameter list in row names
+- variant-only table generation now drops split/LR buckets that have no
+  matching rows after selection instead of emitting empty tables
+- this supports mixed comparisons such as:
+  - `SpanCF S2` and `SpanCF S4` from `metrics-new/ep5-dualfc-v2_5`
+  - `SpanCFSimNPO` follow-up methods from
+    `metrics-new/ep5-dualfc-v2_5-general-utility`
+
+Validated command sequence:
+
+```bash
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --variant-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --variant-method-key span_cf_s2 \
+  --variant-method-key span_cf_s4 \
+  --variant-algorithm span_cf_simnpo \
+  --variant-algorithm span_cf_simnpo_local_retain \
+  --variant-algorithm span_cf_simnpo_sam \
+  --variant-algorithm span_cf_simnpo_projected \
+  --variant-display compact \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --output-file metrics-new/results-combine-v2_5/combined_tables_utility.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_utility_slides.tex
+```
+
+Observed outputs:
+
+- `metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg`
+- `metrics-new/results-combine-v2_5/wrong-generations-utility`
+- `metrics-new/results-combine-v2_5/combined_tables_utility.txt`
+- `metrics-new/results-combine-v2_5/combined_tables_utility_slides.tex`
+
+Validation actually completed in this turn:
+
+- `python -m py_compile` on:
+  - `src/tools/build_results_combine_tables.py`
+  - `src/tools/build_structured_saves.py`
+  - `src/tools/analyze_wrong_generations.py`
+  - `src/tools/new_method_variant_utils.py`
+- real `build_structured_saves.py --average-seeds` run on
+  `metrics-new/ep5-dualfc-v2_5-general-utility/saves-clean`
+- real `analyze_wrong_generations.py` run with both:
+  - `metrics-new/ep5-dualfc-v2_5`
+  - `metrics-new/ep5-dualfc-v2_5-general-utility`
+- real multi-root `build_results_combine_tables.py --variant-root ...` run into
+  `metrics-new/results-combine-v2_5/combined_tables_utility.txt`
+- output check confirmed 8 tables total:
+  - 4 splits
+  - 2 epochs
+  - only `1e-4` buckets
+
+Caveats:
+
+- the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
+  averaged rows for:
+  - `span_cf_simnpo_local_retain`
+  - `span_cf_simnpo_sam`
+  - `span_cf_simnpo_projected`
+- no plain `span_cf_simnpo` run directories were present in that archive, so
+  the generated utility tables currently contain 5 method rows per table:
+  - `SpanCF S2`
+  - `SpanCF S4`
+  - `SpanCF-SimNPO-LocalRetain`
+  - `SpanCF-SimNPO-SAM`
+  - `SpanCF-SimNPO-Projected`
+- wrong-generation columns remain blank for epoch 2 and for the new utility
+  rows at epoch 5 because only final per-example `DUET_EVAL.json` logs were
+  available for these inputs
+
 </content>
 
 <content full_path="prod-gpu-runs-new-5ep.md">
@@ -6956,6 +7056,11 @@ scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
 SpanCF family (new):
+
+If a DUET/RWKU DualCF-family run name would exceed the filesystem component
+limit, the shared launchers now auto-compact the long shared-config middle
+block to `_cfg<hash>` while keeping the benchmark/model/split/method prefix,
+learning-rate token, and Span suffix parseable for downstream tooling.
 
 ```bash
 # SpanCF with asymmetric 4-token weights
@@ -15443,8 +15548,10 @@ MultiCF uses `agwm`/`agm`/`agt1` and `wrr`/`wuni`,
 BoundaryCF uses `lr`/`bm`,
 SpanCF family uses `mlc`/`mso` plus `asw`/`auw`/`osw`/`ouw`, and variant
 suffixes (`dlt`, `lr`, `bm`, `sr`, `sad`, `pct`) for SimNPO/local-retain/SAM/
-projection knobs.
-These shorter tags keep run dirs under filesystem name limits.
+projection knobs. If a DualCF-family run name still exceeds the filesystem
+component limit, the DUET/RWKU launchers now auto-compact the long shared-config
+middle block to `_cfg<hash>` while keeping the benchmark/model/split/method
+prefix, the real learning-rate token, and the variant suffix parseable.
 Each loop continues to the next spec if one spec fails.
 
 ```bash
@@ -15547,7 +15654,11 @@ done
 
 ### Utility preserving
 
-# SpanCFSimNPO
+The four commands below use that same compact-name fallback automatically, so
+the local-retain / SAM / projected SpanCF runs no longer fail on
+`mkdir ... File name too long`.
+
+# 1) SpanCFSimNPO
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo" \
 SPAN_MODE=lcs \
@@ -15558,7 +15669,7 @@ SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_SIMNPO_DELTA=0.0 \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# SpanCFSimNPO + local retain
+# 2) SpanCFSimNPO + local retain
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_local_retain" \
 SPAN_MODE=lcs \
@@ -15567,11 +15678,11 @@ SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
 SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_SIMNPO_DELTA=0.0 \
-SPAN_LOCAL_RETAIN_WEIGHT=0.20 \
+SPAN_LOCAL_RETAIN_WEIGHT=0.15 \
 SPAN_BOUNDARY_MARGIN_WEIGHT=0.0 \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# SpanCFSimNPO + SAM
+# 3) SpanCFSimNPO + SAM
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_sam" \
 SPAN_MODE=lcs \
@@ -15584,7 +15695,7 @@ SPAN_SAM_RHO=0.01 \
 SPAN_SAM_ADAPTIVE=false \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# SpanCFSimNPO + projected gradient conflict handling
+# 4) SpanCFSimNPO + projected gradient conflict handling
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_projected" \
 SPAN_MODE=lcs \
@@ -17968,6 +18079,34 @@ Validation:
   - end-to-end DUET/RWKU `src/train.py` smoke with real artifacts
   - full `rare -> popular -> merged` campaign rerun with the new Span variants
 
+## 2026-03-30 Compact DualCF Run Names For Filesystem Safety
+
+Files:
+
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Updates:
+
+- added a compact-name fallback in the DUET/RWKU DualCF-family launchers:
+  - keep the benchmark/model/split/method prefix unchanged
+  - keep the true `_lr...` token and the method-specific suffix unchanged
+  - replace only the long shared-config middle block with `_cfg<sha1-10>`
+    when the basename would exceed `MAX_TASK_NAME_LEN` (default `220`)
+- this keeps downstream parsing compatible because method names, learning-rate
+  tokens, and Span tails still appear in the run dir name
+- updated GPU and VAST runbooks to document the automatic compact-name fallback
+  for the utility-preserving SpanCF commands
+
+Validation:
+
+- completed locally in this turn:
+  - `bash -n scripts/duet/dual_cf_duet.sh scripts/rwku/dual_cf_rwku.sh`
+- not completed in this turn:
+  - end-to-end DUET/RWKU launcher smoke against real runs
+
 </content>
 
 <content full_path="ga_integration_diff.md">
@@ -18702,6 +18841,38 @@ python src/tools/build_results_combine_tables.py \
   --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations \
   --output-file metrics-new/results-combine-v2_5/combined_tables.txt \
   --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_slides.tex
+
+## build seed-averaged tables for the general-utility SpanCFSimNPO follow-up runs
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility/saves-clean \
+  --output-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/analyze_wrong_generations.py \
+  --input-root metrics-new/ep5-dualfc-v2_5 \
+  --input-root metrics-new/ep5-dualfc-v2_5-general-utility \
+  --output-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --overwrite
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-dualfc-v2_5/structured-saves-avg \
+  --variant-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
+  --variant-method-key span_cf_s2 \
+  --variant-method-key span_cf_s4 \
+  --variant-algorithm span_cf_simnpo \
+  --variant-algorithm span_cf_simnpo_local_retain \
+  --variant-algorithm span_cf_simnpo_sam \
+  --variant-algorithm span_cf_simnpo_projected \
+  --variant-display compact \
+  --wrong-generations-root metrics-new/results-combine-v2_5/wrong-generations-utility \
+  --output-file metrics-new/results-combine-v2_5/combined_tables_utility.txt \
+  --output-slides-tex metrics-new/results-combine-v2_5/combined_tables_utility_slides.tex
+
+Note: the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
+`span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`, and
+`span_cf_simnpo_projected`, but no plain `span_cf_simnpo` save directories, so
+the generated utility tables currently contain 5 methods rather than 6.
 
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
@@ -31802,6 +31973,43 @@ short_bool_tag() {
         *) echo "f" ;;
     esac
 }
+
+hash_text() {
+    python - "$1" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()[:10])
+PY
+}
+
+compact_task_name_if_needed() {
+    local task_name="$1"
+    local task_prefix="$2"
+    local lora_r_tag="$3"
+    local lora_alpha_tag="$4"
+    local dropout_compact_tag="$5"
+    local lr_tag="$6"
+    local compact_hash_input="$7"
+    local method_suffix="$8"
+    local difficulty_tag="$9"
+    local attribution_tag="${10}"
+    local run_tag_extra="${11:-}"
+    local max_len="${MAX_TASK_NAME_LEN:-220}"
+
+    if [[ ${#task_name} -le ${max_len} ]]; then
+        printf '%s\n' "${task_name}"
+        return
+    fi
+
+    local config_hash
+    config_hash=$(hash_text "${compact_hash_input}")
+    local compact_name="${task_prefix}_lora_r${lora_r_tag}_la${lora_alpha_tag}_ld${dropout_compact_tag}_lr${lr_tag}_cfg${config_hash}${method_suffix}_${difficulty_tag}_${attribution_tag}"
+    if [[ -n "${run_tag_extra}" ]]; then
+        compact_name="${compact_name}_${run_tag_extra}"
+    fi
+    printf '%s\n' "${compact_name}"
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -32035,9 +32243,15 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                         fi
                                                                                                     fi
 
-                                                                                                    task_name=duet_${base_model}_${forget_label}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
-                                                                                                    if [[ -n "${run_tag_extra}" ]]; then
-                                                                                                        task_name="${task_name}_${run_tag_extra}"
+                                                                                                    task_prefix=duet_${base_model}_${forget_label}_${method_name}
+                                                                                                    shared_name_suffix=_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}
+                                                                                                    compact_hash_input=${shared_name_suffix}_trainer${trainer}_experiment${experiment}
+                                                                                                    task_name_full=${task_prefix}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}${shared_name_suffix}${method_suffix}_${difficulty_tag}_${attribution_tag}
+                                                                                                    task_name=$(compact_task_name_if_needed "${task_name_full}" "${task_prefix}" "${lora_r}" "${lora_alpha}" "${dropout_tag}" "${lr}" "${compact_hash_input}" "${method_suffix}" "${difficulty_tag}" "${attribution_tag}" "${run_tag_extra}")
+                                                                                                    if [[ "${task_name}" != "${task_name_full}" ]]; then
+                                                                                                        echo "[duet][${run_label}] Compacting task name for filesystem safety:"
+                                                                                                        echo "  full=${task_name_full}"
+                                                                                                        echo "  compact=${task_name}"
                                                                                                     fi
                                                                                                     run_dir=${output_root}/${task_name}
                                                                                                     eval_dir=${run_dir}/evals
@@ -41074,6 +41288,43 @@ short_bool_tag() {
         *) echo "f" ;;
     esac
 }
+
+hash_text() {
+    python - "$1" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()[:10])
+PY
+}
+
+compact_task_name_if_needed() {
+    local task_name="$1"
+    local task_prefix="$2"
+    local lora_r_tag="$3"
+    local lora_alpha_tag="$4"
+    local dropout_compact_tag="$5"
+    local lr_tag="$6"
+    local compact_hash_input="$7"
+    local method_suffix="$8"
+    local difficulty_tag="$9"
+    local attribution_tag="${10}"
+    local run_tag_extra="${11:-}"
+    local max_len="${MAX_TASK_NAME_LEN:-220}"
+
+    if [[ ${#task_name} -le ${max_len} ]]; then
+        printf '%s\n' "${task_name}"
+        return
+    fi
+
+    local config_hash
+    config_hash=$(hash_text "${compact_hash_input}")
+    local compact_name="${task_prefix}_lora_r${lora_r_tag}_la${lora_alpha_tag}_ld${dropout_compact_tag}_lr${lr_tag}_cfg${config_hash}${method_suffix}_${difficulty_tag}_${attribution_tag}"
+    if [[ -n "${run_tag_extra}" ]]; then
+        compact_name="${compact_name}_${run_tag_extra}"
+    fi
+    printf '%s\n' "${compact_name}"
+}
 save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
 checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
 checkpoint_epochs_csv=""
@@ -41284,9 +41535,15 @@ for lr in "${lrs[@]}"; do
                                                                                                     fi
                                                                                                 fi
 
-                                                                                                task_name=rwku_${base_model}_${forget_split}_${method_name}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}${method_suffix}_${difficulty_tag}_${attribution_tag}
-                                                                                                if [[ -n "${run_tag_extra}" ]]; then
-                                                                                                    task_name="${task_name}_${run_tag_extra}"
+                                                                                                task_prefix=rwku_${base_model}_${forget_split}_${method_name}
+                                                                                                shared_name_suffix=_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}
+                                                                                                compact_hash_input=${shared_name_suffix}_trainer${trainer}_experiment${experiment}
+                                                                                                task_name_full=${task_prefix}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}${shared_name_suffix}${method_suffix}_${difficulty_tag}_${attribution_tag}
+                                                                                                task_name=$(compact_task_name_if_needed "${task_name_full}" "${task_prefix}" "${lora_r}" "${lora_alpha}" "${dropout_tag}" "${lr}" "${compact_hash_input}" "${method_suffix}" "${difficulty_tag}" "${attribution_tag}" "${run_tag_extra}")
+                                                                                                if [[ "${task_name}" != "${task_name_full}" ]]; then
+                                                                                                    echo "[rwku][${run_label}] Compacting task name for filesystem safety:"
+                                                                                                    echo "  full=${task_name_full}"
+                                                                                                    echo "  compact=${task_name}"
                                                                                                 fi
                                                                                                 run_dir=${output_root}/${task_name}
                                                                                                 eval_dir=${run_dir}/evals
@@ -54496,9 +54753,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--variant-root",
         type=Path,
+        action="append",
         help=(
-            "Optional structured-saves directory for a single-root new-method table build "
+            "Optional structured-saves directory for a variant-only table build. "
+            "Can be passed multiple times to combine methods from multiple structured-saves roots "
             "(for example metrics-new/ep5-dualfc-v2_5/structured-saves-avg)."
+        ),
+    )
+    parser.add_argument(
+        "--variant-algorithm",
+        action="append",
+        help=(
+            "Optional variant algorithm family filter. Can be repeated. "
+            "Examples: span_cf_simnpo_local_retain, span_cf_simnpo_sam."
+        ),
+    )
+    parser.add_argument(
+        "--variant-method-key",
+        action="append",
+        help=(
+            "Optional exact variant method key filter. Can be repeated. "
+            "Examples: span_cf_s2, span_cf_s4."
+        ),
+    )
+    parser.add_argument(
+        "--variant-display",
+        choices=("full", "compact"),
+        default="full",
+        help=(
+            "How to render variant row labels in variant-only tables. "
+            "`full` keeps parameter details, `compact` keeps only the method family/tag label."
         ),
     )
     parser.add_argument(
@@ -55253,23 +55537,15 @@ def discover_available_split_lrs(roots: list[Path]) -> list[tuple[str, str]]:
 
 
 def load_variant_row_specs(
-    variant_root: Path,
+    variant_sources: list[tuple[str, Path]],
     split: str,
     lr: str,
+    *,
+    selected_algorithms: set[str] | None = None,
+    selected_method_keys: set[str] | None = None,
+    display_mode: str = "full",
 ) -> list[tuple[str, str, str, str]]:
     first_metric = FIXED_METRICS[0][0]
-    table_path = variant_root / split / lr / f"{first_metric}.tsv"
-    if not table_path.exists():
-        return []
-
-    rows = load_metric_rows(table_path)
-    method_names = [
-        method_name
-        for method_name in rows
-        if variant_info_from_method_key(method_name) is not None
-    ]
-    method_names.sort(key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name))
-
     color_by_algorithm = {
         "multicf": "teal!12",
         "boundary_cf": "cyan!12",
@@ -55280,6 +55556,56 @@ def load_variant_row_specs(
         "span_cf_simnpo_sam": "orange!12",
         "span_cf_simnpo_projected": "red!12",
     }
+
+    def include_method(method_name: str) -> bool:
+        info = variant_info_from_method_key(method_name)
+        if info is None:
+            return False
+        if selected_algorithms or selected_method_keys:
+            if selected_method_keys and method_name in selected_method_keys:
+                return True
+            algorithm = base_variant_algorithm(method_name) or info.algorithm
+            return bool(selected_algorithms and algorithm in selected_algorithms)
+        return True
+
+    source_by_method: dict[str, str] = {}
+    for source_name, variant_root in variant_sources:
+        table_path = variant_root / split / lr / f"{first_metric}.tsv"
+        if not table_path.exists():
+            continue
+        rows = load_metric_rows(table_path)
+        for method_name in rows:
+            if method_name in source_by_method:
+                continue
+            if include_method(method_name):
+                source_by_method[method_name] = source_name
+
+    method_names = sorted(
+        source_by_method,
+        key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name),
+    )
+
+    def variant_display_name(method_name: str) -> str:
+        info = variant_info_from_method_key(method_name)
+        if info is None:
+            return method_name
+        if display_mode != "compact":
+            return info.display_name
+
+        algorithm = base_variant_algorithm(method_name) or info.algorithm
+        if info.order_index != 999:
+            return info.display_name
+        return {
+            "multicf": "MultiCF",
+            "boundary_cf": "BoundaryCF",
+            "span_cf": "SpanCF",
+            "span_cf_simnpo": "SpanCF-SimNPO",
+            "span_cf_local_retain": "SpanCF-LocalRetain",
+            "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
+            "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
+            "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
+        }.get(algorithm, info.display_name)
+
     row_specs: list[tuple[str, str, str, str]] = []
     for method_name in method_names:
         info = variant_info_from_method_key(method_name)
@@ -55287,9 +55613,9 @@ def load_variant_row_specs(
             continue
         row_specs.append(
             (
-                "variant",
+                source_by_method[method_name],
                 method_name,
-                info.display_name,
+                variant_display_name(method_name),
                 color_by_algorithm.get(base_variant_algorithm(method_name) or "", ""),
             )
         )
@@ -55302,7 +55628,11 @@ def main() -> None:
     output_slides_tex = (
         None if args.output_slides_tex is None else args.output_slides_tex.expanduser().resolve()
     )
-    variant_root = None if args.variant_root is None else args.variant_root.expanduser().resolve()
+    variant_roots = (
+        []
+        if args.variant_root is None
+        else [root.expanduser().resolve() for root in args.variant_root]
+    )
     old_root = None if args.old_root is None else args.old_root.expanduser().resolve()
     new_root = None if args.new_root is None else args.new_root.expanduser().resolve()
     simnpo_root = None if args.simnpo_root is None else args.simnpo_root.expanduser().resolve()
@@ -55328,11 +55658,27 @@ def main() -> None:
         else args.wrong_generations_root.expanduser().resolve()
     )
 
-    if variant_root is not None:
+    if variant_roots:
         if old_root is not None or new_root is not None:
             raise ValueError("--variant-root cannot be combined with --old-root/--new-root")
         if output_simplece_file is not None or output_simplece_slides_tex is not None:
             raise ValueError("SimpleCE-only outputs are not supported with --variant-root")
+
+        variant_sources = [
+            ("variant", variant_roots[0])
+        ] if len(variant_roots) == 1 else [
+            (f"variant{index + 1}", root) for index, root in enumerate(variant_roots)
+        ]
+        selected_algorithms = (
+            None
+            if not args.variant_algorithm
+            else {value.strip() for value in args.variant_algorithm if value and value.strip()}
+        )
+        selected_method_keys = (
+            None
+            if not args.variant_method_key
+            else {value.strip() for value in args.variant_method_key if value and value.strip()}
+        )
 
         wrong_generation_index: dict[
             str,
@@ -55345,20 +55691,22 @@ def main() -> None:
                 wrong_generations_root
             )
             wrong_generation_labels_by_source = {
-                "variant": resolve_wrong_generation_label(variant_root, available_wrong_generation_labels)
+                source_name: resolve_wrong_generation_label(root, available_wrong_generation_labels)
+                for source_name, root in variant_sources
             }
 
         metrics = discover_metrics(
-            [variant_root],
+            [root for _source_name, root in variant_sources],
             include_wrong_generation_metrics=wrong_generations_root is not None,
         )
-        split_lrs = discover_available_split_lrs([variant_root])
+        split_lrs = discover_available_split_lrs([root for _source_name, root in variant_sources])
         if not split_lrs:
-            raise FileNotFoundError(f"No split/LR tables found under {variant_root}")
+            roots_text = ", ".join(str(root) for _source_name, root in variant_sources)
+            raise FileNotFoundError(f"No split/LR tables found under {roots_text}")
 
         bundles_by_split_lr = {
             (split, lr): build_bundles(
-                {"variant": variant_root},
+                {source_name: root for source_name, root in variant_sources},
                 split,
                 lr,
                 metrics,
@@ -55368,9 +55716,23 @@ def main() -> None:
             for split, lr in split_lrs
         }
         row_specs_by_split_lr = {
-            (split, lr): load_variant_row_specs(variant_root, split, lr)
+            (split, lr): load_variant_row_specs(
+                variant_sources,
+                split,
+                lr,
+                selected_algorithms=selected_algorithms,
+                selected_method_keys=selected_method_keys,
+                display_mode=args.variant_display,
+            )
             for split, lr in split_lrs
         }
+        split_lrs = [
+            (split, lr)
+            for split, lr in split_lrs
+            if row_specs_by_split_lr[(split, lr)]
+        ]
+        if not split_lrs:
+            raise FileNotFoundError("No matching variant rows found for the requested selection.")
 
         output_file.parent.mkdir(parents=True, exist_ok=True)
         output_text = build_output_text(
