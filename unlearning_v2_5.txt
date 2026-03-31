@@ -15719,6 +15719,54 @@ The remaining Span variants resolve to the base DualCF v2 artifacts.
 Interpret `boundary_cf` DUET-popular results carefully: the current artifact is
 mostly fallback hard negatives there, not true lexical near-miss boundaries.
 
+### Utility preserving rare new
+
+These three rare-only commands assume the rebuilt rare rerank has already been
+written into the repo-local DualCF artifact path:
+`/home/vkropoti/diploma/open-unlearning/dualcf/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl`.
+
+Use `duet_rare`, not `all`, so popular, merged, and RWKU remain untouched.
+
+```bash
+# 1) SpanCF S4 with reranked rare artifact
+GPU_ID=5
+
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+
+# 2) SpanCF with softer original-branch pressure on the same reranked rare artifact
+GPU_ID=5
+
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.25 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=0.75 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+
+# 3) Projected SpanCF variant after the artifact rerank + softer original weights
+GPU_ID=5
+
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_simnpo_projected" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.25 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=0.75 \
+SPAN_SIMNPO_DELTA=0.0 \
+SPAN_PROJECTION_COS_THRESHOLD=0.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
 </content>
 
 <content full_path="dual_cf_integration_diff.md">
