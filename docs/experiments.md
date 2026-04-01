@@ -92,6 +92,7 @@ python src/tools/build_results_combine_tables.py \
   --variant-root metrics-new/ep5-dualfc-v2_5-general-utility/structured-saves-avg \
   --variant-method-key span_cf_s2 \
   --variant-method-key span_cf_s4 \
+  --variant-algorithm span_cf_samnpo \
   --variant-algorithm span_cf_simnpo \
   --variant-algorithm span_cf_simnpo_local_retain \
   --variant-algorithm span_cf_simnpo_sam \
@@ -103,8 +104,9 @@ python src/tools/build_results_combine_tables.py \
 
 Note: the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
 `span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`, and
-`span_cf_simnpo_projected`, but no plain `span_cf_simnpo` save directories, so
-the generated utility tables currently contain 5 methods rather than 6.
+`span_cf_simnpo_projected`, but no plain `span_cf_simnpo` or
+`span_cf_samnpo` save directories, so the generated utility tables omit those
+rows unless matching saves are added.
 
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \

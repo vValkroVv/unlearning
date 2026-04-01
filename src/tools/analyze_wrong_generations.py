@@ -24,7 +24,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -59,6 +59,7 @@ METHOD_DISPLAY = {
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
     "simple_ce": "Simple-CE",
+    "span_cf_samnpo": "SpanCF-SAMNPO",
     "span_cf_simnpo": "SpanCF-SimNPO",
     "span_cf_local_retain": "SpanCF-LocalRetain",
     "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
@@ -79,6 +80,7 @@ METHOD_ORDER = [
     "dpo_cf",
     "simnpo",
     "simple_ce",
+    "span_cf_samnpo",
     "span_cf_simnpo",
     "span_cf_local_retain",
     "span_cf_simnpo_local_retain",

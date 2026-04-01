@@ -407,7 +407,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                         boundary_local_tag=${boundary_local_retain_weight//./p}
                                                                                                         boundary_margin_tag=${boundary_margin_weight//./p}
                                                                                                         method_suffix=_lr${boundary_local_tag}_bm${boundary_margin_tag}
-                                                                                                    elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                    elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         span_mode_tag=$(short_span_mode_tag "${span_mode}")
                                                                                                         span_alt_shared_tag=${span_alt_shared_token_weight//./p}
                                                                                                         span_alt_unique_tag=${span_alt_unique_token_weight//./p}
@@ -423,7 +423,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             boundary_margin_tag=${span_boundary_margin_weight//./p}
                                                                                                             method_suffix=${method_suffix}_lr${span_local_tag}_bm${boundary_margin_tag}
                                                                                                         fi
-                                                                                                        if [[ "${trainer}" == "SpanCFSimNPOSAM" ]]; then
+                                                                                                        if [[ "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPOSAM" ]]; then
                                                                                                             span_sam_rho_tag=${span_sam_rho//./p}
                                                                                                             span_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
                                                                                                             method_suffix=${method_suffix}_sr${span_sam_rho_tag}_sad${span_sam_adaptive_tag}
@@ -492,7 +492,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             trainer.method_args.gamma=${gamma}
                                                                                                             trainer.method_args.retain_loss_type=NLL
                                                                                                         )
-                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.tau_d=${tau_d}
                                                                                                                 trainer.method_args.tau_a=${tau_a}
@@ -528,7 +528,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                                 trainer.method_args.local_retain_weight=${boundary_local_retain_weight}
                                                                                                                 trainer.method_args.boundary_margin_weight=${boundary_margin_weight}
                                                                                                             )
-                                                                                                        elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                        elif [[ "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.span_mode=${span_mode}
                                                                                                                 trainer.method_args.alt_shared_token_weight=${span_alt_shared_token_weight}
@@ -547,7 +547,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                                     trainer.method_args.boundary_margin_weight=${span_boundary_margin_weight}
                                                                                                                 )
                                                                                                             fi
-                                                                                                            if [[ "${trainer}" == "SpanCFSimNPOSAM" ]]; then
+                                                                                                            if [[ "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPOSAM" ]]; then
                                                                                                                 extra_method_args+=(
                                                                                                                     trainer.method_args.sam_rho=${span_sam_rho}
                                                                                                                     trainer.method_args.sam_adaptive=${span_sam_adaptive}

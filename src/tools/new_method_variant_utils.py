@@ -81,6 +81,7 @@ BOOL_TOKEN_DISPLAY = {
 }
 SPAN_VARIANT_FAMILIES = {
     "span_cf": "SpanCF",
+    "span_cf_samnpo": "SpanCF-SAMNPO",
     "span_cf_simnpo": "SpanCF-SimNPO",
     "span_cf_local_retain": "SpanCF-LocalRetain",
     "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
@@ -92,11 +93,12 @@ VARIANT_ALGORITHM_ORDER = {
     "multicf": 0,
     "boundary_cf": 1,
     "span_cf": 2,
-    "span_cf_simnpo": 3,
-    "span_cf_local_retain": 4,
-    "span_cf_simnpo_local_retain": 5,
-    "span_cf_simnpo_sam": 6,
-    "span_cf_simnpo_projected": 7,
+    "span_cf_samnpo": 3,
+    "span_cf_simnpo": 4,
+    "span_cf_local_retain": 5,
+    "span_cf_simnpo_local_retain": 6,
+    "span_cf_simnpo_sam": 7,
+    "span_cf_simnpo_projected": 8,
 }
 
 

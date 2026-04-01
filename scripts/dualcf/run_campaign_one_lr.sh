@@ -250,7 +250,7 @@ resolve_duet_artifact_for_method() {
     span_cf_local_retain|span_cf_simnpo_local_retain)
       echo "${ARTIFACT_ROOT}/duet/${forget_label}_llama31_8b_v2/span_local_retain_${forget_label}_v1.jsonl"
       ;;
-    span_cf|span_cf_simnpo|span_cf_simnpo_sam|span_cf_simnpo_projected)
+    span_cf|span_cf_samnpo|span_cf_simnpo|span_cf_simnpo_sam|span_cf_simnpo_projected)
       case "${forget_label}" in
         rare) echo "${ARTIFACT_ROOT}/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl" ;;
         popular) echo "${ARTIFACT_ROOT}/duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl" ;;
@@ -288,7 +288,7 @@ resolve_rwku_artifact_for_method() {
     span_cf_local_retain|span_cf_simnpo_local_retain)
       echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/span_local_retain_forget_level2_v1.jsonl"
       ;;
-    span_cf|span_cf_simnpo|span_cf_simnpo_sam|span_cf_simnpo_projected|*)
+    span_cf|span_cf_samnpo|span_cf_simnpo|span_cf_simnpo_sam|span_cf_simnpo_projected|*)
       echo "${ARTIFACT_ROOT}/rwku/llama31_8b_level2_v2/dualcf_forget_level2_v2.jsonl"
       ;;
   esac
@@ -430,7 +430,7 @@ export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
 export ATTR_RETAIN_MAX_STEPS="${ATTR_RETAIN_MAX_STEPS:-0}"
 export ATTR_FORGET_MAX_STEPS="${ATTR_FORGET_MAX_STEPS:-0}"
 
-METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku}"
+METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku}"
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"

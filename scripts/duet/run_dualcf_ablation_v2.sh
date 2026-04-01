@@ -85,6 +85,13 @@ case "${METHOD_VARIANT}" in
     export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_local_retain_lora.yaml}
     exec bash "${script_dir}/dual_cf_duet.sh"
     ;;
+  span_cf_samnpo)
+    export TRAINER=${TRAINER:-SpanCFSAMNPO}
+    export METHOD_NAME=${METHOD_NAME:-span_cf_samnpo}
+    export RUN_LABEL=${RUN_LABEL:-SpanCFSAMNPO}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/span_cf_samnpo_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
   span_cf_simnpo_local_retain)
     export TRAINER=${TRAINER:-SpanCFSimNPOLocalRetain}
     export METHOD_NAME=${METHOD_NAME:-span_cf_simnpo_local_retain}

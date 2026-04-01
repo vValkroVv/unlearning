@@ -94,10 +94,10 @@ The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
-`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku"`.
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku"`.
 That keeps routed DualCF ablations plus baselines in one wrapper path.
 New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
-`span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
+`span_cf_samnpo`, `span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
 `span_cf_simnpo_projected`) are available as explicit `METHOD_VARIANTS` values
 when needed. The standalone AdaPop launchers also accept `BETA_A` and `BETA_B`
 overrides for the dynamic popularity curve while keeping the same checkpoint /
@@ -721,7 +721,19 @@ SPAN_LOCAL_RETAIN_WEIGHT=0.15 \
 SPAN_BOUNDARY_MARGIN_WEIGHT=0.0 \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# 3) SpanCFSimNPO + SAM
+# 3) SpanCF + SAM on the routed negative branch only
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_samnpo" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
+
+# 4) SpanCFSimNPO + SAM
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_sam" \
 SPAN_MODE=lcs \
@@ -734,7 +746,7 @@ SPAN_SAM_RHO=0.01 \
 SPAN_SAM_ADAPTIVE=false \
 bash scripts/dualcf/run_campaign_one_lr.sh 5 1e-4 all
 
-# 4) SpanCFSimNPO + projected gradient conflict handling
+# 5) SpanCFSimNPO + projected gradient conflict handling
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_projected" \
 SPAN_MODE=lcs \
@@ -912,4 +924,40 @@ SPAN_PROJECTION_COS_THRESHOLD=0.0 \
 RARITY_NEG_GAINS="0.5" \
 RARITY_CF_GAINS="0.5" \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+#### 3. DUET rare new runs
+
+```bash
+export METHOD_VARIANTS="span_cf_samnpo"
+export DISABLE_RARITY_ROUTES=true
+export DISABLE_DIFFICULTY_ROUTES=false
+export DISABLE_ATTRIBUTION_ROUTES=false
+export RARITY_NEG_GAINS=0.0
+export RARITY_CF_GAINS=0.0
+export SPAN_MODE=lcs
+export SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00
+export SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
+
+bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 duet_rare
+
+export METHOD_VARIANTS="span_cf"
+export DISABLE_RARITY_ROUTES=true
+export DISABLE_DIFFICULTY_ROUTES=false
+export DISABLE_ATTRIBUTION_ROUTES=false
+export RARITY_NEG_GAINS=0.0
+export RARITY_CF_GAINS=0.0
+export SPAN_MODE=lcs
+export SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10
+export SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
+
+bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 duet_rare
 ```

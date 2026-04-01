@@ -32,6 +32,7 @@ from trainer.unlearn.span_cf_local_retain import (
     SpanCFLocalRetain,
     SpanCFSimNPOLocalRetain,
 )
+from trainer.unlearn.span_cf_samnpo import SpanCFSAMNPO
 from trainer.unlearn.span_cf_simnpo_sam import SpanCFSimNPOSAM
 from trainer.unlearn.span_cf_simnpo_projected import SpanCFSimNPOProjected
 from trainer.callbacks import JsonlTraceCallback, SaveOnEpochsCallback
@@ -139,5 +140,6 @@ _register_trainer(SpanCF)
 _register_trainer(SpanCFSimNPO)
 _register_trainer(SpanCFLocalRetain)
 _register_trainer(SpanCFSimNPOLocalRetain)
+_register_trainer(SpanCFSAMNPO)
 _register_trainer(SpanCFSimNPOSAM)
 _register_trainer(SpanCFSimNPOProjected)

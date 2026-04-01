@@ -446,6 +446,13 @@ export SPAN_LOCAL_RETAIN_WEIGHT=0.2
 export SPAN_BOUNDARY_MARGIN_WEIGHT=0.0
 scripts/duet/run_dualcf_ablation_v2.sh
 
+# SpanCF + SAM on the routed negative branch only
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=span_cf_samnpo
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
+scripts/duet/run_dualcf_ablation_v2.sh
+
 # SpanCFSimNPO + SAM
 export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
 export METHOD_VARIANT=span_cf_simnpo_sam
