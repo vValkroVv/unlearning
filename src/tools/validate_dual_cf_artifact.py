@@ -57,11 +57,18 @@ def main():
     ranges = {
         "difficulty_score": [float("inf"), float("-inf")],
         "attribution_score": [float("inf"), float("-inf")],
+        "rarity_score": [float("inf"), float("-inf")],
     }
     optional_numeric_keys = (
         "difficulty_score_raw",
         "attribution_score_raw",
+        "rarity_score_raw",
+        "rarity_score",
     )
+    unit_interval_optional_keys = {
+        "rarity_score_raw",
+        "rarity_score",
+    }
     invalid_reason_counts = {}
 
     with path.open("r", encoding="utf-8") as handle:
@@ -105,6 +112,13 @@ def main():
                 value = row.get(score_key)
                 if not isinstance(value, (int, float)) or not math.isfinite(value):
                     bad_rows.append((line_no, f"{score_key} is not finite numeric: {value!r}"))
+                    continue
+                if score_key in ranges:
+                    ranges[score_key][0] = min(ranges[score_key][0], float(value))
+                    ranges[score_key][1] = max(ranges[score_key][1], float(value))
+                if args.strict and score_key in unit_interval_optional_keys:
+                    if not (0.0 <= float(value) <= 1.0):
+                        bad_rows.append((line_no, f"{score_key} out of [0,1]: {value!r}"))
 
             if args.require_local_retain:
                 for key in (

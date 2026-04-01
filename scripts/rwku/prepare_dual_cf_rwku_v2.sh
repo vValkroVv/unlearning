@@ -110,11 +110,21 @@ W_CONF=${W_CONF:-1.0}
 W_STABILITY=${W_STABILITY:-0.0}
 STABILITY_MODE=${STABILITY_MODE:-none}
 HYBRID_RHO=${HYBRID_RHO:-0.7}
+RARITY_Q_LOW=${RARITY_Q_LOW:-0.05}
+RARITY_Q_HIGH=${RARITY_Q_HIGH:-0.95}
+RARITY_REFERENCE_DATASET_PATH=${RARITY_REFERENCE_DATASET_PATH:-${DATASET_PATH}}
+RARITY_REFERENCE_DATASET_NAME=${RARITY_REFERENCE_DATASET_NAME:-${FORGET_SPLIT}}
+raw_rarity_reference_splits="${RARITY_REFERENCE_SPLITS:-test}"
+raw_rarity_reference_splits="${raw_rarity_reference_splits//,/ }"
+raw_rarity_reference_splits="${raw_rarity_reference_splits//\"/}"
+raw_rarity_reference_splits="${raw_rarity_reference_splits//\'/}"
+read -r -a rarity_reference_splits <<< "${raw_rarity_reference_splits}"
 
 RAW_CF=${OUT_DIR}/step1_counterfactuals_raw.jsonl
 CLEAN_CF=${OUT_DIR}/step1b_counterfactuals_clean.jsonl
 DIFF_JSONL=${OUT_DIR}/step2_difficulty_raw.jsonl
-PROXY_MAP_JSONL=${OUT_DIR}/step2b_proxy_map.jsonl
+RARITY_JSONL=${OUT_DIR}/step2b_rarity_raw.jsonl
+PROXY_MAP_JSONL=${OUT_DIR}/step2c_proxy_map.jsonl
 ATTR_JSONL=${OUT_DIR}/step3_attribution_raw.jsonl
 FINAL_JSONL=${OUT_DIR}/dualcf_${FORGET_SPLIT}_v2.jsonl
 
@@ -222,10 +232,21 @@ python "${repo_root}/src/tools/score_difficulty.py" \
   --w-stability "${W_STABILITY}" \
   --stability-mode "${STABILITY_MODE}"
 
+python "${repo_root}/src/tools/score_rarity.py" \
+  --input-path "${DIFF_JSONL}" \
+  --output-path "${RARITY_JSONL}" \
+  --popularity-column pop_sum \
+  --q-low "${RARITY_Q_LOW}" \
+  --q-high "${RARITY_Q_HIGH}" \
+  --reference-dataset-path "${RARITY_REFERENCE_DATASET_PATH}" \
+  --reference-dataset-name "${RARITY_REFERENCE_DATASET_NAME}" \
+  --reference-splits "${rarity_reference_splits[@]}" \
+  --sidecar-path "${OUT_DIR}/step2b_rarity_stats.json"
+
 python "${repo_root}/src/tools/build_proxy_retain_map.py" \
   --forget-dataset-path json \
   --forget-split train \
-  --forget-data-files "${DIFF_JSONL}" \
+  --forget-data-files "${RARITY_JSONL}" \
   --retain-dataset-path "${DATASET_PATH}" \
   --retain-dataset-name "${RETAIN_SPLIT}" \
   --retain-split test \
@@ -242,7 +263,7 @@ python "${repo_root}/src/tools/score_attribution.py" \
   --tokenizer-path "${BASE_MODEL_PATH}" \
   --forget-dataset-path json \
   --forget-split train \
-  --forget-data-files "${DIFF_JSONL}" \
+  --forget-data-files "${RARITY_JSONL}" \
   --retain-dataset-path "${DATASET_PATH}" \
   --retain-dataset-name "${RETAIN_SPLIT}" \
   --retain-split test \

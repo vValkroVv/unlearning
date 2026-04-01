@@ -93,6 +93,9 @@ export RISK_FORGET_SCALES="${RISK_FORGET_SCALES:-0.5}"
 export LAMBDA_RET_HIS="${LAMBDA_RET_HIS:-3.0}"
 export ALPHA_EFF_STATS="${ALPHA_EFF_STATS:-topk_mean}"
 export ALPHA_EFF_TOPK_FRACS="${ALPHA_EFF_TOPK_FRACS:-0.25}"
+export RARITY_NEG_GAINS="${RARITY_NEG_GAINS:-0.0}"
+export RARITY_CF_GAINS="${RARITY_CF_GAINS:-0.0}"
+export DISABLE_RARITY_ROUTES="${DISABLE_RARITY_ROUTES:-false}"
 
 export GENERATOR_CONCURRENCY=${GENERATOR_CONCURRENCY:-4}
 export GENERATOR_BATCH_SIZE=${GENERATOR_BATCH_SIZE:-8}
@@ -318,9 +321,21 @@ Then rerun the same four commands above for:
 The scoring stages use:
 
 - `DIFFICULTY_BATCH_SIZE` for `score_difficulty.py`
+- `RARITY_Q_LOW` / `RARITY_Q_HIGH` for `score_rarity.py`
 - `ATTR_RETAIN_BATCH_SIZE` for `score_attribution.py`
 - `ATTR_RETAIN_MAX_STEPS` / `ATTR_FORGET_MAX_STEPS` only for bounded local
   validation; leave both at `0` for production artifacts
+
+DUET prep now defaults `W_POP=0.0` and inserts `score_rarity.py` between
+difficulty and attribution. The DUET rarity reference defaults to
+`city_forget_rare_5 city_forget_popular_5`, and the RWKU rarity reference
+defaults to `forget_level2:test`.
+
+Shared DUET/RWKU launchers now also accept:
+
+- `RARITY_NEG_GAINS`
+- `RARITY_CF_GAINS`
+- `DISABLE_RARITY_ROUTES`
 
 ## DUET training
 

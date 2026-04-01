@@ -3,6 +3,68 @@
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
 
+## DualCF v2.6 rarity routing patch (2026-03-31)
+
+This update adds an explicit popularity-derived rarity controller to the
+existing DualCF routing surface without moving any offline scoring into
+`compute_loss()`.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/dual_cf.py`
+- `src/data/qa.py`
+- `configs/trainer/DualCF.yaml`
+- `configs/data/datasets/DUET_QA_forget_dual_cf.yaml`
+- `configs/data/datasets/POPQA_QA_forget_dual_cf.yaml`
+- `configs/data/datasets/RWKU_QA_forget_dual_cf.yaml`
+- `configs/data/datasets/DUET_QA_forget_multicf.yaml`
+- `configs/data/datasets/RWKU_QA_forget_multicf.yaml`
+- `configs/data/datasets/DUET_QA_forget_boundary_cf.yaml`
+- `configs/data/datasets/RWKU_QA_forget_boundary_cf.yaml`
+- `configs/data/datasets/DUET_QA_forget_span_local_retain.yaml`
+- `configs/data/datasets/RWKU_QA_forget_span_local_retain.yaml`
+- `src/tools/score_rarity.py`
+- `src/tools/validate_dual_cf_artifact.py`
+- `scripts/duet/prepare_dual_cf_duet_v2.sh`
+- `scripts/rwku/prepare_dual_cf_rwku_v2.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+
+Behavior change summary:
+
+- offline prep now runs `score_difficulty.py -> score_rarity.py ->
+  score_attribution.py -> calibrate_dual_cf_scores.py`
+- DUET prep defaults `W_POP=0.0` so popularity is removed from difficulty when
+  the explicit rarity route is enabled
+- `score_rarity.py` computes `rarity_score` from `log1p(pop_sum)` using clipped
+  quantile normalization against a reference population
+- `score_rarity.py` no longer reuses the primary artifact `data_files` when the
+  reference population comes from a different HF/local dataset source, which
+  avoids schema-cast failures during DUET and RWKU rarity prep
+- DUET defaults the rarity reference to the union of
+  `city_forget_rare_5 city_forget_popular_5`; RWKU defaults to
+  `forget_level2:test`
+- `DualCF` now reads optional `rarity_score` and applies it only on the forget
+  branch:
+  - `lambda_neg = lambda_neg_base * (1 + rarity_neg_gain * rarity)`
+  - `cf_weight_eff = cf_weight * (1 - rarity_cf_gain * rarity)`
+- route-disable ablations are now truly neutral in the base router:
+  - `disable_difficulty_route=true` forces `difficulty_gate = 1.0`
+  - `disable_attribution_route=true` forces `risk_gate = 0.0`
+- forget dataset configs now request `rarity_score` through
+  `optional_metadata_keys`, so older artifacts still fall back to `0.0`
+- `SpanCF` and the boundary/local-retain variants inherit this automatically
+  through the shared DualCF base router
+- shared DUET/RWKU launchers now expose:
+  - `RARITY_NEG_GAINS`
+  - `RARITY_CF_GAINS`
+  - `DISABLE_RARITY_ROUTES`
+- compact DUET/RWKU run names now keep `rn*` / `rc*` visible and treat
+  `_seed*` as part of the real length budget before hashing, so rarity ablations
+  and per-seed runs stay readable even when the launcher shortens long names
+- validation keeps `rarity_score` optional for backward compatibility, but
+  strict mode checks `rarity_score` and `rarity_score_raw` are in `[0,1]`
+
 ## What was added
 
 DualCF is integrated as a new routed unlearning method that keeps the repo's
@@ -114,6 +176,9 @@ New `DualCF(GradDiff)` trainer:
   - `lambda_neg = lambda_neg_max * s * (1 - r)`
   - `forget_scale = 1 - (1 - risk_forget_scale) * r`
   - `alpha_eff = alpha * (lambda_ret_lo + (lambda_ret_hi - lambda_ret_lo) * r.mean())`
+- ablation flags are exact neutralizers, not near-off sigmoids:
+  - `disable_difficulty_route=true` sets `s = 1`
+  - `disable_attribution_route=true` sets `r = 0`
 - logs `dualcf_*` diagnostics for smoke tests and sweeps.
 
 Important repo-fit constraint:
@@ -132,6 +197,7 @@ Important repo-fit constraint:
     "alternate": tokenized_alternate,
     "difficulty_score": float(...),
     "attribution_score": float(...),
+    "rarity_score": float(...),  # optional; defaults to 0.0 for older artifacts
     "index": int(...),
 }
 ```
@@ -153,7 +219,8 @@ The expected forget-side artifact row is:
   "answer": "...",
   "alternate": "...",
   "difficulty_score": 0.73,
-  "attribution_score": 0.18
+  "attribution_score": 0.18,
+  "rarity_score": 0.64
 }
 ```
 

@@ -115,7 +115,7 @@ LORA_MODEL_CFG=${LORA_MODEL_CFG:-configs/model/Llama-3.1-8B-Instruct-lora.yaml}
 SFT_MODEL_PATH=${SFT_MODEL_PATH:-SwetieePawsss/DUET_ft_models}
 SFT_SUBFOLDER=${SFT_SUBFOLDER-llama-3.1-8b-instruct-tripunlamb-ft}
 
-W_POP=${W_POP:-1.0}
+W_POP=${W_POP:-0.0}
 W_CONF=${W_CONF:-1.0}
 W_STAGE=${W_STAGE:-1.0}
 W_STABILITY=${W_STABILITY:-0.0}
@@ -123,12 +123,22 @@ STABILITY_MODE=${STABILITY_MODE:-none}
 STAGE_COLUMN=${STAGE_COLUMN:-}
 STAGE_MAP_JSON=${STAGE_MAP_JSON:-}
 HYBRID_RHO=${HYBRID_RHO:-0.7}
+RARITY_Q_LOW=${RARITY_Q_LOW:-0.05}
+RARITY_Q_HIGH=${RARITY_Q_HIGH:-0.95}
+RARITY_REFERENCE_DATASET_PATH=${RARITY_REFERENCE_DATASET_PATH:-${DATASET_PATH}}
+RARITY_REFERENCE_DATASET_NAME=${RARITY_REFERENCE_DATASET_NAME:-}
+raw_rarity_reference_splits="${RARITY_REFERENCE_SPLITS:-city_forget_rare_5 city_forget_popular_5}"
+raw_rarity_reference_splits="${raw_rarity_reference_splits//,/ }"
+raw_rarity_reference_splits="${raw_rarity_reference_splits//\"/}"
+raw_rarity_reference_splits="${raw_rarity_reference_splits//\'/}"
+read -r -a rarity_reference_splits <<< "${raw_rarity_reference_splits}"
 
 CANDIDATE_BANK_JSONL=${OUT_DIR}/step0_candidate_bank.jsonl
 RAW_CF=${OUT_DIR}/step1_counterfactuals_raw.jsonl
 CLEAN_CF=${OUT_DIR}/step1b_counterfactuals_clean.jsonl
 DIFF_JSONL=${OUT_DIR}/step2_difficulty_raw.jsonl
-PROXY_MAP_JSONL=${OUT_DIR}/step2b_proxy_map.jsonl
+RARITY_JSONL=${OUT_DIR}/step2b_rarity_raw.jsonl
+PROXY_MAP_JSONL=${OUT_DIR}/step2c_proxy_map.jsonl
 ATTR_JSONL=${OUT_DIR}/step3_attribution_raw.jsonl
 FINAL_JSONL=${OUT_DIR}/dualcf_${FORGET_LABEL}_v2.jsonl
 
@@ -237,10 +247,21 @@ python "${repo_root}/src/tools/score_difficulty.py" \
   --stability-mode "${STABILITY_MODE}" \
   "${diff_extra_args[@]}"
 
+python "${repo_root}/src/tools/score_rarity.py" \
+  --input-path "${DIFF_JSONL}" \
+  --output-path "${RARITY_JSONL}" \
+  --popularity-column pop_sum \
+  --q-low "${RARITY_Q_LOW}" \
+  --q-high "${RARITY_Q_HIGH}" \
+  --reference-dataset-path "${RARITY_REFERENCE_DATASET_PATH}" \
+  --reference-dataset-name "${RARITY_REFERENCE_DATASET_NAME}" \
+  --reference-splits "${rarity_reference_splits[@]}" \
+  --sidecar-path "${OUT_DIR}/step2b_rarity_stats.json"
+
 python "${repo_root}/src/tools/build_proxy_retain_map.py" \
   --forget-dataset-path json \
   --forget-split train \
-  --forget-data-files "${DIFF_JSONL}" \
+  --forget-data-files "${RARITY_JSONL}" \
   --retain-dataset-path "${DATASET_PATH}" \
   --retain-split "${RETAIN_SPLIT}" \
   --output-path "${PROXY_MAP_JSONL}" \
@@ -258,7 +279,7 @@ python "${repo_root}/src/tools/score_attribution.py" \
   --tokenizer-subfolder "${SFT_SUBFOLDER}" \
   --forget-dataset-path json \
   --forget-split train \
-  --forget-data-files "${DIFF_JSONL}" \
+  --forget-data-files "${RARITY_JSONL}" \
   --retain-dataset-path "${DATASET_PATH}" \
   --retain-split "${RETAIN_SPLIT}" \
   --output-path "${ATTR_JSONL}" \

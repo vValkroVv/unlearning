@@ -13,6 +13,8 @@ DUET_QA_forget_span_local_retain:
       - attribution_score
       - boundary_score
       - index
+    optional_metadata_keys:
+      - rarity_score
     local_retain_question_key: "local_retain_question"
     local_retain_answer_key: "local_retain_answer"
     local_retain_index_key: "local_retain_index"

@@ -64,6 +64,9 @@ export LAMBDA_RET_HIS=3.0
 export ALPHA_EFF_STATS=topk_mean
 export ALPHA_EFF_TOPK_FRACS=0.25
 export RISK_FORGET_SCALES=0.5
+export RARITY_NEG_GAINS="${RARITY_NEG_GAINS:-0.0}"
+export RARITY_CF_GAINS="${RARITY_CF_GAINS:-0.0}"
+export DISABLE_RARITY_ROUTES="${DISABLE_RARITY_ROUTES:-false}"
 
 # ablation LR shortlist
 export LRS="${LRS:-5e-6 1e-5 5e-5 1e-4}"
@@ -285,6 +288,7 @@ export DIFFICULTY_BATCH_SIZE=${DIFFICULTY_BATCH_SIZE:-64}
 export ATTR_RETAIN_BATCH_SIZE=${ATTR_RETAIN_BATCH_SIZE:-8}
 export ATTR_RETAIN_MAX_STEPS=${ATTR_RETAIN_MAX_STEPS:-0}
 export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
+export W_POP=${W_POP:-0.0}
 unset STOP_AFTER_CLEAN_CF
 export SKIP_CF_GENERATION=1
 export DROP_INVALID_AFTER_CLEAN=1
@@ -299,8 +303,13 @@ done
 Single-shell form used on the H100 box:
 
 ```bash
-source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset STOP_AFTER_CLEAN_CF && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v2; bash scripts/duet/prepare_dual_cf_duet_v2.sh; done
+source /data/home/vkropoti/unlearning-venv/bin/activate && cd /home/vkropoti/diploma/open-unlearning && export CUDA_VISIBLE_DEVICES=1 HF_HOME=/data/home/vkropoti/unlearning/.hf_home HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1 CUDA_DEVICE_ORDER=PCI_BUS_ID MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft SFT_MODEL_PATH=SwetieePawsss/DUET_ft_models SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET DIFFICULTY_BATCH_SIZE=64 ATTR_RETAIN_BATCH_SIZE=8 ATTR_RETAIN_MAX_STEPS=0 ATTR_FORGET_MAX_STEPS=0 W_POP=0.0 SKIP_CF_GENERATION=1 DROP_INVALID_AFTER_CLEAN=1 && unset FORGET_SPLIT && unset RETAIN_SPLIT && unset RWKU_DATASET_PATH_LOCAL && unset DATASET_PATH && unset STOP_AFTER_CLEAN_CF && for FORGET_LABEL in rare popular merged; do export FORGET_LABEL OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/duet/${FORGET_LABEL}_llama31_8b_v2; bash scripts/duet/prepare_dual_cf_duet_v2.sh; done
 ```
+
+Phase B now inserts `score_rarity.py` between difficulty and attribution.
+`scripts/duet/prepare_dual_cf_duet_v2.sh` defaults the rarity reference to the
+union `city_forget_rare_5 city_forget_popular_5`, so merged and split-specific
+DUET artifacts stay on the same absolute rarity scale.
 
 ### DUET vLLM Repair Notes
 
@@ -326,6 +335,8 @@ What we used to keep DUET vLLM generations clean:
    use:
    - `SKIP_CF_GENERATION=1`
    - `REBUILD_CLEAN_CF=1`
+6. Phase B now writes `step2b_rarity_raw.jsonl` before proxy-map / attribution
+   scoring, and `W_POP=0.0` keeps popularity out of `difficulty_score`.
 
 ### 3. RWKU Phase A
 
@@ -747,30 +758,136 @@ The remaining Span variants resolve to the base DualCF v2 artifacts.
 Interpret `boundary_cf` DUET-popular results carefully: the current artifact is
 mostly fallback hard negatives there, not true lexical near-miss boundaries.
 
-### Utility preserving rare new
+### Next rarity-routing plan
 
-These three rare-only commands assume the rebuilt rare rerank has already been
-written into the repo-local DualCF artifact path:
-`/home/vkropoti/diploma/open-unlearning/dualcf/duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl`.
+This is the next planned H100-box sequence for the v2.6 rarity-routing patch.
+It rebuilds the offline DUET and RWKU artifacts from the current base DualCF
+artifacts with `SKIP_CF_GENERATION=1`, then runs the first DUET-rare-only
+rarity ablations.
 
-Use `duet_rare`, not `all`, so popular, merged, and RWKU remain untouched.
+Use `duet_rare`, not `all`, so popular, merged, and RWKU remain untouched
+during the first training pass.
+
+#### 1. DUET build
 
 ```bash
-# 1) SpanCF S4 with reranked rare artifact
-GPU_ID=5
+source /data/home/vkropoti/unlearning-venv/bin/activate
+cd /home/vkropoti/diploma/open-unlearning
 
+export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
+export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
+export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+export CUDA_VISIBLE_DEVICES=0
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export DUET_LOCAL_SFT_BASE=SwetieePawsss/DUET_ft_models
+export DUET_SFT_SUBFOLDER=llama-3.1-8b-instruct-tripunlamb-ft
+export SFT_MODEL_PATH=${DUET_LOCAL_SFT_BASE}
+export SFT_SUBFOLDER=${DUET_SFT_SUBFOLDER}
+export DUET_DATASET_PATH_LOCAL=SwetieePawsss/DUET
+
+export DIFFICULTY_BATCH_SIZE=64
+export ATTR_RETAIN_BATCH_SIZE=8
+export ATTR_RETAIN_MAX_STEPS=0
+export ATTR_FORGET_MAX_STEPS=0
+
+export W_POP=0.0
+export SKIP_CF_GENERATION=1
+export DROP_INVALID_AFTER_CLEAN=1
+unset STOP_AFTER_CLEAN_CF
+unset FORGET_SPLIT
+unset RETAIN_SPLIT
+unset RWKU_DATASET_PATH_LOCAL
+unset DATASET_PATH
+
+export ARTIFACT_ROOT=/data/home/vkropoti/unlearning/artifacts/dualcf
+
+for FORGET_LABEL in rare popular merged; do
+  export FORGET_LABEL
+  export OUT_DIR="${ARTIFACT_ROOT}/duet/${FORGET_LABEL}_llama31_8b_v2"
+  bash scripts/duet/prepare_dual_cf_duet_v2.sh
+done
+```
+
+#### 2. RWKU build
+
+```bash
+source /data/home/vkropoti/unlearning-venv/bin/activate
+cd /home/vkropoti/diploma/open-unlearning
+
+export HF_HOME=/data/home/vkropoti/unlearning/.hf_home
+export HF_DATASETS_CACHE=/data/home/vkropoti/unlearning/.hf_datasets_cache
+export TRITON_CACHE_DIR=/data/home/vkropoti/unlearning/.triton
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+export CUDA_VISIBLE_DEVICES=1
+export MODEL_CFG=configs/model/Llama-3.1-8B-Instruct.yaml
+export LORA_MODEL_CFG=configs/model/Llama-3.1-8B-Instruct-lora.yaml
+export HF_BASE_MODEL_PATH=/data/home/vkropoti/unlearning/models/BASE/Llama-3.1-8B-Instruct
+export BASE_MODEL_PATH=${HF_BASE_MODEL_PATH}
+
+export FORGET_SPLIT=forget_level2
+export RETAIN_SPLIT=neighbor_level2
+export OUT_DIR=/data/home/vkropoti/unlearning/artifacts/dualcf/rwku/llama31_8b_level2_v2
+
+export SKIP_CF_GENERATION=1
+export DROP_INVALID_AFTER_CLEAN=1
+export DIFFICULTY_BATCH_SIZE=64
+export ATTR_RETAIN_BATCH_SIZE=8
+export ATTR_RETAIN_MAX_STEPS=0
+export ATTR_FORGET_MAX_STEPS=0
+unset STOP_AFTER_CLEAN_CF
+
+bash scripts/rwku/prepare_dual_cf_rwku_v2.sh
+```
+
+#### 3. DUET rare runs
+
+The last two span commands inherit `DISABLE_RARITY_ROUTES=false` from the
+common setup block unless it is overridden in the shell.
+
+```bash
+GPU_ID=0
 SEEDS="42 179 1137" \
-METHOD_VARIANTS="span_cf" \
-SPAN_MODE=lcs \
-SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
-SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
-SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.0 \
-SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+METHOD_VARIANTS="full" \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+DISABLE_RARITY_ROUTES="false" \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 
-# 2) SpanCF with softer original-branch pressure on the same reranked rare artifact
-GPU_ID=5
+GPU_ID=1
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="full" \
+RARITY_NEG_GAINS="0.5" \
+RARITY_CF_GAINS="0.0" \
+DISABLE_RARITY_ROUTES="false" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 
+GPU_ID=2
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="full" \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.5" \
+DISABLE_RARITY_ROUTES="false" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+
+GPU_ID=3
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="full" \
+RARITY_NEG_GAINS="0.5" \
+RARITY_CF_GAINS="0.5" \
+DISABLE_RARITY_ROUTES="false" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+
+GPU_ID=0
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf" \
 SPAN_MODE=lcs \
@@ -778,11 +895,11 @@ SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
 SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
 SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.25 \
 SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=0.75 \
+RARITY_NEG_GAINS="0.5" \
+RARITY_CF_GAINS="0.5" \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 
-# 3) Projected SpanCF variant after the artifact rerank + softer original weights
-GPU_ID=5
-
+GPU_ID=1
 SEEDS="42 179 1137" \
 METHOD_VARIANTS="span_cf_simnpo_projected" \
 SPAN_MODE=lcs \
@@ -792,5 +909,7 @@ SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.25 \
 SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=0.75 \
 SPAN_SIMNPO_DELTA=0.0 \
 SPAN_PROJECTION_COS_THRESHOLD=0.0 \
+RARITY_NEG_GAINS="0.5" \
+RARITY_CF_GAINS="0.5" \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 ```

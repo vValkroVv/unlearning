@@ -135,19 +135,42 @@ compact_task_name_if_needed() {
     local lr_tag="$6"
     local compact_hash_input="$7"
     local method_suffix="$8"
-    local difficulty_tag="$9"
-    local attribution_tag="${10}"
-    local run_tag_extra="${11:-}"
+    local rarity_neg_tag="$9"
+    local rarity_cf_tag="${10}"
+    local difficulty_tag="${11}"
+    local attribution_tag="${12}"
+    local rarity_tag="${13}"
+    local run_tag_extra="${14:-}"
     local max_len="${MAX_TASK_NAME_LEN:-220}"
+    local final_task_name="${task_name}"
+    if [[ -n "${run_tag_extra}" ]]; then
+        final_task_name="${final_task_name}_${run_tag_extra}"
+    fi
 
-    if [[ ${#task_name} -le ${max_len} ]]; then
-        printf '%s\n' "${task_name}"
+    if [[ ${#final_task_name} -le ${max_len} ]]; then
+        printf '%s\n' "${final_task_name}"
         return
     fi
 
     local config_hash
     config_hash=$(hash_text "${compact_hash_input}")
-    local compact_name="${task_prefix}_lora_r${lora_r_tag}_la${lora_alpha_tag}_ld${dropout_compact_tag}_lr${lr_tag}_cfg${config_hash}${method_suffix}_${difficulty_tag}_${attribution_tag}"
+    local compact_prefix="${task_prefix}_lora_r${lora_r_tag}_la${lora_alpha_tag}_ld${dropout_compact_tag}_lr${lr_tag}_rn${rarity_neg_tag}_rc${rarity_cf_tag}_cfg${config_hash}"
+    local compact_name="${compact_prefix}${method_suffix}_${difficulty_tag}_${attribution_tag}_${rarity_tag}"
+    if [[ -n "${run_tag_extra}" ]]; then
+        compact_name="${compact_name}_${run_tag_extra}"
+    fi
+    if [[ ${#compact_name} -le ${max_len} ]]; then
+        printf '%s\n' "${compact_name}"
+        return
+    fi
+
+    if [[ -n "${method_suffix}" ]]; then
+        local method_hash
+        method_hash=$(hash_text "${method_suffix}")
+        compact_name="${compact_prefix}_ms${method_hash}_${difficulty_tag}_${attribution_tag}_${rarity_tag}"
+    else
+        compact_name="${compact_prefix}_${difficulty_tag}_${attribution_tag}_${rarity_tag}"
+    fi
     if [[ -n "${run_tag_extra}" ]]; then
         compact_name="${compact_name}_${run_tag_extra}"
     fi
@@ -249,6 +272,18 @@ raw_neg_powers="${NEG_POWERS:-1.0}"
 raw_neg_powers="${raw_neg_powers//,/ }"; raw_neg_powers="${raw_neg_powers//\"/}"; raw_neg_powers="${raw_neg_powers//\'/}"
 read -r -a neg_powers <<< "${raw_neg_powers}"
 
+raw_rarity_neg_gains="${RARITY_NEG_GAINS:-0.0}"
+raw_rarity_neg_gains="${raw_rarity_neg_gains//,/ }"; raw_rarity_neg_gains="${raw_rarity_neg_gains//\"/}"; raw_rarity_neg_gains="${raw_rarity_neg_gains//\'/}"
+read -r -a rarity_neg_gains <<< "${raw_rarity_neg_gains}"
+
+raw_rarity_cf_gains="${RARITY_CF_GAINS:-0.0}"
+raw_rarity_cf_gains="${raw_rarity_cf_gains//,/ }"; raw_rarity_cf_gains="${raw_rarity_cf_gains//\"/}"; raw_rarity_cf_gains="${raw_rarity_cf_gains//\'/}"
+read -r -a rarity_cf_gains <<< "${raw_rarity_cf_gains}"
+
+raw_disable_rarity_routes="${DISABLE_RARITY_ROUTES:-false}"
+raw_disable_rarity_routes="${raw_disable_rarity_routes//,/ }"; raw_disable_rarity_routes="${raw_disable_rarity_routes//\"/}"; raw_disable_rarity_routes="${raw_disable_rarity_routes//\'/}"
+read -r -a disable_rarity_routes <<< "${raw_disable_rarity_routes}"
+
 multicf_max_alternates_used="${MULTICF_MAX_ALTERNATES_USED:-4}"
 multicf_alt_agg_mode="${MULTICF_ALT_AGG_MODE:-weighted_mean}"
 multicf_alt_weight_mode="${MULTICF_ALT_WEIGHT_MODE:-rerank}"
@@ -310,20 +345,29 @@ for lr in "${lrs[@]}"; do
                                                                         for alpha_eff_topk_frac in "${alpha_eff_topk_fracs[@]}"; do
                                                                             for risk_power in "${risk_powers[@]}"; do
                                                                                 for neg_power in "${neg_powers[@]}"; do
-                                                                                    for lora_r in "${lora_rs[@]}"; do
-                                                                                        for lora_alpha in "${lora_alphas[@]}"; do
-                                                                                            for lora_dropout in "${lora_dropouts[@]}"; do
+                                                                                    for rarity_neg_gain in "${rarity_neg_gains[@]}"; do
+                                                                                        for rarity_cf_gain in "${rarity_cf_gains[@]}"; do
+                                                                                            for disable_rarity_route in "${disable_rarity_routes[@]}"; do
+                                                                                                for lora_r in "${lora_rs[@]}"; do
+                                                                                                    for lora_alpha in "${lora_alphas[@]}"; do
+                                                                                                        for lora_dropout in "${lora_dropouts[@]}"; do
                                                                                                 dropout_tag=${lora_dropout//./p}
                                                                                                 alpha_eff_topk_tag=${alpha_eff_topk_frac//./p}
                                                                                                 risk_power_tag=${risk_power//./p}
                                                                                                 neg_power_tag=${neg_power//./p}
+                                                                                                rarity_neg_tag=${rarity_neg_gain//./p}
+                                                                                                rarity_cf_tag=${rarity_cf_gain//./p}
                                                                                                 difficulty_tag="dOn"
                                                                                                 attribution_tag="aOn"
+                                                                                                rarity_tag="uOn"
                                                                                                 if [[ "${disable_difficulty_route}" == "true" ]]; then
                                                                                                     difficulty_tag="dOff"
                                                                                                 fi
                                                                                                 if [[ "${disable_attribution_route}" == "true" ]]; then
                                                                                                     attribution_tag="aOff"
+                                                                                                fi
+                                                                                                if [[ "${disable_rarity_route}" == "true" ]]; then
+                                                                                                    rarity_tag="uOff"
                                                                                                 fi
 
                                                                                                 method_suffix=""
@@ -364,10 +408,10 @@ for lr in "${lrs[@]}"; do
                                                                                                 fi
 
                                                                                                 task_prefix=rwku_${base_model}_${forget_split}_${method_name}
-                                                                                                shared_name_suffix=_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}
+                                                                                                shared_name_suffix=_beta${beta_tag}_alpha${alpha_tag}_gamma${gamma_tag}_td${tau_d_tag}_ta${tau_a_tag}_sd${temp_d_tag}_sa${temp_a_tag}_ln${lambda_neg_tag}_rlo${lambda_ret_lo_tag}_rhi${lambda_ret_hi_tag}_cf${cf_weight_tag}_rf${risk_forget_tag}_ae${alpha_eff_stat}_atk${alpha_eff_topk_tag}_rp${risk_power_tag}_np${neg_power_tag}_rn${rarity_neg_tag}_rc${rarity_cf_tag}
                                                                                                 compact_hash_input=${shared_name_suffix}_trainer${trainer}_experiment${experiment}
-                                                                                                task_name_full=${task_prefix}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}${shared_name_suffix}${method_suffix}_${difficulty_tag}_${attribution_tag}
-                                                                                                task_name=$(compact_task_name_if_needed "${task_name_full}" "${task_prefix}" "${lora_r}" "${lora_alpha}" "${dropout_tag}" "${lr}" "${compact_hash_input}" "${method_suffix}" "${difficulty_tag}" "${attribution_tag}" "${run_tag_extra}")
+                                                                                                task_name_full=${task_prefix}_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}${shared_name_suffix}${method_suffix}_${difficulty_tag}_${attribution_tag}_${rarity_tag}
+                                                                                                task_name=$(compact_task_name_if_needed "${task_name_full}" "${task_prefix}" "${lora_r}" "${lora_alpha}" "${dropout_tag}" "${lr}" "${compact_hash_input}" "${method_suffix}" "${rarity_neg_tag}" "${rarity_cf_tag}" "${difficulty_tag}" "${attribution_tag}" "${rarity_tag}" "${run_tag_extra}")
                                                                                                 if [[ "${task_name}" != "${task_name_full}" ]]; then
                                                                                                     echo "[rwku][${run_label}] Compacting task name for filesystem safety:"
                                                                                                     echo "  full=${task_name_full}"
@@ -436,6 +480,9 @@ for lr in "${lrs[@]}"; do
                                                                                                             trainer.method_args.normalize_neg_by_tokens=${normalize_neg}
                                                                                                             trainer.method_args.disable_difficulty_route=${disable_difficulty_route}
                                                                                                             trainer.method_args.disable_attribution_route=${disable_attribution_route}
+                                                                                                            trainer.method_args.rarity_neg_gain=${rarity_neg_gain}
+                                                                                                            trainer.method_args.rarity_cf_gain=${rarity_cf_gain}
+                                                                                                            trainer.method_args.disable_rarity_route=${disable_rarity_route}
                                                                                                             trainer.method_args.alpha_eff_stat=${alpha_eff_stat}
                                                                                                             trainer.method_args.alpha_eff_topk_frac=${alpha_eff_topk_frac}
                                                                                                             trainer.method_args.risk_power=${risk_power}
@@ -572,6 +619,9 @@ for lr in "${lrs[@]}"; do
                                                                                                         echo "[rwku][${run_label}] Removed safetensors from ${run_dir}"
                                                                                                     fi
                                                                                                 fi
+                                                                                                        done
+                                                                                                    done
+                                                                                                done
                                                                                             done
                                                                                         done
                                                                                     done

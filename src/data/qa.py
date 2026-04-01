@@ -142,8 +142,9 @@ class QAwithAlternateDataset(QADataset):
 
 
 class QAwithAlternateMetadataDataset(QAwithAlternateDataset):
-    def __init__(self, metadata_keys=None, *args, **kwargs):
+    def __init__(self, metadata_keys=None, optional_metadata_keys=None, *args, **kwargs):
         self.metadata_keys = list(metadata_keys or [])
+        self.optional_metadata_keys = list(optional_metadata_keys or [])
         super().__init__(*args, **kwargs)
         if self.metadata_keys and not self.return_original:
             raise ValueError(
@@ -160,7 +161,7 @@ class QAwithAlternateMetadataDataset(QAwithAlternateDataset):
 
     def __getitem__(self, idx):
         item = super().__getitem__(idx)
-        if not self.metadata_keys:
+        if not self.metadata_keys and not self.optional_metadata_keys:
             return item
 
         row = self.data[idx]
@@ -170,6 +171,13 @@ class QAwithAlternateMetadataDataset(QAwithAlternateDataset):
                     f"Metadata key `{key}` is missing from dataset row {idx}."
                 )
             item[key] = self._coerce_metadata_value(key=key, value=row[key])
+        for key in self.optional_metadata_keys:
+            if key in item:
+                continue
+            if key in row:
+                item[key] = self._coerce_metadata_value(key=key, value=row[key])
+            else:
+                item[key] = 0.0
         return item
 
 
@@ -210,6 +218,7 @@ class QAMultiCFDataset(QADataset):
         alternate_set_key="alternate_set",
         alternate_weights_key="alternate_set_weights",
         metadata_keys=None,
+        optional_metadata_keys=None,
         return_original=True,
         max_alternates=0,
         normalize_alternate_weights=True,
@@ -220,6 +229,7 @@ class QAMultiCFDataset(QADataset):
         self.alternate_set_key = alternate_set_key
         self.alternate_weights_key = alternate_weights_key
         self.metadata_keys = list(metadata_keys or [])
+        self.optional_metadata_keys = list(optional_metadata_keys or [])
         self.return_original = bool(return_original)
         self.max_alternates = int(max_alternates)
         self.normalize_alternate_weights = bool(normalize_alternate_weights)
@@ -307,6 +317,13 @@ class QAMultiCFDataset(QADataset):
                     f"Metadata key `{key}` is missing from dataset row {idx}."
                 )
             item[key] = self._coerce_metadata_value(key=key, value=row[key])
+        for key in self.optional_metadata_keys:
+            if key in item:
+                continue
+            if key in row:
+                item[key] = self._coerce_metadata_value(key=key, value=row[key])
+            else:
+                item[key] = 0.0
         return item
 
 

@@ -25,6 +25,9 @@ class DualCF(GradDiff):
         normalize_neg_by_tokens=True,
         disable_difficulty_route=False,
         disable_attribution_route=False,
+        rarity_neg_gain=0.0,
+        rarity_cf_gain=0.0,
+        disable_rarity_route=False,
         alpha_eff_stat="topk_mean",
         alpha_eff_topk_frac=0.25,
         risk_power=1.0,
@@ -47,6 +50,9 @@ class DualCF(GradDiff):
         self.normalize_neg_by_tokens = bool(normalize_neg_by_tokens)
         self.disable_difficulty_route = bool(disable_difficulty_route)
         self.disable_attribution_route = bool(disable_attribution_route)
+        self.rarity_neg_gain = float(rarity_neg_gain)
+        self.rarity_cf_gain = float(rarity_cf_gain)
+        self.disable_rarity_route = bool(disable_rarity_route)
         self.alpha_eff_stat = str(alpha_eff_stat)
         self.alpha_eff_topk_frac = float(alpha_eff_topk_frac)
         self.risk_power = float(risk_power)
@@ -138,18 +144,30 @@ class DualCF(GradDiff):
         attribution = self._score_tensor(
             forget_inputs, "attribution_score", device=device, batch_size=batch_size
         )
+        rarity = self._optional_score_tensor(
+            forget_inputs, "rarity_score", device=device, batch_size=batch_size
+        )
+        if rarity is None or self.disable_rarity_route:
+            rarity = torch.zeros_like(difficulty)
+        else:
+            rarity = rarity.clamp(0.0, 1.0)
 
         if self.disable_difficulty_route:
-            difficulty = torch.zeros_like(difficulty)
+            difficulty_gate = torch.ones_like(difficulty)
+        else:
+            difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
+            difficulty_gate = difficulty_gate.pow(self.neg_power)
+
         if self.disable_attribution_route:
-            attribution = torch.zeros_like(attribution)
+            risk_gate = torch.zeros_like(attribution)
+        else:
+            risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
+            risk_gate = risk_gate.pow(self.risk_power)
 
-        difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
-        risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
-        difficulty_gate = difficulty_gate.pow(self.neg_power)
-        risk_gate = risk_gate.pow(self.risk_power)
-
-        lambda_neg = self.lambda_neg_max * difficulty_gate * (1.0 - risk_gate)
+        lambda_neg_base = self.lambda_neg_max * difficulty_gate * (1.0 - risk_gate)
+        lambda_neg = lambda_neg_base * (1.0 + self.rarity_neg_gain * rarity)
+        cf_weight_eff = self.cf_weight * (1.0 - self.rarity_cf_gain * rarity)
+        cf_weight_eff = cf_weight_eff.clamp_min(0.0)
         forget_scale = 1.0 - (1.0 - self.risk_forget_scale) * risk_gate
 
         risk_batch = self._summarize_risk(risk_gate)
@@ -161,9 +179,12 @@ class DualCF(GradDiff):
         return {
             "difficulty": difficulty,
             "attribution": attribution,
+            "rarity": rarity,
             "difficulty_gate": difficulty_gate,
             "risk_gate": risk_gate,
+            "lambda_neg_base": lambda_neg_base,
             "lambda_neg": lambda_neg,
+            "cf_weight_eff": cf_weight_eff,
             "forget_scale": forget_scale,
             "risk_batch": risk_batch,
             "lambda_ret_batch": lambda_ret_batch,
@@ -192,7 +213,8 @@ class DualCF(GradDiff):
         forget_inputs,
     ) -> dict:
         del forget_inputs
-        per_sample_cf_loss = routing["forget_scale"] * (self.cf_weight * cf_vec)
+        cf_weight_eff = routing.get("cf_weight_eff", self.cf_weight)
+        per_sample_cf_loss = routing["forget_scale"] * (cf_weight_eff * cf_vec)
         per_sample_neg_loss = routing["forget_scale"] * (
             routing["lambda_neg"] * neg_vec
         )
@@ -267,6 +289,13 @@ class DualCF(GradDiff):
             f"{prefix}_a_mean": float(
                 components["attribution"].mean().detach().item()
             ),
+            f"{prefix}_u_mean": float(components["rarity"].mean().detach().item()),
+            f"{prefix}_u_p50": float(
+                torch.quantile(components["rarity"], 0.50).detach().item()
+            ),
+            f"{prefix}_u_p90": float(
+                torch.quantile(components["rarity"], 0.90).detach().item()
+            ),
             f"{prefix}_s_mean": float(
                 components["difficulty_gate"].mean().detach().item()
             ),
@@ -289,6 +318,12 @@ class DualCF(GradDiff):
             f"{prefix}_risk_batch": float(components["risk_batch"].detach().item()),
             f"{prefix}_lambda_neg_mean": float(
                 components["lambda_neg"].mean().detach().item()
+            ),
+            f"{prefix}_lambda_neg_base_mean": float(
+                components["lambda_neg_base"].mean().detach().item()
+            ),
+            f"{prefix}_cf_weight_eff_mean": float(
+                components["cf_weight_eff"].mean().detach().item()
             ),
         }
         if loss is not None:

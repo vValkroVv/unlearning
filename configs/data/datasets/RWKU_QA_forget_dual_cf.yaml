@@ -13,5 +13,7 @@ RWKU_QA_forget_dual_cf:
       - difficulty_score
       - attribution_score
       - index
+    optional_metadata_keys:
+      - rarity_score
     return_original: true
     max_length: 512

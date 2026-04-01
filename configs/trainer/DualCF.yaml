@@ -26,6 +26,9 @@ method_args:
 
   disable_difficulty_route: false
   disable_attribution_route: false
+  rarity_neg_gain: 0.0
+  rarity_cf_gain: 0.0
+  disable_rarity_route: false
   alpha_eff_stat: topk_mean
   alpha_eff_topk_frac: 0.25
   risk_power: 1.0
