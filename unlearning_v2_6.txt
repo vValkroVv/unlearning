@@ -15093,7 +15093,7 @@ The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
-`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku"`.
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku"`.
 That keeps routed DualCF ablations plus baselines in one wrapper path.
 New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
 `span_cf_samnpo`, `span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
@@ -15922,6 +15922,45 @@ SPAN_SIMNPO_DELTA=0.0 \
 SPAN_PROJECTION_COS_THRESHOLD=0.0 \
 RARITY_NEG_GAINS="0.5" \
 RARITY_CF_GAINS="0.5" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+#### 3. DUET rare new runs
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf_samnpo" \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="span_cf" \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.10 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 ```
 
@@ -18326,6 +18365,16 @@ Updates:
   - `SPAN_LOCAL_RETAIN_WEIGHT`, `SPAN_BOUNDARY_MARGIN_WEIGHT`
   - `SPAN_SAM_*`
   - `SPAN_PROJECTION_*`
+- updated `run_campaign_one_lr.sh` default `METHOD_VARIANTS` to include
+  `span_cf_samnpo`, so the shared campaign wrapper no longer skips it unless
+  the caller overrides the method list
+- corrected `configs/experiment/unlearn/rwku/span_cf_samnpo_lora.yaml` to match
+  the established RWKU SpanCF/DualCF path:
+  - `/eval: rwku`
+  - `retain_split: neighbor_level2`
+  - `holdout_split: ${retain_split}`
+  - `question_key: query`
+  - retain data from `SwetieePawsss/exp_r`, `name=${retain_split}`, `split=test`
 - updated campaign artifact resolution:
   - span local-retain variants map to `span_local_retain_*.jsonl`
   - span base/samnpo/simnpo/sam/projected map to DualCF v2 artifacts
@@ -24793,13 +24842,13 @@ defaults:
   - override /data: unlearn
   - override /data/datasets@data.forget: RWKU_QA_forget_dual_cf
   - override /data/datasets@data.retain: RWKU_QA_retain
-  - override /eval: duet
+  - override /eval: rwku
 
 forget_split: forget_level2
-retain_split: retain_level2
-holdout_split: forget_level1
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
 retain_logs_path: null
-question_key: text
+question_key: query
 
 cf_dataset_path: json
 cf_dataset_name: null
@@ -24821,8 +24870,9 @@ data:
     RWKU_QA_retain:
       args:
         hf_args:
-          path: forget-who/RWKU
-          split: ${retain_split}
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
         question_key: ${question_key}
 
 eval:
@@ -35849,7 +35899,7 @@ export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
 export ATTR_RETAIN_MAX_STEPS="${ATTR_RETAIN_MAX_STEPS:-0}"
 export ATTR_FORGET_MAX_STEPS="${ATTR_FORGET_MAX_STEPS:-0}"
 
-METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf ga ada_pop npo simnpo npo_sam loku}"
+METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku}"
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
