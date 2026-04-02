@@ -56,6 +56,14 @@ python src/tools/analyze_wrong_generations.py \
   --output-root metrics-new/results-combine/wrong-generations \
   --overwrite
 
+## write per-eval wrong-generation sidecars before packaging summary-only saves
+python scripts/calc_wrong_generations.py \
+  --path_to_saves /data/home/vkropoti/unlearning/saves/unlearn
+
+`build_structured_saves.py` now picks up `WRONG_GENERATIONS_SUMMARY.json`
+automatically and emits `forget_wrong_gen_rate.tsv` /
+`holdout_wrong_gen_rate.tsv` alongside the other structured metric tables.
+
 ## build seed-averaged tables for the 18 v2.5 new-method runs (M1-M6, B1-B6, S1-S6)
 python src/tools/build_structured_saves.py \
   --input-root metrics-new/ep5-dualfc-v2_5/extracted/saves-clean \

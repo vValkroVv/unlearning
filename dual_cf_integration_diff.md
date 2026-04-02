@@ -3,6 +3,83 @@
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
 
+## SpanCFSAMNPO branch scales (2026-04-02)
+
+This update keeps the existing SpanCF-SAM negative-branch flow intact, but adds
+explicit branch reweighting knobs so the counterfactual and SAM/NPO branches can
+be tuned independently without changing the trainer API.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/span_cf_samnpo.py`
+- `configs/trainer/SpanCFSAMNPO.yaml`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- `SpanCFSAMNPO` now accepts:
+  - `cf_branch_scale`
+  - `neg_branch_scale`
+- both knobs default to `1.0`, preserve current behavior, and reject negative
+  values
+- the trainer now logs both base and scaled branch losses so sweeps can confirm
+  the effective reweighting in `dualcf_*` metrics
+- DUET and RWKU shared launchers now expose:
+  - `SPAN_CF_BRANCH_SCALE`
+  - `SPAN_SAMNPO_BRANCH_SCALE`
+- compact run names now append `_cfs*` / `_sns*` tags for
+  `SpanCFSAMNPO` branch-scale runs so ablations stay distinguishable in saved
+  output trees
+- GPU and VAST runbooks now show the optional env vars next to the
+  `span_cf_samnpo` example command
+
+## Post-run wrong-generation sidecars (2026-04-02)
+
+This update adds a post-eval sweep that saves wrong-generation diagnostics next
+to each `DUET_EVAL.json`, mirroring the existing cosine-sim sidecar flow.
+
+Changed files for this patch:
+
+- `scripts/calc_wrong_generations.py`
+- `src/tools/wrong_generation_utils.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+- `check_saves.py`
+- `package_saves.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+- `docs/experiments.md`
+
+Behavior change summary:
+
+- `scripts/calc_wrong_generations.py` scans `saves/`, `saves/unlearn`, or a run
+  subtree for `DUET_EVAL.json` files and writes:
+  - `WRONG_GENERATIONS_EVAL.json` with per-example flags, reasons, and features
+  - `WRONG_GENERATIONS_SUMMARY.json` with aggregated
+    `forget_wrong_gen_rate` / `holdout_wrong_gen_rate`
+- wrong-generation heuristics now live in
+  `src/tools/wrong_generation_utils.py`, so the saved sidecars and
+  `src/tools/analyze_wrong_generations.py` use the same thresholds and prompt
+  parsing
+- `src/tools/build_structured_saves.py` now merges
+  `WRONG_GENERATIONS_SUMMARY.json` into the checkpoint/final metric rows, so
+  structured-saves exports include `forget_wrong_gen_rate.tsv` and
+  `holdout_wrong_gen_rate.tsv`
+- `src/tools/build_results_combine_tables.py` now prefers direct structured TSV
+  wrong-generation tables when they already exist, and otherwise falls back to
+  the older analyzer output tree
+- `check_saves.py` now treats the wrong-generation eval and summary sidecars as
+  required DUET eval artifacts
+- `package_saves.sh` keeps `WRONG_GENERATIONS_SUMMARY.json` in summary-only
+  clean saves while dropping the bulky `WRONG_GENERATIONS_EVAL.json` payload
+- the GPU and VAST runbooks now document the extra post-run sweep before any
+  summary-only packaging / copying flow when wrong-generation metrics should be
+  retained
+
 ## DualCF v2.6 rarity routing patch (2026-03-31)
 
 This update adds an explicit popularity-derived rarity controller to the

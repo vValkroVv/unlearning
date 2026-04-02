@@ -451,6 +451,9 @@ export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rar
 export METHOD_VARIANT=span_cf_samnpo
 export SPAN_SAM_RHO=0.01
 export SPAN_SAM_ADAPTIVE=false
+# Optional reweighting relative to the routed base losses:
+# export SPAN_CF_BRANCH_SCALE=0.8
+# export SPAN_SAMNPO_BRANCH_SCALE=1.2
 scripts/duet/run_dualcf_ablation_v2.sh
 
 # SpanCFSimNPO + SAM
@@ -575,6 +578,18 @@ them for a rerun.
 `UTILITY_FORGET_TAU` is optional. If you set it before the checkpoint sweep,
 the merged trajectory JSON will also report `U@F_tau` at the nearest matched
 forget score.
+
+## Post-run wrong-generation sweep
+
+If you plan to package or copy summary-only saves after the run, write the
+wrong-generation sidecars before cleaning the tree. This writes
+`WRONG_GENERATIONS_EVAL.json` and `WRONG_GENERATIONS_SUMMARY.json` next to each
+saved `DUET_EVAL.json` under `${OUTPUT_ROOT}`:
+
+```bash
+python scripts/calc_wrong_generations.py \
+  --path_to_saves "${OUTPUT_ROOT}"
+```
 
 ## Campaign order
 

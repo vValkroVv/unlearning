@@ -418,6 +418,13 @@ def load_table_bundle(
     for metric_name, _metric_abbrev in metrics:
         if metric_name not in WRONG_GENERATION_METRIC_NAMES:
             continue
+        direct_rows = load_metric_rows(
+            root / split / lr / f"{metric_name}.tsv",
+            missing_ok=True,
+        )
+        if direct_rows:
+            bundle[metric_name] = direct_rows
+            continue
         bundle[metric_name] = load_wrong_generation_rows(
             wrong_generation_index or {},
             wrong_generation_label,

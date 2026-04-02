@@ -23,6 +23,8 @@ META_COLUMNS = {"label", "checkpoint", "step", "epoch"}
 PREFERRED_METRIC_ORDER = [
     "forget_qa_rouge",
     "holdout_qa_rouge",
+    "forget_wrong_gen_rate",
+    "holdout_wrong_gen_rate",
     "forget_qa_cos_sim",
     "holdout_qa_cos_sim",
     "utility_avg",
@@ -415,6 +417,27 @@ def collect_cosine_rows(run_dir: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def collect_wrong_generation_rows(run_dir: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in collect_eval_summaries(
+        run_dir=run_dir,
+        eval_root_name="checkpoint_evals",
+        summary_name="WRONG_GENERATIONS_SUMMARY.json",
+    ):
+        metrics = load_json(Path(row["summary_path"]))
+        rows.append(
+            {
+                "label": row["label"],
+                "checkpoint": row["label"],
+                "step": row["step"],
+                "epoch": row["epoch"],
+                "forget_wrong_gen_rate": parse_summary_metric(metrics, "forget_wrong_gen_rate"),
+                "holdout_wrong_gen_rate": parse_summary_metric(metrics, "holdout_wrong_gen_rate"),
+            }
+        )
+    return rows
+
+
 def utility_metric_sort_key(metric_name: str) -> tuple[int, str]:
     match = UTILITY_COLUMN_RE.fullmatch(metric_name)
     if match is None:
@@ -531,38 +554,68 @@ def collect_utility_rows_from_json(run_dir: Path) -> list[dict[str, Any]]:
 def collect_merged_rows(run_dir: Path) -> list[dict[str, Any]]:
     merged_summary_path = run_dir / "checkpoint_evals_merged" / "summary.tsv"
     if merged_summary_path.exists():
-        return load_tsv_rows(merged_summary_path)
+        merged_rows = load_tsv_rows(merged_summary_path)
+    else:
+        checkpoint_rows = collect_checkpoint_rows_from_json(run_dir)
+        utility_rows = collect_utility_rows_from_json(run_dir)
+        utility_metric_names = [
+            metric
+            for metric in collect_metric_keys(utility_rows)
+            if metric not in {"utility_avg", "utility_delta_vs_base"}
+        ]
+        merged_by_label: dict[str, dict[str, Any]] = {}
 
-    checkpoint_rows = collect_checkpoint_rows_from_json(run_dir)
-    utility_rows = collect_utility_rows_from_json(run_dir)
-    utility_metric_names = [
-        metric
-        for metric in collect_metric_keys(utility_rows)
-        if metric not in {"utility_avg", "utility_delta_vs_base"}
-    ]
-    merged_by_label: dict[str, dict[str, Any]] = {}
+        for row in checkpoint_rows:
+            merged_by_label[row["label"]] = dict(row)
 
-    for row in checkpoint_rows:
-        merged_by_label[row["label"]] = dict(row)
+        for row in utility_rows:
+            label = str(row["label"])
+            merged = merged_by_label.setdefault(
+                label,
+                {
+                    "label": label,
+                    "checkpoint": label,
+                    "step": None,
+                    "epoch": None,
+                    "forget_qa_rouge": None,
+                    "holdout_qa_rouge": None,
+                },
+            )
+            merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
+            merged["step"] = coalesce(merged.get("step"), row.get("step"))
+            merged["epoch"] = coalesce(merged.get("epoch"), row.get("epoch"))
+            for key in (*utility_metric_names, "utility_avg", "utility_delta_vs_base"):
+                merged[key] = row.get(key)
 
-    for row in utility_rows:
+        merged_rows = list(merged_by_label.values())
+
+    wrong_generation_rows = collect_wrong_generation_rows(run_dir)
+    if not wrong_generation_rows:
+        return sorted(
+            merged_rows,
+            key=lambda row: checkpoint_sort_key(str(row["label"]), row.get("step")),
+        )
+
+    merged_by_label = {
+        str(row["label"]): dict(row)
+        for row in merged_rows
+    }
+    for row in wrong_generation_rows:
         label = str(row["label"])
         merged = merged_by_label.setdefault(
             label,
             {
                 "label": label,
                 "checkpoint": label,
-                "step": None,
-                "epoch": None,
-                "forget_qa_rouge": None,
-                "holdout_qa_rouge": None,
+                "step": row.get("step"),
+                "epoch": row.get("epoch"),
             },
         )
         merged["checkpoint"] = coalesce(merged.get("checkpoint"), row.get("checkpoint"), label)
         merged["step"] = coalesce(merged.get("step"), row.get("step"))
         merged["epoch"] = coalesce(merged.get("epoch"), row.get("epoch"))
-        for key in (*utility_metric_names, "utility_avg", "utility_delta_vs_base"):
-            merged[key] = row.get(key)
+        merged["forget_wrong_gen_rate"] = row.get("forget_wrong_gen_rate")
+        merged["holdout_wrong_gen_rate"] = row.get("holdout_wrong_gen_rate")
 
     return sorted(
         merged_by_label.values(),

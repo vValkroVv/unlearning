@@ -10,6 +10,8 @@ class SpanCFSAMNPO(SAMMixin, SpanCF):
 
     def __init__(
         self,
+        cf_branch_scale: float = 1.0,
+        neg_branch_scale: float = 1.0,
         sam_rho: float = 0.01,
         sam_adaptive: bool = False,
         sam_eps: float = 1e-12,
@@ -17,9 +19,22 @@ class SpanCFSAMNPO(SAMMixin, SpanCF):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.cf_branch_scale = float(cf_branch_scale)
+        self.neg_branch_scale = float(neg_branch_scale)
         self.sam_rho = float(sam_rho)
         self.sam_adaptive = bool(sam_adaptive)
         self.sam_eps = float(sam_eps)
+        if self.cf_branch_scale < 0.0:
+            raise ValueError("SpanCFSAMNPO requires cf_branch_scale >= 0.")
+        if self.neg_branch_scale < 0.0:
+            raise ValueError("SpanCFSAMNPO requires neg_branch_scale >= 0.")
+
+    def _apply_branch_scales(
+        self,
+        cf_loss: torch.Tensor,
+        neg_loss: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.cf_branch_scale * cf_loss, self.neg_branch_scale * neg_loss
 
     def _compute_core_components(self, model, inputs):
         components = super()._compute_core_components(model, inputs)
@@ -28,6 +43,8 @@ class SpanCFSAMNPO(SAMMixin, SpanCF):
             {
                 f"{self.log_prefix}_neg_branch_sam_only": 1.0,
                 f"{self.log_prefix}_cf_branch_sam_only": 0.0,
+                f"{self.log_prefix}_cf_branch_scale": float(self.cf_branch_scale),
+                f"{self.log_prefix}_neg_branch_scale": float(self.neg_branch_scale),
             }
         )
         return components
@@ -92,8 +109,12 @@ class SpanCFSAMNPO(SAMMixin, SpanCF):
 
         with self.compute_loss_context_manager():
             components = self._compute_core_components(model, inputs)
-            cf_loss = components["cf_loss"]
-            neg_loss_1 = components["neg_loss"]
+            cf_loss_base = components["cf_loss"]
+            neg_loss_1_base = components["neg_loss"]
+            cf_loss, neg_loss_1 = self._apply_branch_scales(
+                cf_loss=cf_loss_base,
+                neg_loss=neg_loss_1_base,
+            )
 
         cf_grads = torch.autograd.grad(
             cf_loss,
@@ -116,7 +137,8 @@ class SpanCFSAMNPO(SAMMixin, SpanCF):
         try:
             self._clear_grads_set_to_none(params)
             with self.compute_loss_context_manager():
-                neg_loss_2 = self._compute_neg_loss_only(model, inputs)
+                neg_loss_2_base = self._compute_neg_loss_only(model, inputs)
+                neg_loss_2 = self.neg_branch_scale * neg_loss_2_base
             neg_grads_2 = torch.autograd.grad(
                 neg_loss_2,
                 params,
@@ -181,11 +203,16 @@ class SpanCFSAMNPO(SAMMixin, SpanCF):
         components["logged_forget_loss"] = forget_loss_update
         self._last_manual_components = components
         extra_logs = {
-            f"{self.log_prefix}_cf_loss_base": float(cf_loss.detach().item()),
-            f"{self.log_prefix}_neg_loss_1": float(neg_loss_1.detach().item()),
-            f"{self.log_prefix}_neg_loss_2": float(neg_loss_2.detach().item()),
+            f"{self.log_prefix}_cf_loss_base": float(cf_loss_base.detach().item()),
+            f"{self.log_prefix}_cf_loss_scaled": float(cf_loss.detach().item()),
+            f"{self.log_prefix}_neg_loss_1_base": float(neg_loss_1_base.detach().item()),
+            f"{self.log_prefix}_neg_loss_1_scaled": float(neg_loss_1.detach().item()),
+            f"{self.log_prefix}_neg_loss_2_base": float(neg_loss_2_base.detach().item()),
+            f"{self.log_prefix}_neg_loss_2_scaled": float(neg_loss_2.detach().item()),
             f"{self.log_prefix}_retain_loss": float(retain_loss.detach().item()),
             f"{self.log_prefix}_retain_weight": retain_weight_value,
+            f"{self.log_prefix}_cf_branch_scale": float(self.cf_branch_scale),
+            f"{self.log_prefix}_neg_branch_scale": float(self.neg_branch_scale),
             f"{self.log_prefix}_grad_norm": float(grad_norm.detach().item()),
             f"{self.log_prefix}_rho": float(self.sam_rho),
             f"{self.log_prefix}_adaptive": 1.0 if self.sam_adaptive else 0.0,

@@ -525,6 +525,18 @@ python scripts/calc_cos_sim.py \
   --gpu "${COS_SIM_CUDA_VISIBLE_DEVICES:-0}"
 ```
 
+## Post-run wrong-generation sweep
+
+If you want summary-only packaged saves to retain wrong-generation rates, run
+the wrong-generation sweep before `package_saves.sh`. This writes
+`WRONG_GENERATIONS_EVAL.json` and `WRONG_GENERATIONS_SUMMARY.json` next to every
+saved `DUET_EVAL.json` under `${OUTPUT_ROOT}`:
+
+```bash
+python scripts/calc_wrong_generations.py \
+  --path_to_saves "${OUTPUT_ROOT}"
+```
+
 ## Package clean saves
 
 Package the summary-only saves tree into a local clean directory plus zip:
@@ -945,6 +957,9 @@ SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
 BETAS=0.1 \
 SPAN_SAM_RHO=0.01 \
 SPAN_SAM_ADAPTIVE=false \
+# Optional reweighting relative to the routed base losses:
+# SPAN_CF_BRANCH_SCALE=0.8 \
+# SPAN_SAMNPO_BRANCH_SCALE=1.2 \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 
 GPU_ID=0

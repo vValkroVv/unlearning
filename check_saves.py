@@ -157,6 +157,16 @@ def require_duet_eval_artifacts(eval_dir: Path, run_dir: Path, issues: list[str]
     require_file(eval_dir / "DUET_SUMMARY.json", f"{relative}/DUET_SUMMARY.json", issues)
     require_file(eval_dir / "COS_SIM_EVAL.json", f"{relative}/COS_SIM_EVAL.json", issues)
     require_file(eval_dir / "COS_SIM_SUMMARY.json", f"{relative}/COS_SIM_SUMMARY.json", issues)
+    require_file(
+        eval_dir / "WRONG_GENERATIONS_EVAL.json",
+        f"{relative}/WRONG_GENERATIONS_EVAL.json",
+        issues,
+    )
+    require_file(
+        eval_dir / "WRONG_GENERATIONS_SUMMARY.json",
+        f"{relative}/WRONG_GENERATIONS_SUMMARY.json",
+        issues,
+    )
 
 
 def inspect_run_dir(run_dir: Path) -> RunCheckResult:

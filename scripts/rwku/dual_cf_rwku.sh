@@ -298,6 +298,8 @@ span_orig_unique_token_weight="${SPAN_ORIG_UNIQUE_TOKEN_WEIGHT:-${SPAN_UNIQUE_TO
 span_simnpo_delta="${SPAN_SIMNPO_DELTA:-0.0}"
 span_local_retain_weight="${SPAN_LOCAL_RETAIN_WEIGHT:-0.2}"
 span_boundary_margin_weight="${SPAN_BOUNDARY_MARGIN_WEIGHT:-0.0}"
+span_cf_branch_scale="${SPAN_CF_BRANCH_SCALE:-1.0}"
+span_samnpo_branch_scale="${SPAN_SAMNPO_BRANCH_SCALE:-1.0}"
 span_sam_rho="${SPAN_SAM_RHO:-0.01}"
 span_sam_adaptive="${SPAN_SAM_ADAPTIVE:-false}"
 span_sam_eps="${SPAN_SAM_EPS:-1e-12}"
@@ -400,6 +402,11 @@ for lr in "${lrs[@]}"; do
                                                                                                         span_sam_rho_tag=${span_sam_rho//./p}
                                                                                                         span_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
                                                                                                         method_suffix=${method_suffix}_sr${span_sam_rho_tag}_sad${span_sam_adaptive_tag}
+                                                                                                    fi
+                                                                                                    if [[ "${trainer}" == "SpanCFSAMNPO" ]]; then
+                                                                                                        span_cf_branch_scale_tag=${span_cf_branch_scale//./p}
+                                                                                                        span_samnpo_branch_scale_tag=${span_samnpo_branch_scale//./p}
+                                                                                                        method_suffix=${method_suffix}_cfs${span_cf_branch_scale_tag}_sns${span_samnpo_branch_scale_tag}
                                                                                                     fi
                                                                                                     if [[ "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         span_proj_threshold_tag=${span_projection_cos_threshold//./p}
@@ -525,6 +532,12 @@ for lr in "${lrs[@]}"; do
                                                                                                                 trainer.method_args.sam_rho=${span_sam_rho}
                                                                                                                 trainer.method_args.sam_adaptive=${span_sam_adaptive}
                                                                                                                 trainer.method_args.sam_eps=${span_sam_eps}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                        if [[ "${trainer}" == "SpanCFSAMNPO" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.cf_branch_scale=${span_cf_branch_scale}
+                                                                                                                trainer.method_args.neg_branch_scale=${span_samnpo_branch_scale}
                                                                                                             )
                                                                                                         fi
                                                                                                         if [[ "${trainer}" == "SpanCFSimNPOProjected" ]]; then

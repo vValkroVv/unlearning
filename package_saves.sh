@@ -115,8 +115,9 @@ should_keep_endpoint_eval_file() {
     return 1
   fi
 
-  # Keep the main benchmark eval only, not cosine sidecars.
-  if [[ "${base_name}" == "COS_SIM_EVAL.json" ]]; then
+  # Keep the main benchmark eval plus optional analysis sidecars, but not the
+  # large derived detail payloads.
+  if [[ "${base_name}" == "COS_SIM_EVAL.json" || "${base_name}" == "WRONG_GENERATIONS_EVAL.json" ]]; then
     return 1
   fi
 

@@ -4,6 +4,8 @@ defaults:
 handler: SpanCFSAMNPO
 
 method_args:
+  cf_branch_scale: 1.0
+  neg_branch_scale: 1.0
   sam_rho: 0.01
   sam_adaptive: false
   sam_eps: 1e-12
