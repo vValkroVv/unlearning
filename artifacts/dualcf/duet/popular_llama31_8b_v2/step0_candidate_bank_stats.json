@@ -1,0 +1,8 @@
+{
+  "rows": 482,
+  "bucket_key": "property_pid",
+  "candidates_per_row": 12,
+  "candidate_count_min": 0,
+  "candidate_count_max": 12,
+  "candidate_count_mean": 11.549792531120332
+}

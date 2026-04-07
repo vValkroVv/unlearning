@@ -1,0 +1,9 @@
+{
+  "forget_rows": 2879,
+  "retain_rows": 5533,
+  "exact_matches": 252,
+  "fallback_matches": 2627,
+  "candidate_size_min": 1,
+  "candidate_size_max": 16,
+  "candidate_size_mean": 11.230982980201459
+}

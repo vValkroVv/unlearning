@@ -1,0 +1,16 @@
+{
+  "rows": 482,
+  "mode": "log_quantile",
+  "q_low": 0.05,
+  "q_high": 0.95,
+  "reference_dataset": "/data/home/vkropoti/unlearning/SwetieePawsss/DUET",
+  "reference_dataset_name": null,
+  "reference_split": "city_forget_rare_5+city_forget_popular_5",
+  "reference_data_files": null,
+  "reference_count": 964,
+  "reference_z_min": 4.248495242049359,
+  "reference_z_max": 8.23323750070527,
+  "reference_q_low": 4.634728988229636,
+  "reference_q_high": 7.913136472118149,
+  "degenerate_reference": false
+}

@@ -1,0 +1,11 @@
+{
+  "rows": 964,
+  "top_k": 8,
+  "alternate_count_min": 2,
+  "alternate_count_max": 8,
+  "alternate_count_mean": 4.8620331950207465,
+  "pool_counts": {
+    "external": 964,
+    "legacy": 0
+  }
+}
