@@ -15,6 +15,9 @@ if str(SRC_ROOT) not in sys.path:
 from tools.dual_cf_artifact_utils import (  # noqa: E402
     clean_counterfactual_text,
     counterfactual_invalid_reason,
+    dedupe_candidate_metadata,
+    duplicate_candidate_count,
+    pick_best_counterfactual_v3,
     read_jsonl,
     save_jsonl,
 )
@@ -41,6 +44,8 @@ def parse_args():
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.8)
     parser.add_argument("--max-new-tokens", type=int, default=32)
+    parser.add_argument("--num-alternates", type=int, default=1)
+    parser.add_argument("--prompt-family", default="default")
     parser.add_argument("--reject-gold-substring", action="store_true")
     parser.add_argument("--require-short-answer", action="store_true")
     parser.add_argument("--max-overlap-ratio", type=float, default=0.85)
@@ -68,6 +73,54 @@ def build_generator(args) -> VLLMCFGenerator:
         top_p=args.top_p,
         max_tokens=args.max_new_tokens,
         concurrency=args.generator_concurrency,
+        prompt_family=args.prompt_family,
+        num_alternates=args.num_alternates,
+    )
+
+
+def choose_retry_alternate(args, row: Dict[str, Any], response: Dict[str, Any]):
+    response_candidates = list(response.get("alternates") or [])
+    if not response_candidates and str(response.get("alternate", "")).strip():
+        response_candidates = [str(response.get("alternate", "")).strip()]
+    (
+        candidates,
+        scores,
+        relation_scores,
+        shared_fact_scores,
+        sources,
+    ) = dedupe_candidate_metadata(
+        response_candidates,
+        scores=response.get("scores", []),
+        relation_scores=response.get("relation_scores", []),
+        shared_fact_scores=response.get("shared_fact_scores", []),
+        candidate_sources=response.get("candidate_sources", []),
+    )
+    best_alt, pick_meta = pick_best_counterfactual_v3(
+        question=str(row.get(args.question_key, "")),
+        answer=str(row.get(args.answer_key, "")),
+        candidates=candidates,
+        candidate_answers=row.get("candidate_answers"),
+        external_scores=scores,
+        relation_scores=relation_scores,
+        shared_fact_scores=shared_fact_scores,
+        candidate_sources=sources,
+        default_relation_score=(
+            1.0 if bool(response.get("same_relation", True)) else 0.0
+        ),
+        prompt_family=args.prompt_family,
+        reject_gold_substring=args.reject_gold_substring,
+        max_overlap_ratio=args.max_overlap_ratio,
+        require_short_answer=args.require_short_answer,
+        max_alt_length_chars=args.max_alt_length_chars,
+    )
+    return (
+        best_alt,
+        candidates,
+        scores,
+        relation_scores,
+        shared_fact_scores,
+        sources,
+        pick_meta,
     )
 
 
@@ -114,15 +167,51 @@ def main():
             outputs = generator.many_sync(list(row_chunk))
             for response, row_idx in zip(outputs, meta_chunk):
                 row = dict(rows[row_idx])
-                alternate = clean_counterfactual_text(response.get("alternate", ""))
+                (
+                    alternate,
+                    response_candidates,
+                    response_scores,
+                    response_relation_scores,
+                    response_shared_fact_scores,
+                    response_sources,
+                    pick_meta,
+                ) = choose_retry_alternate(
+                    args,
+                    row,
+                    response,
+                )
                 reason = invalid_reason(args, row, alternate)
                 row["cf_retry_passes"] = int(row.get("cf_retry_passes", 0)) + 1
                 row["cf_retry_last_alternate"] = alternate
+                row["cf_retry_last_alternates"] = list(response_candidates)
+                row["cf_retry_last_scores"] = list(response_scores)
+                row["cf_retry_last_relation_scores"] = list(response_relation_scores)
+                row["cf_retry_last_shared_fact_scores"] = list(response_shared_fact_scores)
+                row["cf_retry_last_sources"] = list(response_sources)
                 row["cf_retry_last_answer_type"] = str(
                     response.get("answer_type", "unknown")
                 )
+                row["cf_retry_pick_meta"] = pick_meta
                 if reason is None:
                     row["alternate"] = alternate
+                    row["external_alternates"] = list(response_candidates)
+                    row["external_alternate_scores"] = list(response_scores)
+                    row["external_alternate_relation_scores"] = list(
+                        response_relation_scores
+                    )
+                    row["external_alternate_shared_fact_scores"] = list(
+                        response_shared_fact_scores
+                    )
+                    row["external_alternate_sources"] = list(response_sources)
+                    pick_meta["selected_candidate"] = pick_meta.get(
+                        "selected_candidate_text",
+                        alternate,
+                    )
+                    pick_meta["candidate_pool_size"] = len(response_candidates)
+                    pick_meta["duplicate_candidates_removed"] = duplicate_candidate_count(
+                        response.get("alternates", [])
+                    )
+                    row["cf_pick_meta"] = pick_meta
                     row["cf_invalid_reason"] = None
                     row["cf_is_valid"] = True
                     row["cf_source"] = "vllm_retry"
@@ -130,6 +219,18 @@ def main():
                     row["cf_generator_model"] = args.vllm_model
                     row["cf_same_relation"] = bool(response.get("same_relation", True))
                     row["cf_answer_type"] = str(response.get("answer_type", "unknown"))
+                    provenance = dict(row.get("cf_provenance") or {})
+                    provenance.setdefault("generator_backend", "vllm_openai")
+                    provenance.setdefault("prompt_family", args.prompt_family)
+                    provenance.setdefault("candidate_count", max(1, int(args.num_alternates)))
+                    provenance.setdefault(
+                        "prompt_version",
+                        f"vllm_openai:{args.prompt_family}:v1",
+                    )
+                    provenance["retry_generator_backend"] = "vllm_openai"
+                    provenance["retry_generator_model"] = args.vllm_model
+                    provenance["retry_prompt_family"] = args.prompt_family
+                    row["cf_provenance"] = provenance
                     row["cf_retry_success"] = True
                     recovered += 1
                 else:

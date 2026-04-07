@@ -106,6 +106,9 @@ def main():
                 "question": str(row[args.question_key]),
                 "answer": answer,
                 "candidate_answers": deduped_pool,
+                "candidate_relation_scores": [1.0] * len(deduped_pool),
+                "candidate_shared_fact_scores": [1.0] * len(deduped_pool),
+                "candidate_sources": ["candidate_bank"] * len(deduped_pool),
                 "bucket_key": args.bucket_key,
                 "bucket_value": bucket_value,
             }
