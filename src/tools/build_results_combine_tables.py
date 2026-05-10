@@ -166,6 +166,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--variant-display-name",
+        action="append",
+        help=(
+            "Optional variant row label override in METHOD=DISPLAY format. "
+            "Can be repeated."
+        ),
+    )
+    parser.add_argument(
         "--variant-display",
         choices=("full", "compact"),
         default="full",
@@ -254,12 +262,15 @@ def discover_metrics(
     include_wrong_generation_metrics: bool,
 ) -> list[tuple[str, str]]:
     utility_metric_names: set[str] = set()
+    available_metric_names: set[str] = set()
     for root in roots:
         for split in SPLITS:
             for lr in LRS:
                 split_lr_dir = root / split / lr
                 if not split_lr_dir.exists():
                     continue
+                for table_path in split_lr_dir.glob("*.tsv"):
+                    available_metric_names.add(table_path.stem)
                 for table_path in split_lr_dir.glob("*_acc.tsv"):
                     metric_name = table_path.stem
                     if UTILITY_METRIC_RE.fullmatch(metric_name):
@@ -268,7 +279,11 @@ def discover_metrics(
     metrics = [
         metric_spec
         for metric_spec in FIXED_METRICS
-        if include_wrong_generation_metrics or metric_spec[0] not in WRONG_GENERATION_METRIC_NAMES
+        if (
+            metric_spec[0] not in WRONG_GENERATION_METRIC_NAMES
+            or include_wrong_generation_metrics
+            or metric_spec[0] in available_metric_names
+        )
     ]
     for metric_name in sorted(utility_metric_names, key=utility_metric_sort_key):
         match = UTILITY_METRIC_RE.fullmatch(metric_name)
@@ -939,6 +954,7 @@ def load_variant_row_specs(
     *,
     selected_algorithms: set[str] | None = None,
     selected_method_keys: set[str] | None = None,
+    display_name_overrides: dict[str, str] | None = None,
     display_mode: str = "full",
 ) -> list[tuple[str, str, str, str]]:
     first_metric = FIXED_METRICS[0][0]
@@ -952,9 +968,17 @@ def load_variant_row_specs(
         "span_cf_simnpo_local_retain": "lime!18",
         "span_cf_simnpo_sam": "orange!12",
         "span_cf_simnpo_projected": "red!12",
+        "general_cf": "blue!12",
+        "simple_ce": "gray!10",
     }
 
     def include_method(method_name: str) -> bool:
+        if method_name.startswith("simple_ce"):
+            if selected_algorithms or selected_method_keys:
+                if selected_method_keys and method_name in selected_method_keys:
+                    return True
+                return bool(selected_algorithms and "simple_ce" in selected_algorithms)
+            return True
         info = variant_info_from_method_key(method_name)
         if info is None:
             return False
@@ -977,12 +1001,24 @@ def load_variant_row_specs(
             if include_method(method_name):
                 source_by_method[method_name] = source_name
 
-    method_names = sorted(
-        source_by_method,
-        key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name),
-    )
+    def variant_row_sort_key(method_name: str) -> tuple[float, float, str]:
+        if method_name.startswith("simple_ce"):
+            cf_value, ret_value, gamma_value, _name = simple_ce_sort_key(method_name)
+            return (999.0, cf_value * 10000 + ret_value * 100 + gamma_value, method_name)
+        variant_key = variant_sort_key(method_name)
+        if variant_key is not None:
+            return (float(variant_key[0]), float(variant_key[1]), method_name)
+        return (999.0, 999.0, method_name)
+
+    method_names = sorted(source_by_method, key=variant_row_sort_key)
 
     def variant_display_name(method_name: str) -> str:
+        if display_name_overrides and method_name in display_name_overrides:
+            return display_name_overrides[method_name]
+        if method_name.startswith("simple_ce"):
+            if SIMPLE_CE_RE.fullmatch(method_name) is not None:
+                return "simple_ce"
+            return method_name
         info = variant_info_from_method_key(method_name)
         if info is None:
             return method_name
@@ -1002,10 +1038,21 @@ def load_variant_row_specs(
             "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
             "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
             "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
+            "general_cf": "GeneralCF",
         }.get(algorithm, info.display_name)
 
     row_specs: list[tuple[str, str, str, str]] = []
     for method_name in method_names:
+        if method_name.startswith("simple_ce"):
+            row_specs.append(
+                (
+                    source_by_method[method_name],
+                    method_name,
+                    variant_display_name(method_name),
+                    color_by_algorithm["simple_ce"],
+                )
+            )
+            continue
         info = variant_info_from_method_key(method_name)
         if info is None:
             continue
@@ -1077,6 +1124,20 @@ def main() -> None:
             if not args.variant_method_key
             else {value.strip() for value in args.variant_method_key if value and value.strip()}
         )
+        display_name_overrides: dict[str, str] = {}
+        for raw_value in args.variant_display_name or []:
+            if "=" not in raw_value:
+                raise ValueError(
+                    f"Invalid --variant-display-name value {raw_value!r}; expected METHOD=DISPLAY"
+                )
+            method_name, display_name = raw_value.split("=", 1)
+            method_name = method_name.strip()
+            display_name = display_name.strip()
+            if not method_name or not display_name:
+                raise ValueError(
+                    f"Invalid --variant-display-name value {raw_value!r}; expected METHOD=DISPLAY"
+                )
+            display_name_overrides[method_name] = display_name
 
         wrong_generation_index: dict[
             str,
@@ -1120,6 +1181,7 @@ def main() -> None:
                 lr,
                 selected_algorithms=selected_algorithms,
                 selected_method_keys=selected_method_keys,
+                display_name_overrides=display_name_overrides,
                 display_mode=args.variant_display,
             )
             for split, lr in split_lrs

@@ -47,6 +47,13 @@ case "${METHOD_VARIANT}" in
     export RUN_LABEL=${RUN_LABEL:-DPO}
     exec bash "${script_dir}/dual_cf_duet.sh"
     ;;
+  general_cf)
+    export TRAINER=${TRAINER:-GeneralCF}
+    export METHOD_NAME=${METHOD_NAME:-general_cf}
+    export RUN_LABEL=${RUN_LABEL:-GeneralCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/general_cf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
   simple_ce)
     exec bash "${script_dir}/simple_ce_duet.sh"
     ;;

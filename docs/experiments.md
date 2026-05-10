@@ -116,6 +116,26 @@ Note: the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
 `span_cf_samnpo` save directories, so the generated utility tables omit those
 rows unless matching saves are added.
 
+## build seed-averaged tables for the `general_cf` ep5 ablation archive
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-ablation/saves-clean \
+  --output-root metrics-new/ep5-ablation/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-ablation/structured-saves-avg \
+  --variant-display compact \
+  --output-file metrics-new/results-combine-ablation/combined_tables.txt \
+  --output-slides-tex metrics-new/results-combine-ablation/combined_tables_slides.tex
+
+Note: this archive keeps `WRONG_GENERATIONS_SUMMARY.json` sidecars but does not
+ship raw `DUET_EVAL.json` files, so `build_results_combine_tables.py` must pick
+up `forget_wrong_gen_rate.tsv` / `holdout_wrong_gen_rate.tsv` directly from the
+structured-saves tree. You do not need a separate
+`analyze_wrong_generations.py` pass unless the raw per-example eval logs are
+available.
+
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
 trainer=NPO trainer.method_args.retain_loss_type=KL task_name=llama2_books_NPO_KL \

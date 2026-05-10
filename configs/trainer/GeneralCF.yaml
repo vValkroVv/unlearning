@@ -1,0 +1,30 @@
+defaults:
+  - DualCF
+
+handler: GeneralCF
+trace_jsonl: true
+
+method_args:
+  additional_loss: NPO
+  span_additional: false
+  span_cf_branch: false
+  routing_mode: full
+
+  span_mode: lcs
+  alt_shared_token_weight: 0.0
+  alt_unique_token_weight: 1.0
+  orig_shared_token_weight: 0.0
+  orig_unique_token_weight: 1.0
+
+  cf_branch_scale: 1.0
+  additional_branch_scale: 1.0
+  sam_rho: 0.01
+  sam_adaptive: false
+  sam_eps: 1e-12
+
+  lambda_cf_const: null
+  lambda_additional_const: null
+  lambda_retain_const: null
+  constant_artifact_paths: null
+  constant_current_artifact_path: null
+  constant_batch_size: null

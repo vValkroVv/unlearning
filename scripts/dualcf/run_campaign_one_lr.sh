@@ -236,6 +236,50 @@ configure_method_variant_env() {
   echo "[dualcf][campaign] LoKU cleanup: FILA_BASE_PATH=${FILA_BASE_PATH}"
 }
 
+configure_general_cf_routing_env() {
+  local method_variant="$1"
+  local current_artifact="$2"
+  local routing_mode="${ROUTING:-full}"
+
+  unset CONSTANT_ROUTING_ARTIFACTS
+  unset CONSTANT_ROUTING_CURRENT_ARTIFACT
+
+  if [[ "${method_variant}" != "general_cf" ]]; then
+    return
+  fi
+
+  case "${routing_mode}" in
+    full|d_only|a_only)
+      return
+      ;;
+    constant)
+      local rare_artifact
+      local popular_artifact
+      local merged_artifact
+      local rwku_artifact
+      rare_artifact="$(resolve_duet_artifact_for_method rare full)"
+      popular_artifact="$(resolve_duet_artifact_for_method popular full)"
+      merged_artifact="$(resolve_duet_artifact_for_method merged full)"
+      rwku_artifact="$(resolve_rwku_artifact_for_method full)"
+      require_file "${rare_artifact}"
+      require_file "${popular_artifact}"
+      require_file "${merged_artifact}"
+      require_file "${rwku_artifact}"
+      export CONSTANT_ROUTING_ARTIFACTS="${CONSTANT_ROUTING_ARTIFACTS:-${rare_artifact}::${popular_artifact}::${merged_artifact}::${rwku_artifact}}"
+      ;;
+    constant_split)
+      require_file "${current_artifact}"
+      export CONSTANT_ROUTING_CURRENT_ARTIFACT="${CONSTANT_ROUTING_CURRENT_ARTIFACT:-${current_artifact}}"
+      ;;
+    *)
+      echo "[dualcf][campaign] Unsupported ROUTING=${routing_mode} for general_cf" >&2
+      exit 1
+      ;;
+  esac
+
+  export CONSTANT_ROUTING_BATCH_SIZE="${CONSTANT_ROUTING_BATCH_SIZE:-${PER_DEVICE_TRAIN_BS:-16}}"
+}
+
 resolve_duet_artifact_for_method() {
   local forget_label="$1"
   local method_variant="$2"
@@ -312,6 +356,7 @@ run_duet_block() {
     require_file "${CF_DATASET_DATA_FILES}"
     echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
     configure_method_variant_env "${METHOD_VARIANT}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -342,6 +387,7 @@ run_rwku_block() {
     require_file "${CF_DATASET_DATA_FILES}"
     echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
     configure_method_variant_env "${METHOD_VARIANT}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs

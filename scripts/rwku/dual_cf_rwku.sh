@@ -306,6 +306,20 @@ span_sam_eps="${SPAN_SAM_EPS:-1e-12}"
 span_projection_cos_threshold="${SPAN_PROJECTION_COS_THRESHOLD:-0.0}"
 span_projection_eps="${SPAN_PROJECTION_EPS:-1e-12}"
 
+general_additional_loss="${ADDITIONAL_LOSS:-NPO}"
+general_additional_loss_hydra="${general_additional_loss//-/_}"
+general_routing_mode="${ROUTING:-full}"
+general_span_additional="${SPAN_ADDITIONAL:-false}"
+general_span_cf_branch="${SPAN_CF_BRANCH:-false}"
+general_lambda_cf_const="${LAMBDA_CF_CONST:-null}"
+general_lambda_additional_const="${LAMBDA_ADDITIONAL_CONST:-null}"
+general_lambda_retain_const="${LAMBDA_RETAIN_CONST:-null}"
+general_constant_artifact_paths="${CONSTANT_ROUTING_ARTIFACTS:-null}"
+general_constant_current_artifact="${CONSTANT_ROUTING_CURRENT_ARTIFACT:-${cf_dataset_data_files:-null}}"
+general_constant_batch_size="${CONSTANT_ROUTING_BATCH_SIZE:-null}"
+general_cf_branch_scale="${CF_BRANCH_SCALE:-${SPAN_CF_BRANCH_SCALE:-1.0}}"
+general_additional_branch_scale="${ADDITIONAL_BRANCH_SCALE:-${SPAN_SAMNPO_BRANCH_SCALE:-1.0}}"
+
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
@@ -313,6 +327,27 @@ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+if [[ "${trainer}" == "GeneralCF" ]]; then
+    case "${general_routing_mode}" in
+        full|constant|constant_split)
+            disable_difficulty_routes=(false)
+            disable_attribution_routes=(false)
+            ;;
+        d_only)
+            disable_difficulty_routes=(false)
+            disable_attribution_routes=(true)
+            ;;
+        a_only)
+            disable_difficulty_routes=(true)
+            disable_attribution_routes=(false)
+            ;;
+        *)
+            echo "[rwku][${run_label}] Unsupported ROUTING=${general_routing_mode}" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 for lr in "${lrs[@]}"; do
     for beta in "${betas[@]}"; do
@@ -412,6 +447,27 @@ for lr in "${lrs[@]}"; do
                                                                                                         span_proj_threshold_tag=${span_projection_cos_threshold//./p}
                                                                                                         method_suffix=${method_suffix}_pct${span_proj_threshold_tag}
                                                                                                     fi
+                                                                                                elif [[ "${trainer}" == "GeneralCF" ]]; then
+                                                                                                    general_add_tag=$(echo "${general_additional_loss}" | tr '[:upper:]' '[:lower:]' | tr '-' '_' )
+                                                                                                    general_route_tag=$(echo "${general_routing_mode}" | tr '[:upper:]' '[:lower:]' | tr '-' '_' )
+                                                                                                    general_span_add_tag=$(short_bool_tag "${general_span_additional}")
+                                                                                                    general_span_cf_tag=$(short_bool_tag "${general_span_cf_branch}")
+                                                                                                    method_suffix=_add${general_add_tag}_rt${general_route_tag}_sa${general_span_add_tag}_sc${general_span_cf_tag}
+                                                                                                    if [[ "${general_span_additional}" == "true" || "${general_span_cf_branch}" == "true" ]]; then
+                                                                                                        span_mode_tag=$(short_span_mode_tag "${span_mode}")
+                                                                                                        span_alt_shared_tag=${span_alt_shared_token_weight//./p}
+                                                                                                        span_alt_unique_tag=${span_alt_unique_token_weight//./p}
+                                                                                                        span_orig_shared_tag=${span_orig_shared_token_weight//./p}
+                                                                                                        span_orig_unique_tag=${span_orig_unique_token_weight//./p}
+                                                                                                        method_suffix=${method_suffix}_m${span_mode_tag}_asw${span_alt_shared_tag}_auw${span_alt_unique_tag}_osw${span_orig_shared_tag}_ouw${span_orig_unique_tag}
+                                                                                                    fi
+                                                                                                    if [[ "${general_additional_loss}" == "NPO-SAM" || "${general_additional_loss}" == "NPO_SAM" || "${general_additional_loss}" == "npo-sam" || "${general_additional_loss}" == "npo_sam" ]]; then
+                                                                                                        general_cf_scale_tag=${general_cf_branch_scale//./p}
+                                                                                                        general_add_scale_tag=${general_additional_branch_scale//./p}
+                                                                                                        general_sam_rho_tag=${span_sam_rho//./p}
+                                                                                                        general_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
+                                                                                                        method_suffix=${method_suffix}_sr${general_sam_rho_tag}_sad${general_sam_adaptive_tag}_cfs${general_cf_scale_tag}_ads${general_add_scale_tag}
+                                                                                                    fi
                                                                                                 fi
 
                                                                                                 task_prefix=rwku_${base_model}_${forget_split}_${method_name}
@@ -472,7 +528,7 @@ for lr in "${lrs[@]}"; do
                                                                                                         trainer.method_args.gamma=${gamma}
                                                                                                         trainer.method_args.retain_loss_type=NLL
                                                                                                     )
-                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "GeneralCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.tau_d=${tau_d}
                                                                                                             trainer.method_args.tau_a=${tau_a}
@@ -496,7 +552,34 @@ for lr in "${lrs[@]}"; do
                                                                                                             trainer.method_args.neg_power=${neg_power}
                                                                                                         )
                                                                                                     fi
-                                                                                                    if [[ "${trainer}" == "MultiCF" ]]; then
+                                                                                                    if [[ "${trainer}" == "GeneralCF" ]]; then
+                                                                                                        extra_method_args+=(
+                                                                                                            trainer.method_args.additional_loss=${general_additional_loss_hydra}
+                                                                                                            trainer.method_args.routing_mode=${general_routing_mode}
+                                                                                                            trainer.method_args.span_additional=${general_span_additional}
+                                                                                                            trainer.method_args.span_cf_branch=${general_span_cf_branch}
+                                                                                                            trainer.method_args.span_mode=${span_mode}
+                                                                                                            trainer.method_args.alt_shared_token_weight=${span_alt_shared_token_weight}
+                                                                                                            trainer.method_args.alt_unique_token_weight=${span_alt_unique_token_weight}
+                                                                                                            trainer.method_args.orig_shared_token_weight=${span_orig_shared_token_weight}
+                                                                                                            trainer.method_args.orig_unique_token_weight=${span_orig_unique_token_weight}
+                                                                                                            trainer.method_args.lambda_cf_const=${general_lambda_cf_const}
+                                                                                                            trainer.method_args.lambda_additional_const=${general_lambda_additional_const}
+                                                                                                            trainer.method_args.lambda_retain_const=${general_lambda_retain_const}
+                                                                                                            trainer.method_args.constant_artifact_paths=${general_constant_artifact_paths}
+                                                                                                            trainer.method_args.constant_current_artifact_path=${general_constant_current_artifact}
+                                                                                                            trainer.method_args.constant_batch_size=${general_constant_batch_size}
+                                                                                                        )
+                                                                                                        if [[ "${general_additional_loss}" == "NPO-SAM" || "${general_additional_loss}" == "NPO_SAM" || "${general_additional_loss}" == "npo-sam" || "${general_additional_loss}" == "npo_sam" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.cf_branch_scale=${general_cf_branch_scale}
+                                                                                                                trainer.method_args.additional_branch_scale=${general_additional_branch_scale}
+                                                                                                                trainer.method_args.sam_rho=${span_sam_rho}
+                                                                                                                trainer.method_args.sam_adaptive=${span_sam_adaptive}
+                                                                                                                trainer.method_args.sam_eps=${span_sam_eps}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                    elif [[ "${trainer}" == "MultiCF" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.max_alternates_used=${multicf_max_alternates_used}
                                                                                                             trainer.method_args.alt_agg_mode=${multicf_alt_agg_mode}

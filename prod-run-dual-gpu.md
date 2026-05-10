@@ -979,3 +979,208 @@ SPAN_SAM_RHO=0.01 \
 SPAN_SAM_ADAPTIVE=false \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 ```
+
+### GeneralCF family
+
+The commands below target `duet_rare`, which is the same regime as the best
+`span_cf_samnpo` case above. GeneralCF currently exposes:
+`ADDITIONAL_LOSS={EMPTY,CE,NPO,NPO-SAM}`,
+`ROUTING={full,d_only,a_only,constant,constant_split}`,
+`SPAN_ADDITIONAL`, and `SPAN_CF_BRANCH`.
+
+With `METHOD_VARIANTS="general_cf"`, the wrapper auto-populates reference
+artifacts for `constant` and `constant_split`. `ROUTING=constant` uses the
+equal-average over the reference artifacts, while `constant_split` uses only
+the current split artifact.
+
+1. Base = `NPO-SAM + full + span_additional + span_cf_branch`
+
+This is equivalent to the earlier `span_cf_samnpo`.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=full \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+2. Base without routing, but with `ROUTING=constant`
+
+This removes sample-wise routing and replaces it with one constant triplet
+estimated from the reference artifacts.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=constant \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+3. Base without routing, but with `ROUTING=constant_split`
+
+This is the same setup, but the constants are estimated only from the current
+split artifact.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=constant_split \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+4. Base with all span disabled
+
+This turns span off for both the additional branch and the CF branch.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=full \
+SPAN_ADDITIONAL=false \
+SPAN_CF_BRANCH=false \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+5. Base, but `NPO-SAM -> NPO`
+
+This is the correct ablation for "remove SAM, keep NPO". In the current
+GeneralCF implementation, SAM exists only inside
+`ADDITIONAL_LOSS=NPO-SAM`, so switching to `NPO` is the "without SAM" ablation.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO \
+ROUTING=full \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+6. Base without the additional branch, while keeping routing
+
+Here `ADDITIONAL_LOSS=EMPTY` disables the additional branch completely, while
+routing stays dynamic for the CF and retain parts. `SPAN_CF_BRANCH=true` is
+left on so this changes exactly one thing relative to the base.
+`SPAN_ADDITIONAL` no longer matters here because `EMPTY` zeros the additional
+branch.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=EMPTY \
+ROUTING=full \
+SPAN_ADDITIONAL=false \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+GAMMAS=1.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+7. Plain `simple_ce` baseline
+
+This is the ordinary `simple_ce` run from the current GPU runbook, not the
+fixed-coefficient `general_cf` variant.
+
+```bash
+SEEDS="42 179 1137" METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+```
+
+Coverage summary:
+
+- item 1 = best base
+- item 2 = `-routing` with global constants
+- item 3 = `-routing` with split-local constants
+- item 4 = `-all span`
+- item 5 = `-SAM`
+- item 6 = `-additional branch`
+- item 7 = plain `simple_ce`
+
+For the six GeneralCF ablations above, replace the last argument `duet_rare`
+with `all` for the full tree.

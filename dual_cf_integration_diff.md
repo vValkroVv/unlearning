@@ -3,6 +3,110 @@
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
 
+## GeneralCF runtime integration (2026-04-10)
+
+This update adds a new `GeneralCF` trainer that keeps the existing offline
+artifact contract and launcher flow, while exposing a broader routed loss family
+through the same DUET / RWKU production wrapper path.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/general_cf.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/GeneralCF.yaml`
+- `configs/experiment/unlearn/duet/general_cf_lora.yaml`
+- `configs/experiment/unlearn/rwku/general_cf_lora.yaml`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- `GeneralCF` is registered as a new trainer without changing the existing
+  `DualCF`, `SpanCF`, `SpanCFSAMNPO`, or `SimpleCE` trainers
+- the new trainer supports:
+  - `ADDITIONAL_LOSS={EMPTY,CE,NPO,NPO-SAM}`
+  - `ROUTING={full,d_only,a_only,constant,constant_split}`
+  - `SPAN_ADDITIONAL={true,false}`
+  - `SPAN_CF_BRANCH={true,false}`
+- `ADDITIONAL_LOSS=EMPTY` now disables the additional branch itself by forcing
+  `lambda_additional = 0`, rather than only returning a zero additional vector
+- `ROUTING=constant` now estimates one lambda triplet per configured reference
+  artifact and averages those triplets equally; `ROUTING=constant_split`
+  estimates from the current split artifact only
+- `ADDITIONAL_LOSS=NPO-SAM` uses a manual-grad path that applies SAM only to the
+  additional branch while keeping routed retain weighting intact, and its logs
+  now report the second-pass SAM losses for the additional / forget branches
+- the shared DUET and RWKU launchers now encode the GeneralCF control surface in
+  task names and pass the new Hydra knobs through the same train ->
+  endpoint eval -> checkpoint eval -> utility eval -> cleanup flow as the other
+  routed methods
+- the campaign wrapper now auto-populates constant-routing artifact env vars for
+  `METHOD_VARIANTS=general_cf`, so DUET and RWKU can use the same wrapper path
+  as the previous methods
+- the GPU and VAST runbooks now show copy-pasteable `general_cf` examples
+  alongside the existing DualCF / SpanCF family commands
+
+Residual gap:
+
+- the result-table / parser stack still treats `general_cf` as runtime-only;
+  table split-out for `general_cf_*` variants needs a follow-up patch in:
+  `check_saves.py`,
+  `src/tools/build_structured_saves.py`,
+  `src/tools/analyze_wrong_generations.py`,
+  `src/tools/export_unlearning_sanity_checks.py`,
+  `src/tools/build_results_combine_tables.py`
+
+## GeneralCF result-table parsing for packaged ablations (2026-04-12)
+
+This follow-up closes the table-generation path for packaged `general_cf`
+ablations so the same `structured-saves -> combined_tables` flow used by the
+SpanCF family now works for `metrics-new/ep5-ablation`.
+
+Changed files for this patch:
+
+- `src/tools/new_method_variant_utils.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/build_results_combine_tables.py`
+- `docs/experiments.md`
+
+Behavior change summary:
+
+- `build_structured_saves.py` now parses `general_cf` runs into explicit
+  ablation method keys:
+  - `general_cf_base`
+  - `general_cf_no_routing_constant`
+  - `general_cf_no_routing_constant_split`
+  - `general_cf_no_spans`
+  - `general_cf_no_sam`
+  - `general_cf_no_additional`
+- seed averaging now tolerates packaged archives that mix a long-form run name
+  with a hashed alias for the same parsed `general_cf` method, which is needed
+  for the `constant_split` saves in `metrics-new/ep5-ablation`
+- `analyze_wrong_generations.py` now recognizes `general_cf` method keys when
+  raw `DUET_EVAL.json` logs are present
+- `build_results_combine_tables.py` now renders `general_cf` ablations in
+  variant-only tables and can also include `simple_ce` in the same table build
+- variant-only table builds now auto-include
+  `forget_wrong_gen_rate.tsv` / `holdout_wrong_gen_rate.tsv` directly from a
+  structured-saves tree when those sidecars already exist, so packaged archives
+  without raw `DUET_EVAL.json` can still populate `FW` / `HW`
+
+Validation status:
+
+- verified locally on `metrics-new/ep5-ablation` by generating:
+  - `metrics-new/ep5-ablation/structured-saves-avg`
+  - `metrics-new/results-combine-ablation/combined_tables.txt`
+  - `metrics-new/results-combine-ablation/combined_tables_slides.tex`
+- `analyze_wrong_generations.py` still requires raw `DUET_EVAL.json` inputs to
+  regenerate the standalone `wrong-generations/*.tsv` summaries; the packaged
+  `ep5-ablation` archive does not contain those raw eval logs
+
 ## SpanCFSAMNPO branch scales (2026-04-02)
 
 This update keeps the existing SpanCF-SAM negative-branch flow intact, but adds

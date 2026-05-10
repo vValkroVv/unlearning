@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 
 MULTICF_RUN_RE = re.compile(
@@ -31,6 +32,9 @@ MULTICF_KEY_RE = re.compile(
 )
 BOUNDARY_KEY_RE = re.compile(
     r"^boundary_cf_(?:(?P<tag>b\d+)|lr(?P<local>[^_]+)_bm(?P<margin>[^_]+))$"
+)
+SIMPLE_CE_KEY_RE = re.compile(
+    r"^simple_ce(?:_cf(?P<cf>[^_]+))?(?:_ret(?P<ret>[^_]+))?(?:_gamma(?P<gamma>[^_]+))?$"
 )
 
 MULTICF_TAGS = {
@@ -79,6 +83,22 @@ BOOL_TOKEN_DISPLAY = {
     "t": "true",
     "f": "false",
 }
+GENERAL_CF_VARIANT_SPECS = {
+    "general_cf_base": ("base", 0),
+    "general_cf_no_routing_constant": ("routing", 1),
+    "general_cf_no_routing_constant_split": ("routing_split", 2),
+    "general_cf_no_spans": ("span", 3),
+    "general_cf_no_sam": ("sam", 4),
+    "general_cf_no_additional": ("additional", 5),
+}
+GENERAL_CF_CONFIG_MAP = {
+    ("NPO_SAM", "full", True, True): "general_cf_base",
+    ("NPO_SAM", "constant", True, True): "general_cf_no_routing_constant",
+    ("NPO_SAM", "constant_split", True, True): "general_cf_no_routing_constant_split",
+    ("NPO_SAM", "full", False, False): "general_cf_no_spans",
+    ("NPO", "full", True, True): "general_cf_no_sam",
+    ("EMPTY", "full", False, True): "general_cf_no_additional",
+}
 SPAN_VARIANT_FAMILIES = {
     "span_cf": "SpanCF",
     "span_cf_samnpo": "SpanCF-SAMNPO",
@@ -99,6 +119,8 @@ VARIANT_ALGORITHM_ORDER = {
     "span_cf_simnpo_local_retain": 6,
     "span_cf_simnpo_sam": 7,
     "span_cf_simnpo_projected": 8,
+    "general_cf": 9,
+    "simple_ce": 10,
 }
 
 
@@ -115,6 +137,10 @@ def format_numeric_token(token: str) -> str:
 
 
 def base_variant_algorithm(method_key: str) -> str | None:
+    if method_key == "general_cf" or method_key.startswith("general_cf_"):
+        return "general_cf"
+    if method_key == "simple_ce" or method_key.startswith("simple_ce"):
+        return "simple_ce"
     for prefix in sorted(SPAN_VARIANT_FAMILIES, key=len, reverse=True):
         if method_key == prefix or method_key.startswith(f"{prefix}_"):
             return prefix
@@ -225,6 +251,71 @@ def _span_info(
     )
 
 
+def _normalize_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "t", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "f", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _general_cf_info(method_key: str) -> MethodVariantInfo:
+    spec = GENERAL_CF_VARIANT_SPECS.get(method_key)
+    if spec is None:
+        return MethodVariantInfo(
+            method_key="general_cf",
+            display_name="GeneralCF",
+            algorithm="general_cf",
+            order_index=999,
+        )
+    display_name, order_index = spec
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name=display_name,
+        algorithm="general_cf",
+        order_index=order_index,
+    )
+
+
+def _simple_ce_info(method_key: str) -> MethodVariantInfo:
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name="simple_ce",
+        algorithm="simple_ce",
+        order_index=0,
+    )
+
+
+def _general_cf_info_from_config(config: dict[str, Any] | None) -> MethodVariantInfo:
+    if not isinstance(config, dict):
+        return _general_cf_info("general_cf")
+    trainer = config.get("trainer")
+    if not isinstance(trainer, dict):
+        return _general_cf_info("general_cf")
+    method_args = trainer.get("method_args")
+    if not isinstance(method_args, dict):
+        return _general_cf_info("general_cf")
+
+    additional_loss = str(method_args.get("additional_loss") or "").upper()
+    routing_mode = str(method_args.get("routing_mode") or "")
+    span_additional = _normalize_bool(method_args.get("span_additional"))
+    span_cf_branch = _normalize_bool(method_args.get("span_cf_branch"))
+
+    if span_additional is None or span_cf_branch is None:
+        return _general_cf_info("general_cf")
+
+    method_key = GENERAL_CF_CONFIG_MAP.get(
+        (additional_loss, routing_mode, span_additional, span_cf_branch)
+    )
+    if method_key is None:
+        return _general_cf_info("general_cf")
+    return _general_cf_info(method_key)
+
+
 def _parse_span_tokens_from_text(text: str) -> dict[str, str] | None:
     legacy_match = SPAN_OLD_BODY_RE.search(text)
     if legacy_match is not None:
@@ -256,7 +347,15 @@ def _parse_span_tokens_from_text(text: str) -> dict[str, str] | None:
     return None
 
 
-def extract_new_method_variant(run_name: str, method_name: str) -> MethodVariantInfo | None:
+def extract_new_method_variant(
+    run_name: str,
+    method_name: str,
+    *,
+    config: dict[str, object] | None = None,
+) -> MethodVariantInfo | None:
+    if method_name == "general_cf":
+        return _general_cf_info_from_config(config)
+
     if method_name == "multicf":
         match = MULTICF_RUN_RE.search(run_name)
         if match is None:
@@ -333,6 +432,12 @@ def _span_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
 
 
 def variant_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
+    if method_key == "general_cf" or method_key.startswith("general_cf_"):
+        return _general_cf_info(method_key)
+
+    if SIMPLE_CE_KEY_RE.fullmatch(method_key) is not None:
+        return _simple_ce_info(method_key)
+
     match = MULTICF_KEY_RE.fullmatch(method_key)
     if match is not None:
         tag = match.group("tag")

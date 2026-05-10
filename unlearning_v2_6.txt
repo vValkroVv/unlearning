@@ -180,6 +180,7 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/duet/dual_cf_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/dual_cf_v2_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/falcon_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/general_cf_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/grad_ascent_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/loku_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/multicf_lora.yaml
@@ -218,6 +219,7 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/rwku/boundary_cf_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/dual_cf_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/dual_cf_v2_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/general_cf_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/grad_ascent_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/grad_diff_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/loku_lora.yaml
@@ -297,6 +299,7 @@ Directory Structure:
 │   │   ├── configs/trainer/DualCF.yaml
 │   │   ├── configs/trainer/FALCON.yaml
 │   │   ├── configs/trainer/finetune.yaml
+│   │   ├── configs/trainer/GeneralCF.yaml
 │   │   ├── configs/trainer/GradAscent.yaml
 │   │   ├── configs/trainer/GradDiff.yaml
 │   │   ├── configs/trainer/LoKU.yaml
@@ -338,6 +341,7 @@ Directory Structure:
 ├── falcon_integration_diff.md
 ├── falcon.md
 ├── ga_integration_diff.md
+├── identify_dualcf_variant.py
 ├── LICENSE
 ├── loku_integration_diff.md
 ├── Makefile
@@ -519,6 +523,7 @@ Directory Structure:
 │       │   ├── src/trainer/unlearn/dpo.py
 │       │   ├── src/trainer/unlearn/dual_cf.py
 │       │   ├── src/trainer/unlearn/falcon.py
+│       │   ├── src/trainer/unlearn/general_cf.py
 │       │   ├── src/trainer/unlearn/grad_ascent.py
 │       │   ├── src/trainer/unlearn/grad_diff.py
 │       │   ├── src/trainer/unlearn/loku.py
@@ -7538,6 +7543,44 @@ scripts/duet/run_dualcf_ablation_v2.sh
 # SpanCFSimNPO + projected conflict handling
 export METHOD_VARIANT=span_cf_simnpo_projected
 export SPAN_PROJECTION_COS_THRESHOLD=0.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# GeneralCF routed DualCF-equivalent
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=general_cf
+export ADDITIONAL_LOSS=NPO
+export ROUTING=full
+export SPAN_ADDITIONAL=false
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# GeneralCF SimpleCE-style fixed coefficients
+# ROUTING=constant equal-averages one lambda triplet per configured reference artifact.
+# Keep GAMMAS=1.0 here because GeneralCF gamma scales the full forget branch.
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=general_cf
+export ADDITIONAL_LOSS=EMPTY
+export ROUTING=constant
+export SPAN_ADDITIONAL=false
+export LAMBDA_CF_CONST=0.5
+export LAMBDA_ADDITIONAL_CONST=0.0
+export LAMBDA_RETAIN_CONST=1.0
+export GAMMAS=1.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# GeneralCF new ablation: span only on L_additional
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=general_cf
+export ADDITIONAL_LOSS=NPO-SAM
+export ROUTING=full
+export SPAN_ADDITIONAL=true
+export SPAN_CF_BRANCH=false
+export SPAN_MODE=lcs
+export SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
 scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
@@ -14923,6 +14966,218 @@ Example commands:
 
 </content>
 
+<content full_path="identify_dualcf_variant.py">
+#!/usr/bin/env python3
+"""Identify which known DualCF artifact variant a folder belongs to.
+
+The script compares the four final train artifacts used by
+`scripts/dualcf/run_campaign_one_lr.sh` against known SHA-256 fingerprints:
+
+- `dualcf.zip`
+- `dualcf_new.zip` and its byte-identical copies
+- `dualcf_v2_5_new_rare.zip`
+- `dualcf_v2_6.zip`
+
+The input path can point either to the artifact root itself (a directory that
+contains `duet/` and `rwku/`) or to a parent directory that contains one or
+more such artifact roots.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+TARGET_FILES = {
+    "rare": Path("duet/rare_llama31_8b_v2/dualcf_rare_v2.jsonl"),
+    "popular": Path("duet/popular_llama31_8b_v2/dualcf_popular_v2.jsonl"),
+    "merged": Path("duet/merged_llama31_8b_v2/dualcf_merged_v2.jsonl"),
+    "rwku": Path("rwku/llama31_8b_level2_v2/dualcf_forget_level2_v2.jsonl"),
+}
+
+KNOWN_VARIANTS = {
+    "dualcf.zip": {
+        "rare": "254bfc5bfeb62ef1744d95fea0a3b6bca451ebe4d6960a876dabb50522ba498a",
+        "popular": "9ac6d30f402bdfe7d9af81555732be3344d46ee4498480d9cdacdedf91f5c01c",
+        "merged": "285cc03b876fc6df5a5add9be827ccb1d1504acb69b9d1e1f60bc8d26c1c98af",
+        "rwku": "4a8995ce47261913cb35466172a3871a02829428712720c738ca578c47e27eed",
+    },
+    "dualcf_new.zip family": {
+        "rare": "1fdf83cce70f5b12a98a5b173a9e36aacbc0da1e7ae0b2175c6934b3c222a8e7",
+        "popular": "e44c348ebd50564d8ee2fde10b2476c5c967732e0422db965628cc890a35109c",
+        "merged": "0c22c964650c41c05332311d1a53711b4a32e41d4b80885afa32e1930f343580",
+        "rwku": "919a99f1f43ecd2917ebfea3bf7577ae3e0c1781fa66b4f95dc4bf16d0a764fd",
+        "aliases": ["dualcf_new.zip", "dualcf_v2_5.zip", "dualcf_v2_5_new.zip"],
+    },
+    "dualcf_v2_5_new_rare.zip": {
+        "rare": "9bb2ff30651182ef641605b09b3679c662c2bed96f852447f10687f2aafb8f43",
+        "popular": "e44c348ebd50564d8ee2fde10b2476c5c967732e0422db965628cc890a35109c",
+        "merged": "0c22c964650c41c05332311d1a53711b4a32e41d4b80885afa32e1930f343580",
+        "rwku": "919a99f1f43ecd2917ebfea3bf7577ae3e0c1781fa66b4f95dc4bf16d0a764fd",
+    },
+    "dualcf_v2_6.zip": {
+        "rare": "313c357c5ca2f3282f9ff8b5e17a21e40c984af5c8bc1d88fb609c94f089d2ce",
+        "popular": "549973387a6c49bcf081e80e56fda661293d847cd3a3be65eca29b73acbd7693",
+        "merged": "31e5b172082d5403ab5c01693fd73a790fc4fea610938e5fdfec0ebbaad72597",
+        "rwku": "919a99f1f43ecd2917ebfea3bf7577ae3e0c1781fa66b4f95dc4bf16d0a764fd",
+    },
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "path",
+        type=Path,
+        help="Artifact root directory or a parent directory containing one or more artifact roots.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON output.",
+    )
+    return parser.parse_args()
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def is_artifact_root(path: Path) -> bool:
+    return all((path / relative_path).is_file() for relative_path in TARGET_FILES.values())
+
+
+def discover_artifact_roots(search_root: Path) -> list[Path]:
+    resolved_root = search_root.resolve()
+    candidates: list[Path] = []
+
+    if is_artifact_root(resolved_root):
+        candidates.append(resolved_root)
+
+    for rare_file in resolved_root.rglob("dualcf_rare_v2.jsonl"):
+        current = rare_file.parent.resolve()
+        while True:
+            if current == resolved_root or resolved_root in current.parents:
+                if is_artifact_root(current):
+                    candidates.append(current)
+                if current == resolved_root:
+                    break
+                current = current.parent
+                continue
+            break
+
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in sorted(candidates):
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+    return deduped
+
+
+def collect_hashes(artifact_root: Path) -> dict[str, str]:
+    return {
+        split: sha256_file(artifact_root / relative_path)
+        for split, relative_path in TARGET_FILES.items()
+    }
+
+
+def classify_hashes(hashes: dict[str, str]) -> tuple[str | None, dict[str, int]]:
+    per_variant_matches: dict[str, int] = {}
+    matched_variant: str | None = None
+    for variant_name, variant_hashes in KNOWN_VARIANTS.items():
+        matches = sum(
+            hashes[split] == variant_hashes[split]
+            for split in TARGET_FILES
+        )
+        per_variant_matches[variant_name] = matches
+        if matches == len(TARGET_FILES):
+            matched_variant = variant_name
+    return matched_variant, per_variant_matches
+
+
+def build_result(artifact_root: Path) -> dict[str, object]:
+    hashes = collect_hashes(artifact_root)
+    variant_name, per_variant_matches = classify_hashes(hashes)
+    result: dict[str, object] = {
+        "artifact_root": str(artifact_root),
+        "hashes": hashes,
+        "variant": variant_name or "unknown",
+        "variant_match_counts": per_variant_matches,
+    }
+    if variant_name == "dualcf_new.zip family":
+        result["aliases"] = KNOWN_VARIANTS[variant_name]["aliases"]
+    return result
+
+
+def print_text(results: list[dict[str, object]]) -> None:
+    for index, result in enumerate(results, start=1):
+        if len(results) > 1:
+            print(f"[{index}] artifact_root={result['artifact_root']}")
+        else:
+            print(f"artifact_root={result['artifact_root']}")
+
+        print(f"variant={result['variant']}")
+        aliases = result.get("aliases")
+        if aliases:
+            print(f"aliases={', '.join(aliases)}")
+        print("hashes=")
+        for split in ("rare", "popular", "merged", "rwku"):
+            print(f"  {split}: {result['hashes'][split]}")
+
+        if result["variant"] == "unknown":
+            print("closest_matches=")
+            match_counts = result["variant_match_counts"]
+            for variant_name, count in sorted(
+                match_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            ):
+                print(f"  {variant_name}: {count}/4")
+
+        if index != len(results):
+            print()
+
+
+def main() -> int:
+    args = parse_args()
+    search_root = args.path.expanduser()
+    if not search_root.exists():
+        raise FileNotFoundError(f"Path not found: {search_root}")
+    if not search_root.is_dir():
+        raise NotADirectoryError(f"Expected a directory: {search_root}")
+
+    artifact_roots = discover_artifact_roots(search_root)
+    if not artifact_roots:
+        print(
+            "No artifact roots found. Expected a directory containing the four final train files "
+            "under duet/ and rwku/.",
+            file=sys.stderr,
+        )
+        return 1
+
+    results = [build_result(artifact_root) for artifact_root in artifact_roots]
+
+    if args.json:
+        print(json.dumps(results if len(results) > 1 else results[0], indent=2))
+    else:
+        print_text(results)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+</content>
+
 <content full_path="tmp_rwku_apply_manual_fixes.py">
 #!/usr/bin/env python3
 """Apply manual RWKU counterfactual fixes into the clean DualCF artifact."""
@@ -16417,6 +16672,211 @@ SPAN_SAM_ADAPTIVE=false \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 ```
 
+### GeneralCF family
+
+The commands below target `duet_rare`, which is the same regime as the best
+`span_cf_samnpo` case above. GeneralCF currently exposes:
+`ADDITIONAL_LOSS={EMPTY,CE,NPO,NPO-SAM}`,
+`ROUTING={full,d_only,a_only,constant,constant_split}`,
+`SPAN_ADDITIONAL`, and `SPAN_CF_BRANCH`.
+
+With `METHOD_VARIANTS="general_cf"`, the wrapper auto-populates reference
+artifacts for `constant` and `constant_split`. `ROUTING=constant` uses the
+equal-average over the reference artifacts, while `constant_split` uses only
+the current split artifact.
+
+1. Base = `NPO-SAM + full + span_additional + span_cf_branch`
+
+This is equivalent to the earlier `span_cf_samnpo`.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=full \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+2. Base without routing, but with `ROUTING=constant`
+
+This removes sample-wise routing and replaces it with one constant triplet
+estimated from the reference artifacts.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=constant \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+3. Base without routing, but with `ROUTING=constant_split`
+
+This is the same setup, but the constants are estimated only from the current
+split artifact.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=constant_split \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+4. Base with all span disabled
+
+This turns span off for both the additional branch and the CF branch.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO-SAM \
+ROUTING=full \
+SPAN_ADDITIONAL=false \
+SPAN_CF_BRANCH=false \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+BETAS=0.1 \
+GAMMAS=1.0 \
+SPAN_SAM_RHO=0.01 \
+SPAN_SAM_ADAPTIVE=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+5. Base, but `NPO-SAM -> NPO`
+
+This is the correct ablation for "remove SAM, keep NPO". In the current
+GeneralCF implementation, SAM exists only inside
+`ADDITIONAL_LOSS=NPO-SAM`, so switching to `NPO` is the "without SAM" ablation.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=NPO \
+ROUTING=full \
+SPAN_ADDITIONAL=true \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.00 \
+SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0 \
+BETAS=0.1 \
+GAMMAS=1.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+6. Base without the additional branch, while keeping routing
+
+Here `ADDITIONAL_LOSS=EMPTY` disables the additional branch completely, while
+routing stays dynamic for the CF and retain parts. `SPAN_CF_BRANCH=true` is
+left on so this changes exactly one thing relative to the base.
+`SPAN_ADDITIONAL` no longer matters here because `EMPTY` zeros the additional
+branch.
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="general_cf" \
+ADDITIONAL_LOSS=EMPTY \
+ROUTING=full \
+SPAN_ADDITIONAL=false \
+SPAN_CF_BRANCH=true \
+DISABLE_RARITY_ROUTES=true \
+DISABLE_DIFFICULTY_ROUTES=false \
+DISABLE_ATTRIBUTION_ROUTES=false \
+RARITY_NEG_GAINS="0.0" \
+RARITY_CF_GAINS="0.0" \
+SPAN_MODE=lcs \
+SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0 \
+SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0 \
+GAMMAS=1.0 \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
+```
+
+7. Plain `simple_ce` baseline
+
+This is the ordinary `simple_ce` run from the current GPU runbook, not the
+fixed-coefficient `general_cf` variant.
+
+```bash
+SEEDS="42 179 1137" METHOD_VARIANTS=simple_ce bash scripts/dualcf/run_campaign_one_lr.sh 0 1e-4 all
+```
+
+Coverage summary:
+
+- item 1 = best base
+- item 2 = `-routing` with global constants
+- item 3 = `-routing` with split-local constants
+- item 4 = `-all span`
+- item 5 = `-SAM`
+- item 6 = `-additional branch`
+- item 7 = plain `simple_ce`
+
+For the six GeneralCF ablations above, replace the last argument `duet_rare`
+with `all` for the full tree.
+
 </content>
 
 <content full_path="dual_cf_integration_diff.md">
@@ -16424,6 +16884,110 @@ bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 duet_rare
 
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
+
+## GeneralCF runtime integration (2026-04-10)
+
+This update adds a new `GeneralCF` trainer that keeps the existing offline
+artifact contract and launcher flow, while exposing a broader routed loss family
+through the same DUET / RWKU production wrapper path.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/general_cf.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/GeneralCF.yaml`
+- `configs/experiment/unlearn/duet/general_cf_lora.yaml`
+- `configs/experiment/unlearn/rwku/general_cf_lora.yaml`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/duet/dual_cf_duet.sh`
+- `scripts/rwku/dual_cf_rwku.sh`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- `GeneralCF` is registered as a new trainer without changing the existing
+  `DualCF`, `SpanCF`, `SpanCFSAMNPO`, or `SimpleCE` trainers
+- the new trainer supports:
+  - `ADDITIONAL_LOSS={EMPTY,CE,NPO,NPO-SAM}`
+  - `ROUTING={full,d_only,a_only,constant,constant_split}`
+  - `SPAN_ADDITIONAL={true,false}`
+  - `SPAN_CF_BRANCH={true,false}`
+- `ADDITIONAL_LOSS=EMPTY` now disables the additional branch itself by forcing
+  `lambda_additional = 0`, rather than only returning a zero additional vector
+- `ROUTING=constant` now estimates one lambda triplet per configured reference
+  artifact and averages those triplets equally; `ROUTING=constant_split`
+  estimates from the current split artifact only
+- `ADDITIONAL_LOSS=NPO-SAM` uses a manual-grad path that applies SAM only to the
+  additional branch while keeping routed retain weighting intact, and its logs
+  now report the second-pass SAM losses for the additional / forget branches
+- the shared DUET and RWKU launchers now encode the GeneralCF control surface in
+  task names and pass the new Hydra knobs through the same train ->
+  endpoint eval -> checkpoint eval -> utility eval -> cleanup flow as the other
+  routed methods
+- the campaign wrapper now auto-populates constant-routing artifact env vars for
+  `METHOD_VARIANTS=general_cf`, so DUET and RWKU can use the same wrapper path
+  as the previous methods
+- the GPU and VAST runbooks now show copy-pasteable `general_cf` examples
+  alongside the existing DualCF / SpanCF family commands
+
+Residual gap:
+
+- the result-table / parser stack still treats `general_cf` as runtime-only;
+  table split-out for `general_cf_*` variants needs a follow-up patch in:
+  `check_saves.py`,
+  `src/tools/build_structured_saves.py`,
+  `src/tools/analyze_wrong_generations.py`,
+  `src/tools/export_unlearning_sanity_checks.py`,
+  `src/tools/build_results_combine_tables.py`
+
+## GeneralCF result-table parsing for packaged ablations (2026-04-12)
+
+This follow-up closes the table-generation path for packaged `general_cf`
+ablations so the same `structured-saves -> combined_tables` flow used by the
+SpanCF family now works for `metrics-new/ep5-ablation`.
+
+Changed files for this patch:
+
+- `src/tools/new_method_variant_utils.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/build_results_combine_tables.py`
+- `docs/experiments.md`
+
+Behavior change summary:
+
+- `build_structured_saves.py` now parses `general_cf` runs into explicit
+  ablation method keys:
+  - `general_cf_base`
+  - `general_cf_no_routing_constant`
+  - `general_cf_no_routing_constant_split`
+  - `general_cf_no_spans`
+  - `general_cf_no_sam`
+  - `general_cf_no_additional`
+- seed averaging now tolerates packaged archives that mix a long-form run name
+  with a hashed alias for the same parsed `general_cf` method, which is needed
+  for the `constant_split` saves in `metrics-new/ep5-ablation`
+- `analyze_wrong_generations.py` now recognizes `general_cf` method keys when
+  raw `DUET_EVAL.json` logs are present
+- `build_results_combine_tables.py` now renders `general_cf` ablations in
+  variant-only tables and can also include `simple_ce` in the same table build
+- variant-only table builds now auto-include
+  `forget_wrong_gen_rate.tsv` / `holdout_wrong_gen_rate.tsv` directly from a
+  structured-saves tree when those sidecars already exist, so packaged archives
+  without raw `DUET_EVAL.json` can still populate `FW` / `HW`
+
+Validation status:
+
+- verified locally on `metrics-new/ep5-ablation` by generating:
+  - `metrics-new/ep5-ablation/structured-saves-avg`
+  - `metrics-new/results-combine-ablation/combined_tables.txt`
+  - `metrics-new/results-combine-ablation/combined_tables_slides.tex`
+- `analyze_wrong_generations.py` still requires raw `DUET_EVAL.json` inputs to
+  regenerate the standalone `wrong-generations/*.tsv` summaries; the packaged
+  `ep5-ablation` archive does not contain those raw eval logs
 
 ## SpanCFSAMNPO branch scales (2026-04-02)
 
@@ -19749,6 +20313,26 @@ Note: the current `metrics-new/ep5-dualfc-v2_5-general-utility` archive contains
 `span_cf_samnpo` save directories, so the generated utility tables omit those
 rows unless matching saves are added.
 
+## build seed-averaged tables for the `general_cf` ep5 ablation archive
+python src/tools/build_structured_saves.py \
+  --input-root metrics-new/ep5-ablation/saves-clean \
+  --output-root metrics-new/ep5-ablation/structured-saves-avg \
+  --overwrite \
+  --average-seeds
+
+python src/tools/build_results_combine_tables.py \
+  --variant-root metrics-new/ep5-ablation/structured-saves-avg \
+  --variant-display compact \
+  --output-file metrics-new/results-combine-ablation/combined_tables.txt \
+  --output-slides-tex metrics-new/results-combine-ablation/combined_tables_slides.tex
+
+Note: this archive keeps `WRONG_GENERATIONS_SUMMARY.json` sidecars but does not
+ship raw `DUET_EVAL.json` files, so `build_results_combine_tables.py` must pick
+up `forget_wrong_gen_rate.tsv` / `holdout_wrong_gen_rate.tsv` directly from the
+structured-saves tree. You do not need a separate
+`analyze_wrong_generations.py` pass unless the raw per-example eval logs are
+available.
+
 ## an extensively filled out configuration for an unlearning experiment
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default data_split=News \
 trainer=NPO trainer.method_args.retain_loss_type=KL task_name=llama2_books_NPO_KL \
@@ -23041,6 +23625,77 @@ task_name: duet_span_cf_local_retain_lora
 
 </content>
 
+<content full_path="configs/experiment/unlearn/duet/general_cf_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: GeneralCF
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget_dual_cf
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+# Local JSON/JSONL artifact mode: override `cf_dataset_data_files` with the
+# merged DualCF artifact path. For HF dataset repos, override both
+# `cf_dataset_path` and `cf_dataset_split`.
+cf_dataset_path: json
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: duet_general_cf_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/duet/span_cf_lora.yaml">
 # @package _global_
 
@@ -25510,6 +26165,80 @@ trainer:
     ddp_find_unused_parameters: false
 
 task_name: rwku_span_cf_local_retain_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/rwku/general_cf_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: GeneralCF
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget_dual_cf
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+# Local JSON/JSONL artifact mode: override `cf_dataset_data_files` with the
+# merged DualCF artifact path. For HF dataset repos, override `cf_dataset_path`,
+# `cf_dataset_name`, and `cf_dataset_split` as needed.
+cf_dataset_path: json
+cf_dataset_name: null
+cf_dataset_split: train
+cf_dataset_data_files: null
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget_dual_cf:
+      args:
+        hf_args:
+          path: ${cf_dataset_path}
+          name: ${cf_dataset_name}
+          split: ${cf_dataset_split}
+          data_files: ${cf_dataset_data_files}
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 5
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    logging_strategy: steps
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+
+task_name: rwku_general_cf_lora
 
 </content>
 
@@ -29131,6 +29860,40 @@ method_args:
 
 </content>
 
+<content full_path="configs/trainer/GeneralCF.yaml">
+defaults:
+  - DualCF
+
+handler: GeneralCF
+trace_jsonl: true
+
+method_args:
+  additional_loss: NPO
+  span_additional: false
+  span_cf_branch: false
+  routing_mode: full
+
+  span_mode: lcs
+  alt_shared_token_weight: 0.0
+  alt_unique_token_weight: 1.0
+  orig_shared_token_weight: 0.0
+  orig_unique_token_weight: 1.0
+
+  cf_branch_scale: 1.0
+  additional_branch_scale: 1.0
+  sam_rho: 0.01
+  sam_adaptive: false
+  sam_eps: 1e-12
+
+  lambda_cf_const: null
+  lambda_additional_const: null
+  lambda_retain_const: null
+  constant_artifact_paths: null
+  constant_current_artifact_path: null
+  constant_batch_size: null
+
+</content>
+
 <content full_path="configs/trainer/UNDIAL.yaml">
 defaults:
   - finetune
@@ -31718,6 +32481,13 @@ case "${METHOD_VARIANT}" in
     export RUN_LABEL=${RUN_LABEL:-DPO}
     exec bash "${script_dir}/dual_cf_duet.sh"
     ;;
+  general_cf)
+    export TRAINER=${TRAINER:-GeneralCF}
+    export METHOD_NAME=${METHOD_NAME:-general_cf}
+    export RUN_LABEL=${RUN_LABEL:-GeneralCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/duet/general_cf_lora.yaml}
+    exec bash "${script_dir}/dual_cf_duet.sh"
+    ;;
   simple_ce)
     exec bash "${script_dir}/simple_ce_duet.sh"
     ;;
@@ -33837,6 +34607,20 @@ span_sam_eps="${SPAN_SAM_EPS:-1e-12}"
 span_projection_cos_threshold="${SPAN_PROJECTION_COS_THRESHOLD:-0.0}"
 span_projection_eps="${SPAN_PROJECTION_EPS:-1e-12}"
 
+general_additional_loss="${ADDITIONAL_LOSS:-NPO}"
+general_additional_loss_hydra="${general_additional_loss//-/_}"
+general_routing_mode="${ROUTING:-full}"
+general_span_additional="${SPAN_ADDITIONAL:-false}"
+general_span_cf_branch="${SPAN_CF_BRANCH:-false}"
+general_lambda_cf_const="${LAMBDA_CF_CONST:-null}"
+general_lambda_additional_const="${LAMBDA_ADDITIONAL_CONST:-null}"
+general_lambda_retain_const="${LAMBDA_RETAIN_CONST:-null}"
+general_constant_artifact_paths="${CONSTANT_ROUTING_ARTIFACTS:-null}"
+general_constant_current_artifact="${CONSTANT_ROUTING_CURRENT_ARTIFACT:-${cf_dataset_data_files:-null}}"
+general_constant_batch_size="${CONSTANT_ROUTING_BATCH_SIZE:-null}"
+general_cf_branch_scale="${CF_BRANCH_SCALE:-${SPAN_CF_BRANCH_SCALE:-1.0}}"
+general_additional_branch_scale="${ADDITIONAL_BRANCH_SCALE:-${SPAN_SAMNPO_BRANCH_SCALE:-1.0}}"
+
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
@@ -33844,6 +34628,27 @@ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+if [[ "${trainer}" == "GeneralCF" ]]; then
+    case "${general_routing_mode}" in
+        full|constant|constant_split)
+            disable_difficulty_routes=(false)
+            disable_attribution_routes=(false)
+            ;;
+        d_only)
+            disable_difficulty_routes=(false)
+            disable_attribution_routes=(true)
+            ;;
+        a_only)
+            disable_difficulty_routes=(true)
+            disable_attribution_routes=(false)
+            ;;
+        *)
+            echo "[duet][${run_label}] Unsupported ROUTING=${general_routing_mode}" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 for split in "${forget_retain_splits[@]}"; do
     read -r forget_split retain_split forget_label <<< "${split}"
@@ -33954,6 +34759,27 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             span_proj_threshold_tag=${span_projection_cos_threshold//./p}
                                                                                                             method_suffix=${method_suffix}_pct${span_proj_threshold_tag}
                                                                                                         fi
+                                                                                                    elif [[ "${trainer}" == "GeneralCF" ]]; then
+                                                                                                        general_add_tag=$(echo "${general_additional_loss}" | tr '[:upper:]' '[:lower:]' | tr '-' '_' )
+                                                                                                        general_route_tag=$(echo "${general_routing_mode}" | tr '[:upper:]' '[:lower:]' | tr '-' '_' )
+                                                                                                        general_span_add_tag=$(short_bool_tag "${general_span_additional}")
+                                                                                                        general_span_cf_tag=$(short_bool_tag "${general_span_cf_branch}")
+                                                                                                        method_suffix=_add${general_add_tag}_rt${general_route_tag}_sa${general_span_add_tag}_sc${general_span_cf_tag}
+                                                                                                        if [[ "${general_span_additional}" == "true" || "${general_span_cf_branch}" == "true" ]]; then
+                                                                                                            span_mode_tag=$(short_span_mode_tag "${span_mode}")
+                                                                                                            span_alt_shared_tag=${span_alt_shared_token_weight//./p}
+                                                                                                            span_alt_unique_tag=${span_alt_unique_token_weight//./p}
+                                                                                                            span_orig_shared_tag=${span_orig_shared_token_weight//./p}
+                                                                                                            span_orig_unique_tag=${span_orig_unique_token_weight//./p}
+                                                                                                            method_suffix=${method_suffix}_m${span_mode_tag}_asw${span_alt_shared_tag}_auw${span_alt_unique_tag}_osw${span_orig_shared_tag}_ouw${span_orig_unique_tag}
+                                                                                                        fi
+                                                                                                        if [[ "${general_additional_loss}" == "NPO-SAM" || "${general_additional_loss}" == "NPO_SAM" || "${general_additional_loss}" == "npo-sam" || "${general_additional_loss}" == "npo_sam" ]]; then
+                                                                                                            general_cf_scale_tag=${general_cf_branch_scale//./p}
+                                                                                                            general_add_scale_tag=${general_additional_branch_scale//./p}
+                                                                                                            general_sam_rho_tag=${span_sam_rho//./p}
+                                                                                                            general_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
+                                                                                                            method_suffix=${method_suffix}_sr${general_sam_rho_tag}_sad${general_sam_adaptive_tag}_cfs${general_cf_scale_tag}_ads${general_add_scale_tag}
+                                                                                                        fi
                                                                                                     fi
 
                                                                                                     task_prefix=duet_${base_model}_${forget_label}_${method_name}
@@ -34014,7 +34840,7 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                             trainer.method_args.gamma=${gamma}
                                                                                                             trainer.method_args.retain_loss_type=NLL
                                                                                                         )
-                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                        if [[ "${trainer}" == "DualCF" || "${trainer}" == "GeneralCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.tau_d=${tau_d}
                                                                                                                 trainer.method_args.tau_a=${tau_a}
@@ -34038,7 +34864,34 @@ for split in "${forget_retain_splits[@]}"; do
                                                                                                                 trainer.method_args.neg_power=${neg_power}
                                                                                                             )
                                                                                                         fi
-                                                                                                        if [[ "${trainer}" == "MultiCF" ]]; then
+                                                                                                        if [[ "${trainer}" == "GeneralCF" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.additional_loss=${general_additional_loss_hydra}
+                                                                                                                trainer.method_args.routing_mode=${general_routing_mode}
+                                                                                                                trainer.method_args.span_additional=${general_span_additional}
+                                                                                                                trainer.method_args.span_cf_branch=${general_span_cf_branch}
+                                                                                                                trainer.method_args.span_mode=${span_mode}
+                                                                                                                trainer.method_args.alt_shared_token_weight=${span_alt_shared_token_weight}
+                                                                                                                trainer.method_args.alt_unique_token_weight=${span_alt_unique_token_weight}
+                                                                                                                trainer.method_args.orig_shared_token_weight=${span_orig_shared_token_weight}
+                                                                                                                trainer.method_args.orig_unique_token_weight=${span_orig_unique_token_weight}
+                                                                                                                trainer.method_args.lambda_cf_const=${general_lambda_cf_const}
+                                                                                                                trainer.method_args.lambda_additional_const=${general_lambda_additional_const}
+                                                                                                                trainer.method_args.lambda_retain_const=${general_lambda_retain_const}
+                                                                                                                trainer.method_args.constant_artifact_paths=${general_constant_artifact_paths}
+                                                                                                                trainer.method_args.constant_current_artifact_path=${general_constant_current_artifact}
+                                                                                                                trainer.method_args.constant_batch_size=${general_constant_batch_size}
+                                                                                                            )
+                                                                                                            if [[ "${general_additional_loss}" == "NPO-SAM" || "${general_additional_loss}" == "NPO_SAM" || "${general_additional_loss}" == "npo-sam" || "${general_additional_loss}" == "npo_sam" ]]; then
+                                                                                                                extra_method_args+=(
+                                                                                                                    trainer.method_args.cf_branch_scale=${general_cf_branch_scale}
+                                                                                                                    trainer.method_args.additional_branch_scale=${general_additional_branch_scale}
+                                                                                                                    trainer.method_args.sam_rho=${span_sam_rho}
+                                                                                                                    trainer.method_args.sam_adaptive=${span_sam_adaptive}
+                                                                                                                    trainer.method_args.sam_eps=${span_sam_eps}
+                                                                                                                )
+                                                                                                            fi
+                                                                                                        elif [[ "${trainer}" == "MultiCF" ]]; then
                                                                                                             extra_method_args+=(
                                                                                                                 trainer.method_args.max_alternates_used=${multicf_max_alternates_used}
                                                                                                                 trainer.method_args.alt_agg_mode=${multicf_alt_agg_mode}
@@ -40332,6 +41185,50 @@ configure_method_variant_env() {
   echo "[dualcf][campaign] LoKU cleanup: FILA_BASE_PATH=${FILA_BASE_PATH}"
 }
 
+configure_general_cf_routing_env() {
+  local method_variant="$1"
+  local current_artifact="$2"
+  local routing_mode="${ROUTING:-full}"
+
+  unset CONSTANT_ROUTING_ARTIFACTS
+  unset CONSTANT_ROUTING_CURRENT_ARTIFACT
+
+  if [[ "${method_variant}" != "general_cf" ]]; then
+    return
+  fi
+
+  case "${routing_mode}" in
+    full|d_only|a_only)
+      return
+      ;;
+    constant)
+      local rare_artifact
+      local popular_artifact
+      local merged_artifact
+      local rwku_artifact
+      rare_artifact="$(resolve_duet_artifact_for_method rare full)"
+      popular_artifact="$(resolve_duet_artifact_for_method popular full)"
+      merged_artifact="$(resolve_duet_artifact_for_method merged full)"
+      rwku_artifact="$(resolve_rwku_artifact_for_method full)"
+      require_file "${rare_artifact}"
+      require_file "${popular_artifact}"
+      require_file "${merged_artifact}"
+      require_file "${rwku_artifact}"
+      export CONSTANT_ROUTING_ARTIFACTS="${CONSTANT_ROUTING_ARTIFACTS:-${rare_artifact}::${popular_artifact}::${merged_artifact}::${rwku_artifact}}"
+      ;;
+    constant_split)
+      require_file "${current_artifact}"
+      export CONSTANT_ROUTING_CURRENT_ARTIFACT="${CONSTANT_ROUTING_CURRENT_ARTIFACT:-${current_artifact}}"
+      ;;
+    *)
+      echo "[dualcf][campaign] Unsupported ROUTING=${routing_mode} for general_cf" >&2
+      exit 1
+      ;;
+  esac
+
+  export CONSTANT_ROUTING_BATCH_SIZE="${CONSTANT_ROUTING_BATCH_SIZE:-${PER_DEVICE_TRAIN_BS:-16}}"
+}
+
 resolve_duet_artifact_for_method() {
   local forget_label="$1"
   local method_variant="$2"
@@ -40408,6 +41305,7 @@ run_duet_block() {
     require_file "${CF_DATASET_DATA_FILES}"
     echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
     configure_method_variant_env "${METHOD_VARIANT}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -40438,6 +41336,7 @@ run_rwku_block() {
     require_file "${CF_DATASET_DATA_FILES}"
     echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
     configure_method_variant_env "${METHOD_VARIANT}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -43732,6 +44631,13 @@ case "${METHOD_VARIANT}" in
     export TRAINER=${TRAINER:-DPO}
     export METHOD_NAME=${METHOD_NAME:-dpo_cf}
     export RUN_LABEL=${RUN_LABEL:-DPO}
+    exec bash "${script_dir}/dual_cf_rwku.sh"
+    ;;
+  general_cf)
+    export TRAINER=${TRAINER:-GeneralCF}
+    export METHOD_NAME=${METHOD_NAME:-general_cf}
+    export RUN_LABEL=${RUN_LABEL:-GeneralCF}
+    export EXPERIMENT=${EXPERIMENT:-unlearn/rwku/general_cf_lora.yaml}
     exec bash "${script_dir}/dual_cf_rwku.sh"
     ;;
   simple_ce)
@@ -47103,6 +48009,20 @@ span_sam_eps="${SPAN_SAM_EPS:-1e-12}"
 span_projection_cos_threshold="${SPAN_PROJECTION_COS_THRESHOLD:-0.0}"
 span_projection_eps="${SPAN_PROJECTION_EPS:-1e-12}"
 
+general_additional_loss="${ADDITIONAL_LOSS:-NPO}"
+general_additional_loss_hydra="${general_additional_loss//-/_}"
+general_routing_mode="${ROUTING:-full}"
+general_span_additional="${SPAN_ADDITIONAL:-false}"
+general_span_cf_branch="${SPAN_CF_BRANCH:-false}"
+general_lambda_cf_const="${LAMBDA_CF_CONST:-null}"
+general_lambda_additional_const="${LAMBDA_ADDITIONAL_CONST:-null}"
+general_lambda_retain_const="${LAMBDA_RETAIN_CONST:-null}"
+general_constant_artifact_paths="${CONSTANT_ROUTING_ARTIFACTS:-null}"
+general_constant_current_artifact="${CONSTANT_ROUTING_CURRENT_ARTIFACT:-${cf_dataset_data_files:-null}}"
+general_constant_batch_size="${CONSTANT_ROUTING_BATCH_SIZE:-null}"
+general_cf_branch_scale="${CF_BRANCH_SCALE:-${SPAN_CF_BRANCH_SCALE:-1.0}}"
+general_additional_branch_scale="${ADDITIONAL_BRANCH_SCALE:-${SPAN_SAMNPO_BRANCH_SCALE:-1.0}}"
+
 lora_rs=(${LORA_RS:-"32"})
 lora_alphas=(${LORA_ALPHAS:-"64"})
 lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
@@ -47110,6 +48030,27 @@ delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
 run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
 
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+if [[ "${trainer}" == "GeneralCF" ]]; then
+    case "${general_routing_mode}" in
+        full|constant|constant_split)
+            disable_difficulty_routes=(false)
+            disable_attribution_routes=(false)
+            ;;
+        d_only)
+            disable_difficulty_routes=(false)
+            disable_attribution_routes=(true)
+            ;;
+        a_only)
+            disable_difficulty_routes=(true)
+            disable_attribution_routes=(false)
+            ;;
+        *)
+            echo "[rwku][${run_label}] Unsupported ROUTING=${general_routing_mode}" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 for lr in "${lrs[@]}"; do
     for beta in "${betas[@]}"; do
@@ -47209,6 +48150,27 @@ for lr in "${lrs[@]}"; do
                                                                                                         span_proj_threshold_tag=${span_projection_cos_threshold//./p}
                                                                                                         method_suffix=${method_suffix}_pct${span_proj_threshold_tag}
                                                                                                     fi
+                                                                                                elif [[ "${trainer}" == "GeneralCF" ]]; then
+                                                                                                    general_add_tag=$(echo "${general_additional_loss}" | tr '[:upper:]' '[:lower:]' | tr '-' '_' )
+                                                                                                    general_route_tag=$(echo "${general_routing_mode}" | tr '[:upper:]' '[:lower:]' | tr '-' '_' )
+                                                                                                    general_span_add_tag=$(short_bool_tag "${general_span_additional}")
+                                                                                                    general_span_cf_tag=$(short_bool_tag "${general_span_cf_branch}")
+                                                                                                    method_suffix=_add${general_add_tag}_rt${general_route_tag}_sa${general_span_add_tag}_sc${general_span_cf_tag}
+                                                                                                    if [[ "${general_span_additional}" == "true" || "${general_span_cf_branch}" == "true" ]]; then
+                                                                                                        span_mode_tag=$(short_span_mode_tag "${span_mode}")
+                                                                                                        span_alt_shared_tag=${span_alt_shared_token_weight//./p}
+                                                                                                        span_alt_unique_tag=${span_alt_unique_token_weight//./p}
+                                                                                                        span_orig_shared_tag=${span_orig_shared_token_weight//./p}
+                                                                                                        span_orig_unique_tag=${span_orig_unique_token_weight//./p}
+                                                                                                        method_suffix=${method_suffix}_m${span_mode_tag}_asw${span_alt_shared_tag}_auw${span_alt_unique_tag}_osw${span_orig_shared_tag}_ouw${span_orig_unique_tag}
+                                                                                                    fi
+                                                                                                    if [[ "${general_additional_loss}" == "NPO-SAM" || "${general_additional_loss}" == "NPO_SAM" || "${general_additional_loss}" == "npo-sam" || "${general_additional_loss}" == "npo_sam" ]]; then
+                                                                                                        general_cf_scale_tag=${general_cf_branch_scale//./p}
+                                                                                                        general_add_scale_tag=${general_additional_branch_scale//./p}
+                                                                                                        general_sam_rho_tag=${span_sam_rho//./p}
+                                                                                                        general_sam_adaptive_tag=$(short_bool_tag "${span_sam_adaptive}")
+                                                                                                        method_suffix=${method_suffix}_sr${general_sam_rho_tag}_sad${general_sam_adaptive_tag}_cfs${general_cf_scale_tag}_ads${general_add_scale_tag}
+                                                                                                    fi
                                                                                                 fi
 
                                                                                                 task_prefix=rwku_${base_model}_${forget_split}_${method_name}
@@ -47269,7 +48231,7 @@ for lr in "${lrs[@]}"; do
                                                                                                         trainer.method_args.gamma=${gamma}
                                                                                                         trainer.method_args.retain_loss_type=NLL
                                                                                                     )
-                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
+                                                                                                    if [[ "${trainer}" == "DualCF" || "${trainer}" == "GeneralCF" || "${trainer}" == "MultiCF" || "${trainer}" == "BoundaryCF" || "${trainer}" == "SpanCF" || "${trainer}" == "SpanCFSAMNPO" || "${trainer}" == "SpanCFSimNPO" || "${trainer}" == "SpanCFLocalRetain" || "${trainer}" == "SpanCFSimNPOLocalRetain" || "${trainer}" == "SpanCFSimNPOSAM" || "${trainer}" == "SpanCFSimNPOProjected" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.tau_d=${tau_d}
                                                                                                             trainer.method_args.tau_a=${tau_a}
@@ -47293,7 +48255,34 @@ for lr in "${lrs[@]}"; do
                                                                                                             trainer.method_args.neg_power=${neg_power}
                                                                                                         )
                                                                                                     fi
-                                                                                                    if [[ "${trainer}" == "MultiCF" ]]; then
+                                                                                                    if [[ "${trainer}" == "GeneralCF" ]]; then
+                                                                                                        extra_method_args+=(
+                                                                                                            trainer.method_args.additional_loss=${general_additional_loss_hydra}
+                                                                                                            trainer.method_args.routing_mode=${general_routing_mode}
+                                                                                                            trainer.method_args.span_additional=${general_span_additional}
+                                                                                                            trainer.method_args.span_cf_branch=${general_span_cf_branch}
+                                                                                                            trainer.method_args.span_mode=${span_mode}
+                                                                                                            trainer.method_args.alt_shared_token_weight=${span_alt_shared_token_weight}
+                                                                                                            trainer.method_args.alt_unique_token_weight=${span_alt_unique_token_weight}
+                                                                                                            trainer.method_args.orig_shared_token_weight=${span_orig_shared_token_weight}
+                                                                                                            trainer.method_args.orig_unique_token_weight=${span_orig_unique_token_weight}
+                                                                                                            trainer.method_args.lambda_cf_const=${general_lambda_cf_const}
+                                                                                                            trainer.method_args.lambda_additional_const=${general_lambda_additional_const}
+                                                                                                            trainer.method_args.lambda_retain_const=${general_lambda_retain_const}
+                                                                                                            trainer.method_args.constant_artifact_paths=${general_constant_artifact_paths}
+                                                                                                            trainer.method_args.constant_current_artifact_path=${general_constant_current_artifact}
+                                                                                                            trainer.method_args.constant_batch_size=${general_constant_batch_size}
+                                                                                                        )
+                                                                                                        if [[ "${general_additional_loss}" == "NPO-SAM" || "${general_additional_loss}" == "NPO_SAM" || "${general_additional_loss}" == "npo-sam" || "${general_additional_loss}" == "npo_sam" ]]; then
+                                                                                                            extra_method_args+=(
+                                                                                                                trainer.method_args.cf_branch_scale=${general_cf_branch_scale}
+                                                                                                                trainer.method_args.additional_branch_scale=${general_additional_branch_scale}
+                                                                                                                trainer.method_args.sam_rho=${span_sam_rho}
+                                                                                                                trainer.method_args.sam_adaptive=${span_sam_adaptive}
+                                                                                                                trainer.method_args.sam_eps=${span_sam_eps}
+                                                                                                            )
+                                                                                                        fi
+                                                                                                    elif [[ "${trainer}" == "MultiCF" ]]; then
                                                                                                         extra_method_args+=(
                                                                                                             trainer.method_args.max_alternates_used=${multicf_max_alternates_used}
                                                                                                             trainer.method_args.alt_agg_mode=${multicf_alt_agg_mode}
@@ -54574,7 +55563,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -54596,6 +55585,7 @@ METHOD_DISPLAY = {
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
     "simple_ce": "Simple-CE",
+    "general_cf": "GeneralCF",
     "span_cf_samnpo": "SpanCF-SAMNPO",
     "span_cf_simnpo": "SpanCF-SimNPO",
     "span_cf_local_retain": "SpanCF-LocalRetain",
@@ -54760,7 +55750,7 @@ def extract_seed(run_name: str) -> str:
     return match.group(1)
 
 
-def extract_method_key(run_name: str) -> str:
+def extract_method_key(run_name: str, config: dict[str, Any] | None = None) -> str:
     match = METHOD_RE.search(run_name)
     if match is None:
         raise ValueError(f"Could not parse method from run name: {run_name}")
@@ -54780,7 +55770,13 @@ def extract_method_key(run_name: str) -> str:
             return "dual_cf_" + "_".join(flags)
         return "dual_cf"
 
-    variant_info = extract_new_method_variant(run_name, method_name)
+    if method_name == "simple_ce":
+        ablation_tokens = [token for token in suffix.split("_") if token.startswith(("cf", "ret", "gamma"))]
+        if ablation_tokens:
+            return "_".join([method_name] + ablation_tokens)
+        return method_name
+
+    variant_info = extract_new_method_variant(run_name, method_name, config=config)
     if variant_info is not None:
         return variant_info.method_key
     return method_name
@@ -54895,7 +55891,7 @@ def build_eval_log(input_root: Path, eval_path: Path) -> EvalLog:
         },
     )
 
-    method_key = extract_method_key(run_name)
+    method_key = extract_method_key(run_name, config)
     return EvalLog(
         input_root=input_root.resolve(),
         input_root_label=infer_input_root_label(input_root.resolve()),
@@ -59408,6 +60404,7 @@ METHOD_ORDER = [
     "a_only",
     "dpo",
     "simple_ce",
+    "general_cf",
     "multicf",
     "boundary_cf",
     "span_cf",
@@ -59427,7 +60424,7 @@ METHOD_ORDER = [
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
@@ -59580,7 +60577,7 @@ def split_seed_suffix(run_name: str) -> tuple[str, str | None]:
     return match.group("base"), match.group("seed")
 
 
-def extract_method_key(run_name: str) -> str:
+def extract_method_key(run_name: str, config: dict[str, Any] | None = None) -> str:
     match = METHOD_RE.search(run_name)
     if match is None:
         raise ValueError(f"Could not parse method from run name: {run_name}")
@@ -59609,7 +60606,7 @@ def extract_method_key(run_name: str) -> str:
         if ablation_tokens:
             return "_".join([method_name] + ablation_tokens)
         return method_name
-    variant_info = extract_new_method_variant(run_name, method_name)
+    variant_info = extract_new_method_variant(run_name, method_name, config=config)
     if variant_info is not None:
         return variant_info.method_key
     return method_name
@@ -60126,17 +61123,21 @@ def group_runs_for_output(
                 "run_name": canonical_name,
                 "params_file": run["params_file"],
                 "runs": [],
+                "canonical_names": set(),
             },
         )
-        if group["run_name"] != canonical_name:
-            raise ValueError(
-                f"Method {method_name} maps to multiple canonical run names: "
-                f"{group['run_name']} vs {canonical_name}"
-            )
+        group["canonical_names"].add(canonical_name)
         group["runs"].append(run)
 
     output_groups = sorted(grouped.values(), key=lambda item: method_sort_key(str(item["method"])))
     for group in output_groups:
+        canonical_names = sorted(str(name) for name in group.pop("canonical_names"))
+        if len(canonical_names) == 1:
+            group["run_name"] = canonical_names[0]
+        else:
+            # Some packaged archives mix long-form and hashed aliases for the same method config.
+            # Seed averaging is still valid because the method key and parsed config match.
+            group["run_name"] = str(group["method"])
         group["runs"].sort(key=run_seed_sort_key)
         group["seed_values"] = [
             seed
@@ -60210,7 +61211,7 @@ def main() -> None:
 
         split_bucket = infer_split_bucket(run_dir.name, config)
         lr = extract_lr(run_dir.name)
-        method_key = extract_method_key(run_dir.name)
+        method_key = extract_method_key(run_dir.name, config)
         params_payload = build_params_payload(run_dir, split_bucket, lr, method_key, config, overrides)
 
         params_file = params_dir / f"{run_dir.name}.yaml"
@@ -61018,6 +62019,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 
 MULTICF_RUN_RE = re.compile(
@@ -61044,6 +62046,9 @@ MULTICF_KEY_RE = re.compile(
 )
 BOUNDARY_KEY_RE = re.compile(
     r"^boundary_cf_(?:(?P<tag>b\d+)|lr(?P<local>[^_]+)_bm(?P<margin>[^_]+))$"
+)
+SIMPLE_CE_KEY_RE = re.compile(
+    r"^simple_ce(?:_cf(?P<cf>[^_]+))?(?:_ret(?P<ret>[^_]+))?(?:_gamma(?P<gamma>[^_]+))?$"
 )
 
 MULTICF_TAGS = {
@@ -61092,6 +62097,22 @@ BOOL_TOKEN_DISPLAY = {
     "t": "true",
     "f": "false",
 }
+GENERAL_CF_VARIANT_SPECS = {
+    "general_cf_base": ("base", 0),
+    "general_cf_no_routing_constant": ("routing", 1),
+    "general_cf_no_routing_constant_split": ("routing_split", 2),
+    "general_cf_no_spans": ("span", 3),
+    "general_cf_no_sam": ("sam", 4),
+    "general_cf_no_additional": ("additional", 5),
+}
+GENERAL_CF_CONFIG_MAP = {
+    ("NPO_SAM", "full", True, True): "general_cf_base",
+    ("NPO_SAM", "constant", True, True): "general_cf_no_routing_constant",
+    ("NPO_SAM", "constant_split", True, True): "general_cf_no_routing_constant_split",
+    ("NPO_SAM", "full", False, False): "general_cf_no_spans",
+    ("NPO", "full", True, True): "general_cf_no_sam",
+    ("EMPTY", "full", False, True): "general_cf_no_additional",
+}
 SPAN_VARIANT_FAMILIES = {
     "span_cf": "SpanCF",
     "span_cf_samnpo": "SpanCF-SAMNPO",
@@ -61112,6 +62133,8 @@ VARIANT_ALGORITHM_ORDER = {
     "span_cf_simnpo_local_retain": 6,
     "span_cf_simnpo_sam": 7,
     "span_cf_simnpo_projected": 8,
+    "general_cf": 9,
+    "simple_ce": 10,
 }
 
 
@@ -61128,6 +62151,10 @@ def format_numeric_token(token: str) -> str:
 
 
 def base_variant_algorithm(method_key: str) -> str | None:
+    if method_key == "general_cf" or method_key.startswith("general_cf_"):
+        return "general_cf"
+    if method_key == "simple_ce" or method_key.startswith("simple_ce"):
+        return "simple_ce"
     for prefix in sorted(SPAN_VARIANT_FAMILIES, key=len, reverse=True):
         if method_key == prefix or method_key.startswith(f"{prefix}_"):
             return prefix
@@ -61238,6 +62265,71 @@ def _span_info(
     )
 
 
+def _normalize_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "t", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "f", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _general_cf_info(method_key: str) -> MethodVariantInfo:
+    spec = GENERAL_CF_VARIANT_SPECS.get(method_key)
+    if spec is None:
+        return MethodVariantInfo(
+            method_key="general_cf",
+            display_name="GeneralCF",
+            algorithm="general_cf",
+            order_index=999,
+        )
+    display_name, order_index = spec
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name=display_name,
+        algorithm="general_cf",
+        order_index=order_index,
+    )
+
+
+def _simple_ce_info(method_key: str) -> MethodVariantInfo:
+    return MethodVariantInfo(
+        method_key=method_key,
+        display_name="simple_ce",
+        algorithm="simple_ce",
+        order_index=0,
+    )
+
+
+def _general_cf_info_from_config(config: dict[str, Any] | None) -> MethodVariantInfo:
+    if not isinstance(config, dict):
+        return _general_cf_info("general_cf")
+    trainer = config.get("trainer")
+    if not isinstance(trainer, dict):
+        return _general_cf_info("general_cf")
+    method_args = trainer.get("method_args")
+    if not isinstance(method_args, dict):
+        return _general_cf_info("general_cf")
+
+    additional_loss = str(method_args.get("additional_loss") or "").upper()
+    routing_mode = str(method_args.get("routing_mode") or "")
+    span_additional = _normalize_bool(method_args.get("span_additional"))
+    span_cf_branch = _normalize_bool(method_args.get("span_cf_branch"))
+
+    if span_additional is None or span_cf_branch is None:
+        return _general_cf_info("general_cf")
+
+    method_key = GENERAL_CF_CONFIG_MAP.get(
+        (additional_loss, routing_mode, span_additional, span_cf_branch)
+    )
+    if method_key is None:
+        return _general_cf_info("general_cf")
+    return _general_cf_info(method_key)
+
+
 def _parse_span_tokens_from_text(text: str) -> dict[str, str] | None:
     legacy_match = SPAN_OLD_BODY_RE.search(text)
     if legacy_match is not None:
@@ -61269,7 +62361,15 @@ def _parse_span_tokens_from_text(text: str) -> dict[str, str] | None:
     return None
 
 
-def extract_new_method_variant(run_name: str, method_name: str) -> MethodVariantInfo | None:
+def extract_new_method_variant(
+    run_name: str,
+    method_name: str,
+    *,
+    config: dict[str, object] | None = None,
+) -> MethodVariantInfo | None:
+    if method_name == "general_cf":
+        return _general_cf_info_from_config(config)
+
     if method_name == "multicf":
         match = MULTICF_RUN_RE.search(run_name)
         if match is None:
@@ -61346,6 +62446,12 @@ def _span_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
 
 
 def variant_info_from_method_key(method_key: str) -> MethodVariantInfo | None:
+    if method_key == "general_cf" or method_key.startswith("general_cf_"):
+        return _general_cf_info(method_key)
+
+    if SIMPLE_CE_KEY_RE.fullmatch(method_key) is not None:
+        return _simple_ce_info(method_key)
+
     match = MULTICF_KEY_RE.fullmatch(method_key)
     if match is not None:
         tag = match.group("tag")
@@ -62428,6 +63534,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--variant-display-name",
+        action="append",
+        help=(
+            "Optional variant row label override in METHOD=DISPLAY format. "
+            "Can be repeated."
+        ),
+    )
+    parser.add_argument(
         "--variant-display",
         choices=("full", "compact"),
         default="full",
@@ -62516,12 +63630,15 @@ def discover_metrics(
     include_wrong_generation_metrics: bool,
 ) -> list[tuple[str, str]]:
     utility_metric_names: set[str] = set()
+    available_metric_names: set[str] = set()
     for root in roots:
         for split in SPLITS:
             for lr in LRS:
                 split_lr_dir = root / split / lr
                 if not split_lr_dir.exists():
                     continue
+                for table_path in split_lr_dir.glob("*.tsv"):
+                    available_metric_names.add(table_path.stem)
                 for table_path in split_lr_dir.glob("*_acc.tsv"):
                     metric_name = table_path.stem
                     if UTILITY_METRIC_RE.fullmatch(metric_name):
@@ -62530,7 +63647,11 @@ def discover_metrics(
     metrics = [
         metric_spec
         for metric_spec in FIXED_METRICS
-        if include_wrong_generation_metrics or metric_spec[0] not in WRONG_GENERATION_METRIC_NAMES
+        if (
+            metric_spec[0] not in WRONG_GENERATION_METRIC_NAMES
+            or include_wrong_generation_metrics
+            or metric_spec[0] in available_metric_names
+        )
     ]
     for metric_name in sorted(utility_metric_names, key=utility_metric_sort_key):
         match = UTILITY_METRIC_RE.fullmatch(metric_name)
@@ -63201,6 +64322,7 @@ def load_variant_row_specs(
     *,
     selected_algorithms: set[str] | None = None,
     selected_method_keys: set[str] | None = None,
+    display_name_overrides: dict[str, str] | None = None,
     display_mode: str = "full",
 ) -> list[tuple[str, str, str, str]]:
     first_metric = FIXED_METRICS[0][0]
@@ -63214,9 +64336,17 @@ def load_variant_row_specs(
         "span_cf_simnpo_local_retain": "lime!18",
         "span_cf_simnpo_sam": "orange!12",
         "span_cf_simnpo_projected": "red!12",
+        "general_cf": "blue!12",
+        "simple_ce": "gray!10",
     }
 
     def include_method(method_name: str) -> bool:
+        if method_name.startswith("simple_ce"):
+            if selected_algorithms or selected_method_keys:
+                if selected_method_keys and method_name in selected_method_keys:
+                    return True
+                return bool(selected_algorithms and "simple_ce" in selected_algorithms)
+            return True
         info = variant_info_from_method_key(method_name)
         if info is None:
             return False
@@ -63239,12 +64369,24 @@ def load_variant_row_specs(
             if include_method(method_name):
                 source_by_method[method_name] = source_name
 
-    method_names = sorted(
-        source_by_method,
-        key=lambda method_name: variant_sort_key(method_name) or (999, 999, method_name),
-    )
+    def variant_row_sort_key(method_name: str) -> tuple[float, float, str]:
+        if method_name.startswith("simple_ce"):
+            cf_value, ret_value, gamma_value, _name = simple_ce_sort_key(method_name)
+            return (999.0, cf_value * 10000 + ret_value * 100 + gamma_value, method_name)
+        variant_key = variant_sort_key(method_name)
+        if variant_key is not None:
+            return (float(variant_key[0]), float(variant_key[1]), method_name)
+        return (999.0, 999.0, method_name)
+
+    method_names = sorted(source_by_method, key=variant_row_sort_key)
 
     def variant_display_name(method_name: str) -> str:
+        if display_name_overrides and method_name in display_name_overrides:
+            return display_name_overrides[method_name]
+        if method_name.startswith("simple_ce"):
+            if SIMPLE_CE_RE.fullmatch(method_name) is not None:
+                return "simple_ce"
+            return method_name
         info = variant_info_from_method_key(method_name)
         if info is None:
             return method_name
@@ -63264,10 +64406,21 @@ def load_variant_row_specs(
             "span_cf_simnpo_local_retain": "SpanCF-SimNPO-LocalRetain",
             "span_cf_simnpo_sam": "SpanCF-SimNPO-SAM",
             "span_cf_simnpo_projected": "SpanCF-SimNPO-Projected",
+            "general_cf": "GeneralCF",
         }.get(algorithm, info.display_name)
 
     row_specs: list[tuple[str, str, str, str]] = []
     for method_name in method_names:
+        if method_name.startswith("simple_ce"):
+            row_specs.append(
+                (
+                    source_by_method[method_name],
+                    method_name,
+                    variant_display_name(method_name),
+                    color_by_algorithm["simple_ce"],
+                )
+            )
+            continue
         info = variant_info_from_method_key(method_name)
         if info is None:
             continue
@@ -63339,6 +64492,20 @@ def main() -> None:
             if not args.variant_method_key
             else {value.strip() for value in args.variant_method_key if value and value.strip()}
         )
+        display_name_overrides: dict[str, str] = {}
+        for raw_value in args.variant_display_name or []:
+            if "=" not in raw_value:
+                raise ValueError(
+                    f"Invalid --variant-display-name value {raw_value!r}; expected METHOD=DISPLAY"
+                )
+            method_name, display_name = raw_value.split("=", 1)
+            method_name = method_name.strip()
+            display_name = display_name.strip()
+            if not method_name or not display_name:
+                raise ValueError(
+                    f"Invalid --variant-display-name value {raw_value!r}; expected METHOD=DISPLAY"
+                )
+            display_name_overrides[method_name] = display_name
 
         wrong_generation_index: dict[
             str,
@@ -63382,6 +64549,7 @@ def main() -> None:
                 lr,
                 selected_algorithms=selected_algorithms,
                 selected_method_keys=selected_method_keys,
+                display_name_overrides=display_name_overrides,
                 display_mode=args.variant_display,
             )
             for split, lr in split_lrs
@@ -65490,6 +66658,7 @@ from trainer.unlearn.falcon import FALCON
 from trainer.unlearn.r2d import R2D
 from trainer.unlearn.loku import LoKU
 from trainer.unlearn.dual_cf import DualCF
+from trainer.unlearn.general_cf import GeneralCF
 from trainer.unlearn.multicf import MultiCF
 from trainer.unlearn.boundary_cf import BoundaryCF
 from trainer.unlearn.span_cf import SpanCF
@@ -65600,6 +66769,7 @@ _register_trainer(FALCON)
 _register_trainer(R2D)
 _register_trainer(LoKU)
 _register_trainer(DualCF)
+_register_trainer(GeneralCF)
 _register_trainer(MultiCF)
 _register_trainer(BoundaryCF)
 _register_trainer(SpanCF)
@@ -66154,6 +67324,1293 @@ class GradAscent(UnlearnTrainer):
         outputs = model(**forget_inputs)
         loss = -outputs.loss
         return (loss, outputs) if return_outputs else loss
+
+</content>
+
+<content full_path="src/trainer/unlearn/general_cf.py">
+import json
+import math
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, List, Optional, Sequence
+
+import torch
+
+from trainer.unlearn.grad_diff import GradDiff
+from trainer.utils import (
+    compute_nll_per_sample,
+    compute_npo_per_sample,
+    compute_weighted_nll_per_sample,
+    compute_weighted_npo_per_sample,
+)
+
+
+@dataclass
+class _SAMState:
+    e_ws: List[Optional[torch.Tensor]]
+
+
+class GeneralCF(GradDiff):
+    """
+    General counterfactual unlearning family.
+
+    Supported forget-side decomposition:
+        gamma * (lambda_cf * CE(counterfactual)
+               + lambda_add * L_additional)
+      + lambda_ret * CE(retain)
+
+    where L_additional is one of:
+        - EMPTY   : disable the additional branch (lambda_additional = 0)
+        - CE      : -CE(original)
+        - NPO     : NPO(original, ref)
+        - NPO-SAM : SAM applied only to the additional branch
+
+    Routing modes:
+        - full           : current DualCF-style routing
+        - d_only         : difficulty-only routing
+        - a_only         : attribution-only routing
+        - constant       : one global constant triplet estimated from reference artifacts
+        - constant_split : one split-local constant triplet estimated from the current artifact
+
+    Span controls:
+        - span_additional: apply span weighting to the additional branch
+        - span_cf_branch : optional legacy switch; when true, also apply span
+                           weighting to the counterfactual branch, which makes the
+                           trainer backward-compatible with current SpanCF losses.
+    """
+
+    LOG_PREFIX = "generalcf"
+
+    def __init__(
+        self,
+        beta=0.5,
+        tau_d=0.5,
+        tau_a=0.5,
+        temp_d=0.25,
+        temp_a=0.25,
+        lambda_neg_max=1.0,
+        lambda_ret_lo=1.0,
+        lambda_ret_hi=2.0,
+        cf_weight=1.0,
+        risk_forget_scale=0.5,
+        normalize_cf_by_tokens=True,
+        normalize_neg_by_tokens=True,
+        disable_difficulty_route=False,
+        disable_attribution_route=False,
+        rarity_neg_gain=0.0,
+        rarity_cf_gain=0.0,
+        disable_rarity_route=False,
+        alpha_eff_stat="topk_mean",
+        alpha_eff_topk_frac=0.25,
+        risk_power=1.0,
+        neg_power=1.0,
+        additional_loss="NPO",
+        span_additional=False,
+        span_cf_branch=False,
+        routing_mode="full",
+        span_mode="lcs",
+        alt_shared_token_weight=0.0,
+        alt_unique_token_weight=1.0,
+        orig_shared_token_weight=0.0,
+        orig_unique_token_weight=1.0,
+        cf_branch_scale=1.0,
+        additional_branch_scale=1.0,
+        neg_branch_scale=None,
+        sam_rho=0.01,
+        sam_adaptive=False,
+        sam_eps=1e-12,
+        lambda_cf_const=None,
+        lambda_additional_const=None,
+        lambda_retain_const=None,
+        constant_artifact_paths=None,
+        constant_current_artifact_path=None,
+        constant_batch_size=None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.beta = float(beta)
+        self.tau_d = float(tau_d)
+        self.tau_a = float(tau_a)
+        self.temp_d = float(temp_d)
+        self.temp_a = float(temp_a)
+        self.lambda_neg_max = float(lambda_neg_max)
+        self.lambda_ret_lo = float(lambda_ret_lo)
+        self.lambda_ret_hi = float(lambda_ret_hi)
+        self.cf_weight = float(cf_weight)
+        self.risk_forget_scale = float(risk_forget_scale)
+        self.normalize_cf_by_tokens = bool(normalize_cf_by_tokens)
+        self.normalize_neg_by_tokens = bool(normalize_neg_by_tokens)
+        self.disable_difficulty_route = bool(disable_difficulty_route)
+        self.disable_attribution_route = bool(disable_attribution_route)
+        self.rarity_neg_gain = float(rarity_neg_gain)
+        self.rarity_cf_gain = float(rarity_cf_gain)
+        self.disable_rarity_route = bool(disable_rarity_route)
+        self.alpha_eff_stat = str(alpha_eff_stat)
+        self.alpha_eff_topk_frac = float(alpha_eff_topk_frac)
+        self.risk_power = float(risk_power)
+        self.neg_power = float(neg_power)
+
+        self.additional_loss = self._normalize_additional_loss(additional_loss)
+        self.span_additional = bool(span_additional)
+        self.span_cf_branch = bool(span_cf_branch)
+        self.routing_mode = self._normalize_routing_mode(routing_mode)
+        self.span_mode = str(span_mode)
+        self.alt_shared_token_weight = float(alt_shared_token_weight)
+        self.alt_unique_token_weight = float(alt_unique_token_weight)
+        self.orig_shared_token_weight = float(orig_shared_token_weight)
+        self.orig_unique_token_weight = float(orig_unique_token_weight)
+        self.cf_branch_scale = float(cf_branch_scale)
+        if neg_branch_scale is not None and additional_branch_scale == 1.0:
+            additional_branch_scale = neg_branch_scale
+        self.additional_branch_scale = float(additional_branch_scale)
+        self.sam_rho = float(sam_rho)
+        self.sam_adaptive = bool(sam_adaptive)
+        self.sam_eps = float(sam_eps)
+
+        self.lambda_cf_const = self._optional_float(lambda_cf_const)
+        self.lambda_additional_const = self._optional_float(lambda_additional_const)
+        self.lambda_retain_const = self._optional_float(lambda_retain_const)
+        self.constant_artifact_paths = self._parse_artifact_paths(constant_artifact_paths)
+        self.constant_current_artifact_path = self._parse_artifact_paths(
+            constant_current_artifact_path
+        )
+        self.constant_batch_size = (
+            None
+            if constant_batch_size in {None, "", "null", "None"}
+            else int(constant_batch_size)
+        )
+        self.log_prefix = str(getattr(self, "LOG_PREFIX", "generalcf"))
+        self._constant_lambda_cache = None
+
+        if self.beta <= 0.0:
+            raise ValueError("GeneralCF requires beta > 0.")
+        if self.temp_d <= 0.0 or self.temp_a <= 0.0:
+            raise ValueError("GeneralCF requires temp_d > 0 and temp_a > 0.")
+        if self.alpha_eff_topk_frac <= 0.0 or self.alpha_eff_topk_frac > 1.0:
+            raise ValueError("GeneralCF requires 0 < alpha_eff_topk_frac <= 1.")
+        if self.span_mode not in {"lcs", "set_overlap"}:
+            raise ValueError("GeneralCF span_mode must be `lcs` or `set_overlap`.")
+        if min(
+            self.alt_shared_token_weight,
+            self.alt_unique_token_weight,
+            self.orig_shared_token_weight,
+            self.orig_unique_token_weight,
+        ) < 0.0:
+            raise ValueError("GeneralCF token weights must be non-negative.")
+        if self.cf_branch_scale < 0.0 or self.additional_branch_scale < 0.0:
+            raise ValueError("GeneralCF branch scales must be non-negative.")
+
+        if self.routing_mode == "d_only":
+            self.disable_attribution_route = True
+        elif self.routing_mode == "a_only":
+            self.disable_difficulty_route = True
+
+        needs_ref_model = self.retain_loss_type == "KL" or self.additional_loss in {
+            "NPO",
+            "NPO_SAM",
+        }
+        if needs_ref_model and self.ref_model is None:
+            self.ref_model = self._prepare_ref_model(self.model)
+
+    @staticmethod
+    def _optional_float(value):
+        if value in {None, "", "null", "None"}:
+            return None
+        return float(value)
+
+    @staticmethod
+    def _parse_artifact_paths(value) -> list[str]:
+        if value in {None, "", "null", "None"}:
+            return []
+        if isinstance(value, (list, tuple)):
+            return [
+                str(item)
+                for item in value
+                if str(item) not in {"", "null", "None"}
+            ]
+        text = str(value)
+        for sep in ("::", "|", ";", ","):
+            if sep in text:
+                return [
+                    part
+                    for part in (item.strip() for item in text.split(sep))
+                    if part and part not in {"null", "None"}
+                ]
+        return [text]
+
+    @staticmethod
+    def _normalize_additional_loss(value: str) -> str:
+        normalized = str(value).strip().upper().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "NONE": "EMPTY",
+            "NULL": "EMPTY",
+            "NO": "EMPTY",
+            "NPO_SAM": "NPO_SAM",
+            "NPOSAM": "NPO_SAM",
+            "SAMNPO": "NPO_SAM",
+            "CE": "CE",
+            "NPO": "NPO",
+            "EMPTY": "EMPTY",
+        }
+        if normalized not in aliases:
+            raise ValueError(
+                "GeneralCF additional_loss must be one of EMPTY, CE, NPO, NPO-SAM. "
+                f"Got {value!r}."
+            )
+        return aliases[normalized]
+
+    @staticmethod
+    def _normalize_routing_mode(value: str) -> str:
+        normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "full": "full",
+            "d_only": "d_only",
+            "difficulty_only": "d_only",
+            "a_only": "a_only",
+            "attribution_only": "a_only",
+            "constant": "constant",
+            "constant_split": "constant_split",
+            "split_constant": "constant_split",
+        }
+        if normalized not in aliases:
+            raise ValueError(
+                "GeneralCF routing_mode must be one of full, d_only, a_only, "
+                f"constant, constant_split. Got {value!r}."
+            )
+        return aliases[normalized]
+
+    def _retain_inputs(self, inputs):
+        retain_inputs = inputs["retain"]
+        return {
+            "input_ids": retain_inputs["input_ids"],
+            "attention_mask": retain_inputs["attention_mask"],
+            "labels": retain_inputs["labels"],
+        }
+
+    def _score_tensor(self, forget_inputs, key: str, device, batch_size: int):
+        if key not in forget_inputs:
+            raise KeyError(
+                f"GeneralCF expected `inputs['forget']['{key}']` but it was missing. "
+                "Check the forget dataset and collator metadata plumbing."
+            )
+        score = forget_inputs[key]
+        if torch.is_tensor(score):
+            score = score.to(device=device, dtype=torch.float32)
+        else:
+            score = torch.tensor(score, device=device, dtype=torch.float32)
+        score = score.view(-1)
+        if score.numel() != batch_size:
+            raise ValueError(
+                f"GeneralCF expected `{key}` to have {batch_size} values, got "
+                f"{score.numel()}."
+            )
+        return score
+
+    def _optional_score_tensor(self, forget_inputs, key: str, device, batch_size: int):
+        if key not in forget_inputs:
+            return None
+        return self._score_tensor(
+            forget_inputs=forget_inputs,
+            key=key,
+            device=device,
+            batch_size=batch_size,
+        )
+
+    def _summarize_risk(self, risk_gate: torch.Tensor) -> torch.Tensor:
+        if self.alpha_eff_stat == "mean":
+            return risk_gate.mean()
+        if self.alpha_eff_stat == "p75":
+            return torch.quantile(risk_gate, 0.75)
+        if self.alpha_eff_stat == "max":
+            return risk_gate.max()
+        if self.alpha_eff_stat == "topk_mean":
+            topk = max(1, int(math.ceil(risk_gate.numel() * self.alpha_eff_topk_frac)))
+            return torch.topk(risk_gate, k=topk).values.mean()
+        raise ValueError(f"Unknown alpha_eff_stat={self.alpha_eff_stat}")
+
+    def _compute_routing_from_scores(
+        self,
+        difficulty: torch.Tensor,
+        attribution: torch.Tensor,
+        rarity: torch.Tensor,
+    ) -> dict:
+        if self.disable_difficulty_route:
+            difficulty_gate = torch.ones_like(difficulty)
+        else:
+            difficulty_gate = torch.sigmoid((difficulty - self.tau_d) / self.temp_d)
+            difficulty_gate = difficulty_gate.pow(self.neg_power)
+
+        if self.disable_attribution_route:
+            risk_gate = torch.zeros_like(attribution)
+        else:
+            risk_gate = torch.sigmoid((attribution - self.tau_a) / self.temp_a)
+            risk_gate = risk_gate.pow(self.risk_power)
+
+        lambda_neg_base = self.lambda_neg_max * difficulty_gate * (1.0 - risk_gate)
+        lambda_neg = lambda_neg_base * (1.0 + self.rarity_neg_gain * rarity)
+        cf_weight_eff = self.cf_weight * (1.0 - self.rarity_cf_gain * rarity)
+        cf_weight_eff = cf_weight_eff.clamp_min(0.0)
+        forget_scale = 1.0 - (1.0 - self.risk_forget_scale) * risk_gate
+
+        return {
+            "difficulty": difficulty,
+            "attribution": attribution,
+            "rarity": rarity,
+            "difficulty_gate": difficulty_gate,
+            "risk_gate": risk_gate,
+            "lambda_neg_base": lambda_neg_base,
+            "lambda_neg": lambda_neg,
+            "cf_weight_eff": cf_weight_eff,
+            "forget_scale": forget_scale,
+        }
+
+    def _compute_routing_full(self, forget_inputs, batch_size: int, device):
+        difficulty = self._score_tensor(
+            forget_inputs, "difficulty_score", device=device, batch_size=batch_size
+        )
+        attribution = self._score_tensor(
+            forget_inputs, "attribution_score", device=device, batch_size=batch_size
+        )
+        rarity = self._optional_score_tensor(
+            forget_inputs, "rarity_score", device=device, batch_size=batch_size
+        )
+        if rarity is None or self.disable_rarity_route:
+            rarity = torch.zeros_like(difficulty)
+        else:
+            rarity = rarity.clamp(0.0, 1.0)
+
+        routing = self._compute_routing_from_scores(
+            difficulty=difficulty,
+            attribution=attribution,
+            rarity=rarity,
+        )
+        risk_batch = self._summarize_risk(routing["risk_gate"])
+        lambda_ret_batch = self.lambda_ret_lo + (
+            self.lambda_ret_hi - self.lambda_ret_lo
+        ) * risk_batch
+        alpha_eff = self.alpha * lambda_ret_batch
+        routing.update(
+            {
+                "risk_batch": risk_batch,
+                "lambda_ret_batch": lambda_ret_batch,
+                "alpha_eff": alpha_eff,
+                "routing_mode": self.routing_mode,
+            }
+        )
+        return routing
+
+    def _artifact_paths_for_constant_routing(self) -> list[str]:
+        if self.routing_mode == "constant_split":
+            if self.constant_current_artifact_path:
+                return list(self.constant_current_artifact_path)
+            if self.constant_artifact_paths:
+                return [self.constant_artifact_paths[0]]
+        else:
+            if self.constant_artifact_paths:
+                return list(self.constant_artifact_paths)
+            if self.constant_current_artifact_path:
+                return list(self.constant_current_artifact_path)
+        return []
+
+    def _iter_artifact_rows(self, paths: Sequence[str]) -> Iterable[dict]:
+        for raw_path in paths:
+            path = Path(str(raw_path)).expanduser()
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"GeneralCF constant routing artifact not found: {path}"
+                )
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    yield json.loads(line)
+
+    def _estimate_constant_lambdas_from_rows(self, rows: Sequence[dict]) -> dict:
+        if not rows:
+            raise ValueError(
+                "GeneralCF constant routing could not load any rows from the reference artifact."
+            )
+
+        difficulty = torch.tensor(
+            [float(row["difficulty_score"]) for row in rows],
+            dtype=torch.float32,
+        )
+        attribution = torch.tensor(
+            [float(row["attribution_score"]) for row in rows],
+            dtype=torch.float32,
+        )
+        rarity = torch.tensor(
+            [float(row.get("rarity_score", 0.0)) for row in rows],
+            dtype=torch.float32,
+        ).clamp_(0.0, 1.0)
+        if self.disable_rarity_route:
+            rarity.zero_()
+
+        routed = self._compute_routing_from_scores(
+            difficulty=difficulty,
+            attribution=attribution,
+            rarity=rarity,
+        )
+
+        lambda_cf_samples = routed["forget_scale"] * routed["cf_weight_eff"]
+        lambda_additional_samples = routed["forget_scale"] * routed["lambda_neg"]
+
+        batch_size = int(
+            self.constant_batch_size or self.args.per_device_train_batch_size or 1
+        )
+        weighted_alpha_total = 0.0
+        weighted_ret_total = 0.0
+        total_rows = 0
+
+        for start in range(0, int(routed["risk_gate"].numel()), batch_size):
+            end = min(start + batch_size, int(routed["risk_gate"].numel()))
+            chunk = routed["risk_gate"][start:end]
+            chunk_size = max(end - start, 1)
+
+            risk_batch = self._summarize_risk(chunk)
+            lambda_ret_batch = self.lambda_ret_lo + (
+                self.lambda_ret_hi - self.lambda_ret_lo
+            ) * risk_batch
+            alpha_eff_batch = self.alpha * lambda_ret_batch
+
+            weighted_ret_total += float(lambda_ret_batch.detach().item()) * chunk_size
+            weighted_alpha_total += float(alpha_eff_batch.detach().item()) * chunk_size
+            total_rows += chunk_size
+
+        return {
+            "lambda_cf": float(lambda_cf_samples.mean().detach().item()),
+            "lambda_additional": float(
+                lambda_additional_samples.mean().detach().item()
+            ),
+            "lambda_ret": float(weighted_alpha_total / max(total_rows, 1)),
+            "lambda_ret_batch": float(weighted_ret_total / max(total_rows, 1)),
+            "num_rows": len(rows),
+        }
+
+    def _estimate_constant_lambdas(self) -> dict:
+        if (
+            self.lambda_cf_const is not None
+            and self.lambda_additional_const is not None
+            and self.lambda_retain_const is not None
+        ):
+            return {
+                "lambda_cf": float(self.lambda_cf_const),
+                "lambda_additional": float(self.lambda_additional_const),
+                "lambda_ret": float(self.lambda_retain_const),
+                "source": "manual",
+                "num_files": 0,
+                "num_rows": 0,
+            }
+
+        if self._constant_lambda_cache is not None:
+            return self._constant_lambda_cache
+
+        artifact_paths = self._artifact_paths_for_constant_routing()
+        if not artifact_paths:
+            raise ValueError(
+                "GeneralCF constant routing requires either explicit lambda_*_const "
+                "values, constant_artifact_paths, or constant_current_artifact_path."
+            )
+
+        per_file = []
+        total_rows = 0
+
+        for raw_path in artifact_paths:
+            rows = list(self._iter_artifact_rows([raw_path]))
+            if not rows:
+                continue
+            stats = self._estimate_constant_lambdas_from_rows(rows)
+            stats["path"] = str(raw_path)
+            per_file.append(stats)
+            total_rows += int(stats["num_rows"])
+
+        if not per_file:
+            raise ValueError(
+                "GeneralCF constant routing could not load any rows from the reference artifacts."
+            )
+
+        num_files = len(per_file)
+        constants = {
+            "lambda_cf": float(sum(item["lambda_cf"] for item in per_file) / num_files),
+            "lambda_additional": float(
+                sum(item["lambda_additional"] for item in per_file) / num_files
+            ),
+            "lambda_ret": float(
+                sum(item["lambda_ret"] for item in per_file) / num_files
+            ),
+            "lambda_ret_batch": float(
+                sum(item["lambda_ret_batch"] for item in per_file) / num_files
+            ),
+            "source": (
+                "artifact_single_split_mean"
+                if num_files == 1
+                else "artifact_equal_split_mean"
+            ),
+            "num_files": num_files,
+            "num_rows": total_rows,
+            "per_file": per_file,
+        }
+        self._constant_lambda_cache = constants
+        return constants
+
+    def _compute_routing_constant(self, forget_inputs, batch_size: int, device):
+        difficulty = self._score_tensor(
+            forget_inputs, "difficulty_score", device=device, batch_size=batch_size
+        )
+        attribution = self._score_tensor(
+            forget_inputs, "attribution_score", device=device, batch_size=batch_size
+        )
+        rarity = self._optional_score_tensor(
+            forget_inputs, "rarity_score", device=device, batch_size=batch_size
+        )
+        if rarity is None or self.disable_rarity_route:
+            rarity = torch.zeros_like(difficulty)
+        else:
+            rarity = rarity.clamp(0.0, 1.0)
+
+        constants = self._estimate_constant_lambdas()
+        lambda_cf = float(constants["lambda_cf"])
+        lambda_additional = float(constants["lambda_additional"])
+        lambda_ret = float(constants["lambda_ret"])
+        lambda_ret_batch = float(
+            constants.get("lambda_ret_batch", lambda_ret / max(float(self.alpha), 1e-8))
+        )
+        return {
+            "difficulty": difficulty,
+            "attribution": attribution,
+            "rarity": rarity,
+            "difficulty_gate": torch.ones_like(difficulty),
+            "risk_gate": torch.zeros_like(difficulty),
+            "lambda_neg_base": torch.full_like(difficulty, lambda_additional),
+            "lambda_neg": torch.full_like(difficulty, lambda_additional),
+            "cf_weight_eff": torch.full_like(difficulty, lambda_cf),
+            "forget_scale": torch.ones_like(difficulty),
+            "risk_batch": torch.tensor(0.0, device=device, dtype=torch.float32),
+            "lambda_ret_batch": torch.tensor(
+                lambda_ret_batch,
+                device=device,
+                dtype=torch.float32,
+            ),
+            "alpha_eff": torch.tensor(lambda_ret, device=device, dtype=torch.float32),
+            "routing_mode": self.routing_mode,
+            "constant_routing": True,
+            "constant_num_rows": float(constants.get("num_rows", 0)),
+            "constant_num_files": float(constants.get("num_files", 0)),
+        }
+
+    def _compute_routing(self, forget_inputs, batch_size: int, device):
+        if self.routing_mode in {"full", "d_only", "a_only"}:
+            routing = self._compute_routing_full(
+                forget_inputs=forget_inputs,
+                batch_size=batch_size,
+                device=device,
+            )
+        elif self.routing_mode in {"constant", "constant_split"}:
+            routing = self._compute_routing_constant(
+                forget_inputs=forget_inputs,
+                batch_size=batch_size,
+                device=device,
+            )
+        else:
+            raise ValueError(f"Unsupported routing_mode={self.routing_mode}")
+
+        if self.additional_loss == "EMPTY":
+            routing = dict(routing)
+            zero = torch.zeros_like(routing["lambda_neg"])
+            routing["lambda_neg_base"] = zero
+            routing["lambda_neg"] = zero
+
+        return routing
+
+    def _shared_positions(self, tokens: list[int], other_tokens: list[int]) -> set[int]:
+        if self.span_mode == "set_overlap":
+            other_set = set(other_tokens)
+            return {idx for idx, token in enumerate(tokens) if token in other_set}
+
+        rows = len(tokens)
+        cols = len(other_tokens)
+        dp = [[0] * (cols + 1) for _ in range(rows + 1)]
+        for row_idx in range(rows):
+            for col_idx in range(cols):
+                if tokens[row_idx] == other_tokens[col_idx]:
+                    dp[row_idx + 1][col_idx + 1] = dp[row_idx][col_idx] + 1
+                else:
+                    dp[row_idx + 1][col_idx + 1] = max(
+                        dp[row_idx][col_idx + 1],
+                        dp[row_idx + 1][col_idx],
+                    )
+
+        shared = set()
+        row_idx = rows
+        col_idx = cols
+        while row_idx > 0 and col_idx > 0:
+            if tokens[row_idx - 1] == other_tokens[col_idx - 1]:
+                shared.add(row_idx - 1)
+                row_idx -= 1
+                col_idx -= 1
+            elif dp[row_idx - 1][col_idx] >= dp[row_idx][col_idx - 1]:
+                row_idx -= 1
+            else:
+                col_idx -= 1
+        return shared
+
+    def _build_token_diff_weights(
+        self,
+        labels: torch.Tensor,
+        other_labels: torch.Tensor,
+        shared_weight: float,
+        unique_weight: float,
+    ):
+        weights = torch.zeros(labels.shape, device=labels.device, dtype=torch.float32)
+        shared_fractions = []
+        unique_fractions = []
+
+        for batch_idx in range(labels.shape[0]):
+            valid_mask = labels[batch_idx] != -100
+            other_valid_mask = other_labels[batch_idx] != -100
+            tokens = labels[batch_idx][valid_mask].detach().tolist()
+            other_tokens = other_labels[batch_idx][other_valid_mask].detach().tolist()
+            if not tokens:
+                shared_fractions.append(0.0)
+                unique_fractions.append(0.0)
+                continue
+
+            shared_positions = self._shared_positions(tokens, other_tokens)
+            row_weights = []
+            for token_idx in range(len(tokens)):
+                row_weights.append(
+                    shared_weight if token_idx in shared_positions else unique_weight
+                )
+
+            weights[batch_idx, valid_mask] = torch.tensor(
+                row_weights,
+                device=labels.device,
+                dtype=torch.float32,
+            )
+            shared_count = len(shared_positions)
+            token_count = max(len(tokens), 1)
+            shared_fractions.append(float(shared_count) / float(token_count))
+            unique_fractions.append(
+                float(token_count - shared_count) / float(token_count)
+            )
+
+        return weights, {
+            "shared_fraction_mean": (
+                sum(shared_fractions) / float(len(shared_fractions))
+                if shared_fractions
+                else 0.0
+            ),
+            "unique_fraction_mean": (
+                sum(unique_fractions) / float(len(unique_fractions))
+                if unique_fractions
+                else 0.0
+            ),
+        }
+
+    def _compute_cf_term(self, model, forget_inputs, original_inputs):
+        alternate_inputs = forget_inputs["alternate"]
+        if self.span_cf_branch:
+            cf_weights, cf_stats = self._build_token_diff_weights(
+                alternate_inputs["labels"],
+                original_inputs["labels"],
+                shared_weight=self.alt_shared_token_weight,
+                unique_weight=self.alt_unique_token_weight,
+            )
+            cf_vec, outputs = compute_weighted_nll_per_sample(
+                model,
+                alternate_inputs,
+                token_weights=cf_weights,
+            )
+            return cf_vec, outputs, cf_stats
+
+        cf_vec, outputs = compute_nll_per_sample(
+            model,
+            alternate_inputs,
+            normalize_by_tokens=self.normalize_cf_by_tokens,
+        )
+        return cf_vec, outputs, {}
+
+    def _compute_additional_term(self, model, original_inputs, alternate_inputs):
+        if self.additional_loss == "EMPTY":
+            zeros = torch.zeros(
+                original_inputs["input_ids"].shape[0],
+                device=original_inputs["input_ids"].device,
+                dtype=torch.float32,
+            )
+            return zeros, {}
+
+        span_stats = {}
+        if self.span_additional:
+            add_weights, span_stats = self._build_token_diff_weights(
+                original_inputs["labels"],
+                alternate_inputs["labels"],
+                shared_weight=self.orig_shared_token_weight,
+                unique_weight=self.orig_unique_token_weight,
+            )
+            if self.additional_loss == "CE":
+                add_vec, _ = compute_weighted_nll_per_sample(
+                    model,
+                    original_inputs,
+                    token_weights=add_weights,
+                )
+                return -add_vec, span_stats
+            add_vec, _ = compute_weighted_npo_per_sample(
+                model,
+                self.ref_model,
+                original_inputs,
+                token_weights=add_weights,
+                beta=self.beta,
+            )
+            return add_vec, span_stats
+
+        if self.additional_loss == "CE":
+            add_vec, _ = compute_nll_per_sample(
+                model,
+                original_inputs,
+                normalize_by_tokens=self.normalize_neg_by_tokens,
+            )
+            return -add_vec, span_stats
+
+        add_vec, _ = compute_npo_per_sample(
+            model,
+            self.ref_model,
+            original_inputs,
+            beta=self.beta,
+            normalize_by_tokens=self.normalize_neg_by_tokens,
+        )
+        return add_vec, span_stats
+
+    def _forget_term_components(
+        self,
+        cf_vec: torch.Tensor,
+        additional_vec: torch.Tensor,
+        routing: dict,
+    ) -> dict:
+        cf_weight_eff = routing.get("cf_weight_eff", self.cf_weight)
+        per_sample_cf_loss = routing["forget_scale"] * (cf_weight_eff * cf_vec)
+        per_sample_additional_loss = routing["forget_scale"] * (
+            routing["lambda_neg"] * additional_vec
+        )
+        per_sample_forget_loss = per_sample_cf_loss + per_sample_additional_loss
+        return {
+            "per_sample_cf_loss": per_sample_cf_loss,
+            "per_sample_additional_loss": per_sample_additional_loss,
+            "per_sample_forget_loss": per_sample_forget_loss,
+            "cf_loss": per_sample_cf_loss.mean(),
+            "additional_loss": per_sample_additional_loss.mean(),
+            "forget_loss": per_sample_forget_loss.mean(),
+            # Legacy aliases for downstream logs/comparison code.
+            "per_sample_neg_loss": per_sample_additional_loss,
+            "neg_loss": per_sample_additional_loss.mean(),
+        }
+
+    def _additional_log_suffix(self) -> str:
+        return {
+            "EMPTY": "empty",
+            "CE": "ce",
+            "NPO": "npo",
+            "NPO_SAM": "npo_sam",
+        }[self.additional_loss]
+
+    def _compute_core_components(self, model, inputs):
+        forget_inputs = inputs["forget"]
+        original_inputs = forget_inputs["original"]
+        alternate_inputs = forget_inputs["alternate"]
+
+        cf_vec, outputs, cf_logs = self._compute_cf_term(
+            model=model,
+            forget_inputs=forget_inputs,
+            original_inputs=original_inputs,
+        )
+        additional_vec, additional_logs = self._compute_additional_term(
+            model=model,
+            original_inputs=original_inputs,
+            alternate_inputs=alternate_inputs,
+        )
+
+        batch_size = int(cf_vec.shape[0])
+        device = cf_vec.device
+        routing = self._compute_routing(
+            forget_inputs=forget_inputs,
+            batch_size=batch_size,
+            device=device,
+        )
+        forget_terms = self._forget_term_components(
+            cf_vec=cf_vec,
+            additional_vec=additional_vec,
+            routing=routing,
+        )
+
+        extra_logs = {
+            f"{self.log_prefix}_routing_mode_full": (
+                1.0 if self.routing_mode == "full" else 0.0
+            ),
+            f"{self.log_prefix}_routing_mode_d_only": (
+                1.0 if self.routing_mode == "d_only" else 0.0
+            ),
+            f"{self.log_prefix}_routing_mode_a_only": (
+                1.0 if self.routing_mode == "a_only" else 0.0
+            ),
+            f"{self.log_prefix}_routing_mode_constant": (
+                1.0 if self.routing_mode == "constant" else 0.0
+            ),
+            f"{self.log_prefix}_routing_mode_constant_split": (
+                1.0 if self.routing_mode == "constant_split" else 0.0
+            ),
+            f"{self.log_prefix}_additional_empty": (
+                1.0 if self.additional_loss == "EMPTY" else 0.0
+            ),
+            f"{self.log_prefix}_additional_ce": (
+                1.0 if self.additional_loss == "CE" else 0.0
+            ),
+            f"{self.log_prefix}_additional_npo": (
+                1.0 if self.additional_loss == "NPO" else 0.0
+            ),
+            f"{self.log_prefix}_additional_npo_sam": (
+                1.0 if self.additional_loss == "NPO_SAM" else 0.0
+            ),
+            f"{self.log_prefix}_span_additional": (
+                1.0 if self.span_additional else 0.0
+            ),
+            f"{self.log_prefix}_span_cf_branch": (
+                1.0 if self.span_cf_branch else 0.0
+            ),
+        }
+        extra_logs.update(cf_logs)
+        if additional_logs:
+            extra_logs.update(
+                {
+                    f"{self.log_prefix}_additional_shared_token_frac": additional_logs[
+                        "shared_fraction_mean"
+                    ],
+                    f"{self.log_prefix}_additional_unique_token_frac": additional_logs[
+                        "unique_fraction_mean"
+                    ],
+                }
+            )
+        if routing.get("constant_routing"):
+            extra_logs.update(
+                {
+                    f"{self.log_prefix}_constant_num_rows": float(
+                        routing.get("constant_num_rows", 0.0)
+                    ),
+                    f"{self.log_prefix}_constant_num_files": float(
+                        routing.get("constant_num_files", 0.0)
+                    ),
+                }
+            )
+
+        return {
+            "forget_inputs": forget_inputs,
+            "original_inputs": original_inputs,
+            "alternate_inputs": alternate_inputs,
+            "cf_vec": cf_vec,
+            "additional_vec": additional_vec,
+            "outputs": outputs,
+            **routing,
+            **forget_terms,
+            "extra_logs": extra_logs,
+        }
+
+    def _build_log_payload(self, components: dict, retain_loss, loss=None, extra_logs=None):
+        prefix = self.log_prefix
+        alpha_eff = components["alpha_eff"]
+        alpha_eff_value = (
+            float(alpha_eff.detach().item())
+            if torch.is_tensor(alpha_eff)
+            else float(alpha_eff)
+        )
+        payload = {
+            f"{prefix}_cf_loss": float(components["cf_vec"].mean().detach().item()),
+            f"{prefix}_additional_loss": float(
+                components["additional_vec"].mean().detach().item()
+            ),
+            f"{prefix}_neg_loss": float(
+                components["additional_vec"].mean().detach().item()
+            ),
+            f"{prefix}_forget_loss": float(components["forget_loss"].detach().item()),
+            f"{prefix}_retain_loss": float(retain_loss.detach().item()),
+            f"{prefix}_alpha_eff": alpha_eff_value,
+            f"{prefix}_lambda_ret_batch": float(
+                components["lambda_ret_batch"].detach().item()
+            ),
+            f"{prefix}_d_mean": float(components["difficulty"].mean().detach().item()),
+            f"{prefix}_a_mean": float(
+                components["attribution"].mean().detach().item()
+            ),
+            f"{prefix}_u_mean": float(components["rarity"].mean().detach().item()),
+            f"{prefix}_u_p50": float(
+                torch.quantile(components["rarity"], 0.50).detach().item()
+            ),
+            f"{prefix}_u_p90": float(
+                torch.quantile(components["rarity"], 0.90).detach().item()
+            ),
+            f"{prefix}_s_mean": float(
+                components["difficulty_gate"].mean().detach().item()
+            ),
+            f"{prefix}_s_p50": float(
+                torch.quantile(components["difficulty_gate"], 0.50).detach().item()
+            ),
+            f"{prefix}_s_p90": float(
+                torch.quantile(components["difficulty_gate"], 0.90).detach().item()
+            ),
+            f"{prefix}_r_mean": float(components["risk_gate"].mean().detach().item()),
+            f"{prefix}_r_p50": float(
+                torch.quantile(components["risk_gate"], 0.50).detach().item()
+            ),
+            f"{prefix}_r_p90": float(
+                torch.quantile(components["risk_gate"], 0.90).detach().item()
+            ),
+            f"{prefix}_risk_batch": float(components["risk_batch"].detach().item()),
+            f"{prefix}_lambda_additional_mean": float(
+                components["lambda_neg"].mean().detach().item()
+            ),
+            f"{prefix}_lambda_neg_mean": float(
+                components["lambda_neg"].mean().detach().item()
+            ),
+            f"{prefix}_lambda_neg_base_mean": float(
+                components["lambda_neg_base"].mean().detach().item()
+            ),
+            f"{prefix}_lambda_cf_mean": float(
+                components["cf_weight_eff"].mean().detach().item()
+            ),
+            f"{prefix}_cf_weight_eff_mean": float(
+                components["cf_weight_eff"].mean().detach().item()
+            ),
+        }
+        if loss is not None:
+            payload[f"{prefix}_total_loss"] = float(loss.detach().item())
+        payload.update(components.get("extra_logs", {}))
+        if extra_logs:
+            payload.update(extra_logs)
+
+        logged_cf_loss = components.get("logged_cf_loss", None)
+        logged_additional_loss = components.get("logged_additional_loss", None)
+        logged_neg_loss = components.get("logged_neg_loss", None)
+        logged_forget_loss = components.get("logged_forget_loss", None)
+
+        if logged_cf_loss is not None:
+            payload[f"{prefix}_cf_loss"] = float(logged_cf_loss.detach().item())
+        if logged_additional_loss is not None:
+            payload[f"{prefix}_additional_loss"] = float(
+                logged_additional_loss.detach().item()
+            )
+        if logged_neg_loss is not None:
+            payload[f"{prefix}_neg_loss"] = float(logged_neg_loss.detach().item())
+        if logged_forget_loss is not None:
+            payload[f"{prefix}_forget_loss"] = float(
+                logged_forget_loss.detach().item()
+            )
+        return payload
+
+    def _maybe_log(self, components: dict, retain_loss, loss=None, extra_logs=None):
+        try:
+            self.log(
+                self._build_log_payload(
+                    components=components,
+                    retain_loss=retain_loss,
+                    loss=loss,
+                    extra_logs=extra_logs,
+                )
+            )
+        except Exception:
+            pass
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        components = self._compute_core_components(model, inputs)
+        retain_loss = self.compute_retain_loss(
+            model=model,
+            retain_inputs=self._retain_inputs(inputs),
+        )
+        loss = self.gamma * components["forget_loss"] + components["alpha_eff"] * retain_loss
+        self._maybe_log(components=components, retain_loss=retain_loss, loss=loss)
+        return (loss, components["outputs"]) if return_outputs else loss
+
+    def _trainable_params(self, model: torch.nn.Module) -> List[torch.nn.Parameter]:
+        return [p for p in model.parameters() if p.requires_grad]
+
+    def _stash_grads(self, params: List[torch.nn.Parameter]) -> List[Optional[torch.Tensor]]:
+        stashed: List[Optional[torch.Tensor]] = []
+        for param in params:
+            if param.grad is None:
+                stashed.append(None)
+            else:
+                stashed.append(param.grad.detach().clone())
+        return stashed
+
+    def _clear_grads_set_to_none(self, params: List[torch.nn.Parameter]) -> None:
+        for param in params:
+            param.grad = None
+
+    def _set_final_grads(
+        self,
+        params: List[torch.nn.Parameter],
+        second_pass_grads: Sequence[Optional[torch.Tensor]],
+        prev_grads: List[Optional[torch.Tensor]],
+        grad_scale: float,
+    ) -> None:
+        for param, grad_second, grad_prev in zip(params, second_pass_grads, prev_grads):
+            grad = None
+            if grad_second is not None:
+                grad = grad_second.detach() * grad_scale
+            if grad_prev is not None:
+                grad = grad_prev if grad is None else grad + grad_prev
+            param.grad = grad
+
+    @torch.no_grad()
+    def _grad_norm(
+        self,
+        params: List[torch.nn.Parameter],
+        grads: Sequence[Optional[torch.Tensor]],
+    ) -> torch.Tensor:
+        if not params:
+            return torch.zeros((), device=self.accelerator.device, dtype=torch.float32)
+
+        ref_device = None
+        for grad in grads:
+            if grad is not None:
+                ref_device = grad.device
+                break
+        if ref_device is None:
+            return torch.zeros((), device=self.accelerator.device, dtype=torch.float32)
+
+        sq_sum = torch.zeros((), device=ref_device, dtype=torch.float32)
+        for param, grad in zip(params, grads):
+            if grad is None:
+                continue
+            grad_term = grad
+            if self.sam_adaptive:
+                grad_term = param.detach().abs() * grad_term
+            grad_sq = grad_term.float()
+            if grad_sq.device != ref_device:
+                grad_sq = grad_sq.to(ref_device)
+            sq_sum = sq_sum + (grad_sq * grad_sq).sum()
+        return torch.sqrt(sq_sum)
+
+    @torch.no_grad()
+    def _perturb_weights(
+        self,
+        params: List[torch.nn.Parameter],
+        grads: Sequence[Optional[torch.Tensor]],
+        grad_norm: torch.Tensor,
+    ) -> _SAMState:
+        scale = self.sam_rho / (grad_norm + self.sam_eps)
+        e_ws: List[Optional[torch.Tensor]] = []
+
+        for param, grad in zip(params, grads):
+            if grad is None:
+                e_ws.append(None)
+                continue
+
+            perturb = param.detach().abs() * grad if self.sam_adaptive else grad
+            scale_t = scale.to(device=perturb.device, dtype=perturb.dtype)
+            e_w = (perturb * scale_t).to(dtype=param.dtype)
+            param.add_(e_w)
+            e_ws.append(e_w)
+
+        return _SAMState(e_ws=e_ws)
+
+    @torch.no_grad()
+    def _restore_weights(self, params: List[torch.nn.Parameter], state: _SAMState) -> None:
+        for param, e_w in zip(params, state.e_ws):
+            if e_w is None:
+                continue
+            param.sub_(e_w)
+
+    def _apply_branch_scales(
+        self,
+        cf_loss: torch.Tensor,
+        additional_loss: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return (
+            self.cf_branch_scale * cf_loss,
+            self.additional_branch_scale * additional_loss,
+        )
+
+    def _compute_additional_loss_only(self, model, inputs):
+        components = self._compute_core_components(model, inputs)
+        self._last_manual_components = components
+        return components["additional_loss"]
+
+    def _compute_retain_loss_only(self, model, inputs):
+        return self.compute_retain_loss(
+            model=model,
+            retain_inputs=self._retain_inputs(inputs),
+        )
+
+    def _manual_retain_weight(self, components=None):
+        if components is None:
+            return self.alpha
+        return components["alpha_eff"]
+
+    def training_step(self, model: torch.nn.Module, inputs) -> torch.Tensor:
+        if self.additional_loss != "NPO_SAM":
+            return super().training_step(model, inputs)
+
+        if self.is_deepspeed_enabled:
+            raise NotImplementedError(
+                "[GeneralCF] DeepSpeed is not supported in the NPO-SAM manual-grad path."
+            )
+        if getattr(self.accelerator, "num_processes", 1) > 1:
+            raise NotImplementedError(
+                "[GeneralCF] Multi-process training is not supported in the NPO-SAM "
+                "manual-grad path."
+            )
+
+        model.train()
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self.optimizer.train()
+
+        inputs = self._prepare_inputs(inputs)
+        params = self._trainable_params(model)
+        if not params:
+            raise RuntimeError("[GeneralCF] No trainable parameters found.")
+
+        grad_acc_steps = max(1, int(self.args.gradient_accumulation_steps))
+        grad_scale = 1.0 / grad_acc_steps
+        self._last_manual_components = None
+
+        prev_grads = self._stash_grads(params)
+        self._clear_grads_set_to_none(params)
+
+        with self.compute_loss_context_manager():
+            components = self._compute_core_components(model, inputs)
+            cf_loss_base = components["cf_loss"]
+            additional_loss_1_base = components["additional_loss"]
+            cf_loss, additional_loss_1 = self._apply_branch_scales(
+                cf_loss=cf_loss_base,
+                additional_loss=additional_loss_1_base,
+            )
+
+        cf_grads = torch.autograd.grad(
+            cf_loss,
+            params,
+            retain_graph=True,
+            create_graph=False,
+            allow_unused=True,
+        )
+        additional_grads_1 = torch.autograd.grad(
+            additional_loss_1,
+            params,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=True,
+        )
+
+        grad_norm = self._grad_norm(params, additional_grads_1)
+        sam_state = self._perturb_weights(params, additional_grads_1, grad_norm)
+
+        try:
+            self._clear_grads_set_to_none(params)
+            with self.compute_loss_context_manager():
+                additional_loss_2_base = self._compute_additional_loss_only(model, inputs)
+                additional_loss_2 = (
+                    self.additional_branch_scale * additional_loss_2_base
+                )
+            additional_grads_2 = torch.autograd.grad(
+                additional_loss_2,
+                params,
+                retain_graph=False,
+                create_graph=False,
+                allow_unused=True,
+            )
+        finally:
+            self._restore_weights(params, sam_state)
+
+        self._clear_grads_set_to_none(params)
+        with self.compute_loss_context_manager():
+            retain_loss = self._compute_retain_loss_only(model, inputs)
+        retain_grads = torch.autograd.grad(
+            retain_loss,
+            params,
+            retain_graph=False,
+            create_graph=False,
+            allow_unused=True,
+        )
+
+        retain_weight = self._manual_retain_weight(components=components)
+        retain_weight_value = (
+            float(retain_weight.detach().item())
+            if torch.is_tensor(retain_weight)
+            else float(retain_weight)
+        )
+
+        combined_grads = []
+        for grad_cf, grad_add, grad_retain in zip(
+            cf_grads, additional_grads_2, retain_grads
+        ):
+            grad = None
+            if grad_cf is not None:
+                grad = self.gamma * grad_cf
+            if grad_add is not None:
+                add_component = self.gamma * grad_add
+                grad = add_component if grad is None else grad + add_component
+            if grad_retain is not None:
+                retain_scale = (
+                    retain_weight.to(
+                        device=grad_retain.device,
+                        dtype=grad_retain.dtype,
+                    )
+                    if torch.is_tensor(retain_weight)
+                    else retain_weight
+                )
+                retain_component = retain_scale * grad_retain
+                grad = retain_component if grad is None else grad + retain_component
+            combined_grads.append(grad)
+
+        self._set_final_grads(params, combined_grads, prev_grads, grad_scale)
+
+        retain_weight_loss = (
+            retain_weight.to(device=retain_loss.device, dtype=retain_loss.dtype)
+            if torch.is_tensor(retain_weight)
+            else retain_weight
+        )
+        forget_loss_update = cf_loss + additional_loss_2
+        total_loss = self.gamma * forget_loss_update + retain_weight_loss * retain_loss
+
+        self._last_manual_components = components
+        components["logged_cf_loss"] = cf_loss
+        components["logged_additional_loss"] = additional_loss_2
+        components["logged_neg_loss"] = additional_loss_2
+        components["logged_forget_loss"] = forget_loss_update
+        extra_logs = {
+            f"{self.log_prefix}_cf_loss_base": float(cf_loss_base.detach().item()),
+            f"{self.log_prefix}_cf_loss_scaled": float(cf_loss.detach().item()),
+            f"{self.log_prefix}_additional_loss_1_base": float(
+                additional_loss_1_base.detach().item()
+            ),
+            f"{self.log_prefix}_additional_loss_1_scaled": float(
+                additional_loss_1.detach().item()
+            ),
+            f"{self.log_prefix}_additional_loss_2_base": float(
+                additional_loss_2_base.detach().item()
+            ),
+            f"{self.log_prefix}_additional_loss_2_scaled": float(
+                additional_loss_2.detach().item()
+            ),
+            f"{self.log_prefix}_retain_loss": float(retain_loss.detach().item()),
+            f"{self.log_prefix}_retain_weight": retain_weight_value,
+            f"{self.log_prefix}_cf_branch_scale": float(self.cf_branch_scale),
+            f"{self.log_prefix}_additional_branch_scale": float(
+                self.additional_branch_scale
+            ),
+            f"{self.log_prefix}_grad_norm": float(grad_norm.detach().item()),
+            f"{self.log_prefix}_rho": float(self.sam_rho),
+            f"{self.log_prefix}_adaptive": 1.0 if self.sam_adaptive else 0.0,
+        }
+        try:
+            self._maybe_log(
+                components=components,
+                retain_loss=retain_loss,
+                loss=total_loss,
+                extra_logs=extra_logs,
+            )
+        except Exception:
+            pass
+
+        return total_loss.detach() * grad_scale
 
 </content>
 

@@ -467,6 +467,44 @@ scripts/duet/run_dualcf_ablation_v2.sh
 export METHOD_VARIANT=span_cf_simnpo_projected
 export SPAN_PROJECTION_COS_THRESHOLD=0.0
 scripts/duet/run_dualcf_ablation_v2.sh
+
+# GeneralCF routed DualCF-equivalent
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=general_cf
+export ADDITIONAL_LOSS=NPO
+export ROUTING=full
+export SPAN_ADDITIONAL=false
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# GeneralCF SimpleCE-style fixed coefficients
+# ROUTING=constant equal-averages one lambda triplet per configured reference artifact.
+# Keep GAMMAS=1.0 here because GeneralCF gamma scales the full forget branch.
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=general_cf
+export ADDITIONAL_LOSS=EMPTY
+export ROUTING=constant
+export SPAN_ADDITIONAL=false
+export LAMBDA_CF_CONST=0.5
+export LAMBDA_ADDITIONAL_CONST=0.0
+export LAMBDA_RETAIN_CONST=1.0
+export GAMMAS=1.0
+scripts/duet/run_dualcf_ablation_v2.sh
+
+# GeneralCF new ablation: span only on L_additional
+export CF_DATASET_DATA_FILES=${ARTIFACT_ROOT}/duet/rare_llama32_1b_v2/dualcf_rare_v2.jsonl
+export METHOD_VARIANT=general_cf
+export ADDITIONAL_LOSS=NPO-SAM
+export ROUTING=full
+export SPAN_ADDITIONAL=true
+export SPAN_CF_BRANCH=false
+export SPAN_MODE=lcs
+export SPAN_ALT_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ALT_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_ORIG_SHARED_TOKEN_WEIGHT=0.0
+export SPAN_ORIG_UNIQUE_TOKEN_WEIGHT=1.0
+export SPAN_SAM_RHO=0.01
+export SPAN_SAM_ADAPTIVE=false
+scripts/duet/run_dualcf_ablation_v2.sh
 ```
 
 Every method variant above uses the same trajectory-saving behavior:

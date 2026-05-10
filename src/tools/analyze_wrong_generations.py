@@ -31,7 +31,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -53,6 +53,7 @@ METHOD_DISPLAY = {
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
     "simple_ce": "Simple-CE",
+    "general_cf": "GeneralCF",
     "span_cf_samnpo": "SpanCF-SAMNPO",
     "span_cf_simnpo": "SpanCF-SimNPO",
     "span_cf_local_retain": "SpanCF-LocalRetain",
@@ -217,7 +218,7 @@ def extract_seed(run_name: str) -> str:
     return match.group(1)
 
 
-def extract_method_key(run_name: str) -> str:
+def extract_method_key(run_name: str, config: dict[str, Any] | None = None) -> str:
     match = METHOD_RE.search(run_name)
     if match is None:
         raise ValueError(f"Could not parse method from run name: {run_name}")
@@ -237,7 +238,13 @@ def extract_method_key(run_name: str) -> str:
             return "dual_cf_" + "_".join(flags)
         return "dual_cf"
 
-    variant_info = extract_new_method_variant(run_name, method_name)
+    if method_name == "simple_ce":
+        ablation_tokens = [token for token in suffix.split("_") if token.startswith(("cf", "ret", "gamma"))]
+        if ablation_tokens:
+            return "_".join([method_name] + ablation_tokens)
+        return method_name
+
+    variant_info = extract_new_method_variant(run_name, method_name, config=config)
     if variant_info is not None:
         return variant_info.method_key
     return method_name
@@ -352,7 +359,7 @@ def build_eval_log(input_root: Path, eval_path: Path) -> EvalLog:
         },
     )
 
-    method_key = extract_method_key(run_name)
+    method_key = extract_method_key(run_name, config)
     return EvalLog(
         input_root=input_root.resolve(),
         input_root_label=infer_input_root_label(input_root.resolve()),

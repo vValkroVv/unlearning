@@ -36,6 +36,7 @@ METHOD_ORDER = [
     "a_only",
     "dpo",
     "simple_ce",
+    "general_cf",
     "multicf",
     "boundary_cf",
     "span_cf",
@@ -55,7 +56,7 @@ METHOD_ORDER = [
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
@@ -208,7 +209,7 @@ def split_seed_suffix(run_name: str) -> tuple[str, str | None]:
     return match.group("base"), match.group("seed")
 
 
-def extract_method_key(run_name: str) -> str:
+def extract_method_key(run_name: str, config: dict[str, Any] | None = None) -> str:
     match = METHOD_RE.search(run_name)
     if match is None:
         raise ValueError(f"Could not parse method from run name: {run_name}")
@@ -237,7 +238,7 @@ def extract_method_key(run_name: str) -> str:
         if ablation_tokens:
             return "_".join([method_name] + ablation_tokens)
         return method_name
-    variant_info = extract_new_method_variant(run_name, method_name)
+    variant_info = extract_new_method_variant(run_name, method_name, config=config)
     if variant_info is not None:
         return variant_info.method_key
     return method_name
@@ -754,17 +755,21 @@ def group_runs_for_output(
                 "run_name": canonical_name,
                 "params_file": run["params_file"],
                 "runs": [],
+                "canonical_names": set(),
             },
         )
-        if group["run_name"] != canonical_name:
-            raise ValueError(
-                f"Method {method_name} maps to multiple canonical run names: "
-                f"{group['run_name']} vs {canonical_name}"
-            )
+        group["canonical_names"].add(canonical_name)
         group["runs"].append(run)
 
     output_groups = sorted(grouped.values(), key=lambda item: method_sort_key(str(item["method"])))
     for group in output_groups:
+        canonical_names = sorted(str(name) for name in group.pop("canonical_names"))
+        if len(canonical_names) == 1:
+            group["run_name"] = canonical_names[0]
+        else:
+            # Some packaged archives mix long-form and hashed aliases for the same method config.
+            # Seed averaging is still valid because the method key and parsed config match.
+            group["run_name"] = str(group["method"])
         group["runs"].sort(key=run_seed_sort_key)
         group["seed_values"] = [
             seed
@@ -838,7 +843,7 @@ def main() -> None:
 
         split_bucket = infer_split_bucket(run_dir.name, config)
         lr = extract_lr(run_dir.name)
-        method_key = extract_method_key(run_dir.name)
+        method_key = extract_method_key(run_dir.name, config)
         params_payload = build_params_payload(run_dir, split_bucket, lr, method_key, config, overrides)
 
         params_file = params_dir / f"{run_dir.name}.yaml"
