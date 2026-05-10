@@ -132,6 +132,12 @@ case "${METHOD_VARIANT}" in
   simnpo)
     exec bash "${script_dir}/simnpo_duet.sh"
     ;;
+  unilogit)
+    exec bash "${script_dir}/unilogit_duet.sh"
+    ;;
+  stat)
+    exec bash "${script_dir}/stat_duet.sh"
+    ;;
   npo_sam)
     exec bash "${script_dir}/npo_sam_duet.sh"
     ;;

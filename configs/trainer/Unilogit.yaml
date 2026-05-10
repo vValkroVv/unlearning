@@ -1,0 +1,10 @@
+defaults:
+  - GradDiff
+
+handler: Unilogit
+method_args:
+  forget_coef: 1.0
+  kl_direction: model_to_target
+  alpha: 1.0
+  gamma: 1.0
+  retain_loss_type: NLL

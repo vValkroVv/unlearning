@@ -1,0 +1,11 @@
+defaults:
+  - GradDiff
+
+handler: STAT
+method_args:
+  stat_forget_weight: 1.0
+  stat_retain_weight: 1.0
+  synthetic_mode: uniform
+  exclude_special_tokens: true
+  preserve_eos: false
+  retain_loss_type: NLL

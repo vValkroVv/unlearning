@@ -195,8 +195,10 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_projected_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/span_cf_simnpo_sam_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/stat_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/undial_lora_popular.yaml
 │   │       │   ├── configs/experiment/unlearn/duet/undial_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/duet/unilogit_lora.yaml
 │   │       │   └── configs/experiment/unlearn/duet/wga_lora.yaml
 │   │       ├── configs/experiment/unlearn/muse
 │   │       │   ├── configs/experiment/unlearn/muse/default.yaml
@@ -235,6 +237,8 @@ Directory Structure:
 │   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_projected_lora.yaml
 │   │       │   ├── configs/experiment/unlearn/rwku/span_cf_simnpo_sam_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/stat_lora.yaml
+│   │       │   ├── configs/experiment/unlearn/rwku/unilogit_lora.yaml
 │   │       │   └── configs/experiment/unlearn/rwku/wga_lora.yaml
 │   │       ├── configs/experiment/unlearn/tofu
 │   │       │   ├── configs/experiment/unlearn/tofu/default.yaml
@@ -320,7 +324,9 @@ Directory Structure:
 │   │   ├── configs/trainer/SpanCFSimNPOLocalRetain.yaml
 │   │   ├── configs/trainer/SpanCFSimNPOProjected.yaml
 │   │   ├── configs/trainer/SpanCFSimNPOSAM.yaml
+│   │   ├── configs/trainer/STAT.yaml
 │   │   ├── configs/trainer/UNDIAL.yaml
+│   │   ├── configs/trainer/Unilogit.yaml
 │   │   └── configs/trainer/WGA.yaml
 │   └── configs/unlearn.yaml
 │   ├── docs/components.md
@@ -402,6 +408,8 @@ Directory Structure:
 │   │   ├── scripts/duet/run_dualcf_ablation_v2.sh
 │   │   ├── scripts/duet/simnpo_duet.sh
 │   │   ├── scripts/duet/simple_ce_duet.sh
+│   │   ├── scripts/duet/stat_duet.sh
+│   │   ├── scripts/duet/unilogit_duet.sh
 │   │   └── scripts/duet/wga_duet.sh
 │   ├── scripts/DUET.sh
 │   ├── scripts/forget_metrics
@@ -447,6 +455,8 @@ Directory Structure:
 │   │   ├── scripts/rwku/run_dualcf_ablation_v2.sh
 │   │   ├── scripts/rwku/simnpo_rwku.sh
 │   │   ├── scripts/rwku/simple_ce_rwku.sh
+│   │   ├── scripts/rwku/stat_rwku.sh
+│   │   ├── scripts/rwku/unilogit_rwku.sh
 │   │   └── scripts/rwku/wga_rwku.sh
 │   ├── scripts/serve_zips_for_gpu
 │   ├── scripts/tofu_finetune.sh
@@ -544,7 +554,9 @@ Directory Structure:
 │       │   ├── src/trainer/unlearn/span_cf_simnpo_sam.py
 │       │   ├── src/trainer/unlearn/span_cf_simnpo.py
 │       │   ├── src/trainer/unlearn/span_cf.py
+│       │   ├── src/trainer/unlearn/stat.py
 │       │   ├── src/trainer/unlearn/undial.py
+│       │   ├── src/trainer/unlearn/unilogit.py
 │       │   └── src/trainer/unlearn/wga.py
 │       └── src/trainer/utils.py
 │   ├── tests/test_calc_wrong_generations.py
@@ -556,6 +568,7 @@ Directory Structure:
 │   └── tests/test_wrong_generation_sidecars.py
 ├── tmp_rwku_apply_manual_fixes.py
 ├── tmp_rwku_verify_clean.py
+├── unilogit_integration_diff.md
 └── vast-working.md
 </directory_structure>
 
@@ -7190,11 +7203,15 @@ export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 - `scripts/duet/ga_duet.sh`
 - `scripts/duet/npo_duet.sh`
 - `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/stat_duet.sh`
+- `scripts/duet/unilogit_duet.sh`
 - `scripts/duet/loku_duet.sh`
 - `scripts/rwku/ada_pop_rwku.sh`
 - `scripts/rwku/ga_rwku.sh`
 - `scripts/rwku/npo_rwku.sh`
 - `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/stat_rwku.sh`
+- `scripts/rwku/unilogit_rwku.sh`
 - `scripts/rwku/loku_rwku.sh`
 
 So the run directories land under:
@@ -14646,6 +14663,8 @@ DEFAULT_VARIANTS = [
     "ada_pop",
     "npo",
     "simnpo",
+    "unilogit",
+    "stat",
     "npo_sam",
     "loku",
 ]
@@ -14694,6 +14713,8 @@ VARIANT_MATCHERS: dict[str, Callable[[str], bool]] = {
     "ada_pop": _contains("_ada_pop_lora_"),
     "npo": _contains("_npo_lora_"),
     "simnpo": _contains("_simnpo_lora_"),
+    "unilogit": _contains("_unilogit_lora_"),
+    "stat": _contains("_stat_lora_"),
     "npo_sam": _contains("_npo_sam_lora_"),
     "loku": _contains("_loku_lora_"),
 }
@@ -15175,6 +15196,81 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+</content>
+
+<content full_path="unilogit_integration_diff.md">
+# Unilogit Integration Diff
+
+Target: current working tree
+
+## Unilogit baseline integration (2026-05-10)
+
+This update adds `unilogit` as a first-class old-baseline method in the DUET /
+RWKU campaign stack. It follows the existing SimNPO launcher surface and does
+not consume DualCF counterfactual artifacts inside the trainer.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/unilogit.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/Unilogit.yaml`
+- `configs/experiment/unlearn/duet/unilogit_lora.yaml`
+- `configs/experiment/unlearn/rwku/unilogit_lora.yaml`
+- `scripts/duet/unilogit_duet.sh`
+- `scripts/rwku/unilogit_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/build_results_combine_tables.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/analyze_wrong_generations.py`
+- `prod-run-dual-gpu.md`
+- `unilogit_integration_diff.md`
+
+Behavior change summary:
+
+- `Unilogit` is registered as a trainer with:
+  - `forget_coef`
+  - `kl_direction={model_to_target,target_to_model}`
+  - `alpha`
+  - `gamma`
+  - `retain_loss_type`
+- the forget objective builds a detached modified uniform-target distribution
+  from the current logits, filters ignored labels before target assignment, and
+  passes `attention_mask` through the model call for padded QA batches
+- DUET and RWKU direct launchers expose `FORGET_COEFS`, `KL_DIRECTIONS`,
+  `ALPHAS`, and `GAMMAS`, and keep the same train -> endpoint eval ->
+  checkpoint eval -> utility eval -> cleanup cadence as the existing SimNPO /
+  NPO launchers
+- the campaign wrapper accepts `METHOD_VARIANTS=unilogit` and includes it in
+  the default method list between `simnpo` and `npo_sam`
+- save checking, structured-save parsing, wrong-generation parsing,
+  sanity-report parsing, and combined-table row specs now recognize
+  `_unilogit_lora_` run names
+- `prod-run-dual-gpu.md` now includes Unilogit commands after the GeneralCF
+  family, including default, forget-only, and KL-direction campaign sweeps
+
+Validation status:
+
+- passed static validation:
+  - `python -m py_compile src/trainer/unlearn/unilogit.py src/trainer/__init__.py src/tools/build_structured_saves.py src/tools/build_results_combine_tables.py src/tools/export_unlearning_sanity_checks.py src/tools/analyze_wrong_generations.py check_saves.py`
+  - `bash -n scripts/duet/unilogit_duet.sh`
+  - `bash -n scripts/rwku/unilogit_rwku.sh`
+  - `bash -n scripts/duet/run_dualcf_ablation_v2.sh`
+  - `bash -n scripts/rwku/run_dualcf_ablation_v2.sh`
+  - `bash -n scripts/dualcf/run_campaign_one_lr.sh`
+  - YAML load for `configs/trainer/Unilogit.yaml`,
+    `configs/experiment/unlearn/duet/unilogit_lora.yaml`, and
+    `configs/experiment/unlearn/rwku/unilogit_lora.yaml`
+- passed a tensor-level loss smoke for both KL directions with a dummy language
+  model and local import stubs; a normal package import check was not possible
+  in this local environment because `deepspeed` is not installed
+- passed a structured-save parser smoke that maps a representative
+  `_unilogit_lora_` DUET run name to method key `unilogit`
+- no GPU train smoke was run in this patch
 
 </content>
 
@@ -15786,7 +15882,7 @@ The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
-`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku"`.
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat npo_sam loku"`.
 That keeps routed DualCF ablations plus baselines in one wrapper path.
 New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
 `span_cf_samnpo`, `span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
@@ -16258,10 +16354,10 @@ SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 
 
 ```bash
 # 1. Baselines first, lr=1e-4, GPU 2
-SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
 
 # 2. Baselines first, lr=5e-5, GPU 1
-SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
 
 # 3. Old artifacts, lr=1e-4, GPU 2
 SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
@@ -16877,6 +16973,41 @@ Coverage summary:
 For the six GeneralCF ablations above, replace the last argument `duet_rare`
 with `all` for the full tree.
 
+### Unilogit baseline
+
+Unilogit is an artifact-free old-baseline method, like GA / NPO / SimNPO, and
+trains on the normal DUET / RWKU forget datasets. The shared campaign wrapper
+skips `CF_DATASET_DATA_FILES` resolution for artifact-free methods.
+
+Run this after the GeneralCF family to add Unilogit to the old-baseline block:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="unilogit" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```
+
+
+### STAT baseline
+
+STAT is an artifact-free old-baseline method that replaces forget-answer token
+positions with uniformly sampled non-special vocabulary IDs and keeps a normal
+retain CE branch. Run this after the Unilogit block to add STAT to the
+old-baseline comparison:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="stat" \
+STAT_FORGET_WEIGHTS="1.0" \
+STAT_RETAIN_WEIGHTS="1.0" \
+STAT_EXCLUDE_SPECIAL_TOKENS=true \
+STAT_PRESERVE_EOS=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```
+
+
 </content>
 
 <content full_path="dual_cf_integration_diff.md">
@@ -16884,6 +17015,57 @@ with `all` for the full tree.
 
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
+
+## STAT synthetic-token baseline integration (2026-05-10)
+
+This update adds `STAT` as an artifact-free old-baseline method for DUET and
+RWKU. The trainer samples synthetic labels directly in token space, so no
+counterfactual artifact builder or dataset-schema change is required.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/stat.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/STAT.yaml`
+- `configs/experiment/unlearn/duet/stat_lora.yaml`
+- `configs/experiment/unlearn/rwku/stat_lora.yaml`
+- `scripts/duet/stat_duet.sh`
+- `scripts/rwku/stat_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- `STAT` extends the GradDiff retain branch but replaces supervised forget
+  answer-token positions with uniformly sampled non-special vocabulary IDs
+  before computing CE
+- the trainer logs `stat_forget_loss`, `stat_retain_loss`,
+  `stat_total_loss`, and synthetic-token routing diagnostics
+- DUET and RWKU STAT launchers preserve the existing train -> endpoint eval ->
+  checkpoint eval -> utility eval -> cleanup cadence
+- the campaign wrapper now skips `CF_DATASET_DATA_FILES` resolution for
+  artifact-free baselines: `ga`, `ada_pop`, `npo`, `simnpo`, `unilogit`,
+  `stat`, `npo_sam`, and `loku`
+- save checking, structured-save parsing, wrong-generation parsing, sanity
+  exports, and combined tables now recognize `_stat_lora_` run names
+- the GPU runbook includes copy-pasteable STAT commands after the Unilogit
+  baseline block
+
+Validation status:
+
+- syntax checks and YAML load checks were run locally for the new trainer,
+  configs, launchers, wrappers, and parser files
+- a CPU-only synthetic sampling smoke verified that STAT rewrites only
+  supervised answer positions and preserves EOS when configured
+- no GPU train smoke was run in this edit pass
 
 ## GeneralCF runtime integration (2026-04-10)
 
@@ -23764,6 +23946,79 @@ task_name: duet_span_cf_lora
 
 </content>
 
+<content full_path="configs/experiment/unlearn/duet/stat_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: STAT
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${forget_split}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 2
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    stat_forget_weight: 1.0
+    stat_retain_weight: 1.0
+    synthetic_mode: uniform
+    exclude_special_tokens: true
+    preserve_eos: false
+    retain_loss_type: NLL
+
+task_name: duet_stat_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/duet/span_cf_simnpo_projected_lora.yaml">
 # @package _global_
 
@@ -23829,6 +24084,78 @@ trainer:
     ddp_find_unused_parameters: false
 
 task_name: duet_span_cf_simnpo_projected_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/duet/unilogit_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: Unilogit
+  - override /data: unlearn
+  - override /data/datasets@data.forget: DUET_QA_forget
+  - override /data/datasets@data.retain: DUET_QA_retain
+  - override /eval: duet
+
+forget_split: city_forget_rare_5
+retain_split: city_fast_retain_500
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: question
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: forget
+  forget:
+    DUET_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${forget_split}
+        question_key: ${question_key}
+  retain:
+    DUET_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/DUET
+          split: ${retain_split}
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 2
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    forget_coef: 1.0
+    kl_direction: model_to_target
+    alpha: 1.0
+    gamma: 1.0
+    retain_loss_type: NLL
+
+task_name: duet_unilogit_lora
 
 </content>
 
@@ -26313,6 +26640,81 @@ task_name: rwku_span_cf_lora
 
 </content>
 
+<content full_path="configs/experiment/unlearn/rwku/stat_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: STAT
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${forget_split}
+          split: "test"
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 2
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    stat_forget_weight: 1.0
+    stat_retain_weight: 1.0
+    synthetic_mode: uniform
+    exclude_special_tokens: true
+    preserve_eos: false
+    retain_loss_type: NLL
+
+task_name: rwku_stat_lora
+
+</content>
+
 <content full_path="configs/experiment/unlearn/rwku/npo_lora.yaml">
 # @package _global_
 
@@ -26454,6 +26856,80 @@ trainer:
     ddp_find_unused_parameters: false
 
 task_name: rwku_span_cf_simnpo_projected_lora
+
+</content>
+
+<content full_path="configs/experiment/unlearn/rwku/unilogit_lora.yaml">
+# @package _global_
+
+defaults:
+  - override /model: Llama-3.1-8B-Instruct-lora
+  - override /trainer: Unilogit
+  - override /data: unlearn
+  - override /data/datasets@data.forget: RWKU_QA_forget
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
+
+forget_split: forget_level2
+retain_split: neighbor_level2
+holdout_split: ${retain_split}
+retain_logs_path: null
+question_key: query
+
+model:
+  model_args:
+    pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+data:
+  anchor: forget
+  forget:
+    RWKU_QA_forget:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${forget_split}
+          split: "test"
+        question_key: ${question_key}
+  retain:
+    RWKU_QA_retain:
+      args:
+        hf_args:
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
+        question_key: ${question_key}
+
+eval:
+  duet:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    question_key: ${question_key}
+
+trainer:
+  args:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 32
+    learning_rate: 1e-5
+    num_train_epochs: 2
+    lr_scheduler_type: constant
+    warmup_ratio: 0.1
+    logging_steps: 10
+    eval_strategy: "no"
+    save_strategy: "no"
+    do_eval: false
+    eval_on_start: false
+    remove_unused_columns: false
+    gradient_checkpointing: false
+    ddp_find_unused_parameters: false
+  method_args:
+    forget_coef: 1.0
+    kl_direction: model_to_target
+    alpha: 1.0
+    gamma: 1.0
+    retain_loss_type: NLL
+
+task_name: rwku_unilogit_lora
 
 </content>
 
@@ -29723,6 +30199,21 @@ method_args:
 
 </content>
 
+<content full_path="configs/trainer/STAT.yaml">
+defaults:
+  - GradDiff
+
+handler: STAT
+method_args:
+  stat_forget_weight: 1.0
+  stat_retain_weight: 1.0
+  synthetic_mode: uniform
+  exclude_special_tokens: true
+  preserve_eos: false
+  retain_loss_type: NLL
+
+</content>
+
 <content full_path="configs/trainer/SpanCFSAMNPO.yaml">
 defaults:
   - SpanCF
@@ -29925,6 +30416,20 @@ method_args:
   alpha: 1.0
   loss_names: ["forget_loss", "retain_loss"]
 
+
+</content>
+
+<content full_path="configs/trainer/Unilogit.yaml">
+defaults:
+  - GradDiff
+
+handler: Unilogit
+method_args:
+  forget_coef: 1.0
+  kl_direction: model_to_target
+  alpha: 1.0
+  gamma: 1.0
+  retain_loss_type: NLL
 
 </content>
 
@@ -32566,6 +33071,12 @@ case "${METHOD_VARIANT}" in
   simnpo)
     exec bash "${script_dir}/simnpo_duet.sh"
     ;;
+  unilogit)
+    exec bash "${script_dir}/unilogit_duet.sh"
+    ;;
+  stat)
+    exec bash "${script_dir}/stat_duet.sh"
+    ;;
   npo_sam)
     exec bash "${script_dir}/npo_sam_duet.sh"
     ;;
@@ -34230,6 +34741,297 @@ bash "${script_dir}/npo_duet.sh"
 
 </content>
 
+<content full_path="scripts/duet/stat_duet.sh">
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir=$(dirname "$(realpath "$0")")
+repo_root=$(realpath "${script_dir}/../..")
+source "${script_dir}/_splits.sh"
+
+resolve_num_rows() {
+    local split="$1"
+    python - <<PY
+import datasets
+split = ${split@Q}
+ds = datasets.load_dataset("SwetieePawsss/DUET", split=split)
+print(len(ds))
+PY
+}
+
+export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+echo "Master Port: $MASTER_PORT"
+
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
+lora_model="${MODEL_CONFIG:-${base_model}-lora}"
+hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb}"
+sft_subfolder="${SFT_SUBFOLDER:-}"
+
+use_sft_base=${USE_SFT_BASE:-1}
+if [[ "${use_sft_base}" == "1" ]]; then
+    base_model_path="${local_sft_base}"
+    default_tokenizer_model_path="${base_model_path}"
+    echo "[duet][STAT] Using locally finetuned base checkpoint at ${base_model_path}"
+else
+    base_model_path="${hf_base_model_path}"
+    default_tokenizer_model_path="${hf_base_model_path}"
+    echo "[duet][STAT] Using Hugging Face base checkpoint ${base_model_path}"
+fi
+
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${default_tokenizer_model_path}}"
+tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
+extra_train_args=()
+extra_eval_args=()
+if [[ "${use_sft_base}" == "1" && -n "${sft_subfolder}" ]]; then
+    extra_train_args+=(+model.model_args.subfolder=${sft_subfolder})
+    extra_eval_args+=(+model.model_args.subfolder=${sft_subfolder})
+fi
+if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
+    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+fi
+
+experiment="unlearn/duet/stat_lora.yaml"
+trainer="STAT"
+
+output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/duet/stat}"
+mkdir -p "${output_root}"
+
+set_forget_retain_splits
+
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
+num_train_epochs=${NUM_EPOCHS:-2}
+max_steps="${MAX_STEPS:-0}"
+checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
+
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
+raw_lrs="${raw_lrs//,/ }"
+raw_lrs="${raw_lrs//\"/}"
+raw_lrs="${raw_lrs//\'/}"
+read -r -a lrs <<< "${raw_lrs}"
+
+raw_stat_forget_weights="${STAT_FORGET_WEIGHTS:-1.0}"
+raw_stat_forget_weights="${raw_stat_forget_weights//,/ }"
+raw_stat_forget_weights="${raw_stat_forget_weights//\"/}"
+raw_stat_forget_weights="${raw_stat_forget_weights//\'/}"
+read -r -a stat_forget_weights <<< "${raw_stat_forget_weights}"
+
+raw_stat_retain_weights="${STAT_RETAIN_WEIGHTS:-1.0}"
+raw_stat_retain_weights="${raw_stat_retain_weights//,/ }"
+raw_stat_retain_weights="${raw_stat_retain_weights//\"/}"
+raw_stat_retain_weights="${raw_stat_retain_weights//\'/}"
+read -r -a stat_retain_weights <<< "${raw_stat_retain_weights}"
+
+raw_stat_modes="${STAT_SYNTHETIC_MODES:-uniform}"
+raw_stat_modes="${raw_stat_modes//,/ }"
+raw_stat_modes="${raw_stat_modes//\"/}"
+raw_stat_modes="${raw_stat_modes//\'/}"
+read -r -a stat_modes <<< "${raw_stat_modes}"
+
+raw_exclude_special="${STAT_EXCLUDE_SPECIAL_TOKENS:-true}"
+raw_exclude_special="${raw_exclude_special//,/ }"
+raw_exclude_special="${raw_exclude_special//\"/}"
+raw_exclude_special="${raw_exclude_special//\'/}"
+read -r -a stat_exclude_special_values <<< "${raw_exclude_special}"
+
+raw_preserve_eos="${STAT_PRESERVE_EOS:-false}"
+raw_preserve_eos="${raw_preserve_eos//,/ }"
+raw_preserve_eos="${raw_preserve_eos//\"/}"
+raw_preserve_eos="${raw_preserve_eos//\'/}"
+read -r -a stat_preserve_eos_values <<< "${raw_preserve_eos}"
+
+lora_rs=(${LORA_RS:-"32"})
+lora_alphas=(${LORA_ALPHAS:-"64"})
+lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+for split in "${forget_retain_splits[@]}"; do
+    read -r forget_split retain_split forget_label <<< "${split}"
+    if [[ -z "${forget_label:-}" ]]; then
+        forget_label="${forget_split}"
+    fi
+
+    for lr in "${lrs[@]}"; do
+        for stat_forget_weight in "${stat_forget_weights[@]}"; do
+            sfw_tag=${stat_forget_weight//./p}
+            for stat_retain_weight in "${stat_retain_weights[@]}"; do
+                srw_tag=${stat_retain_weight//./p}
+                for stat_mode in "${stat_modes[@]}"; do
+                    for stat_exclude_special in "${stat_exclude_special_values[@]}"; do
+                        xsp_tag="${stat_exclude_special}"
+                        xsp_tag="${xsp_tag//true/T}"
+                        xsp_tag="${xsp_tag//false/F}"
+                        for stat_preserve_eos in "${stat_preserve_eos_values[@]}"; do
+                            peos_tag="${stat_preserve_eos}"
+                            peos_tag="${peos_tag//true/T}"
+                            peos_tag="${peos_tag//false/F}"
+                            for lora_r in "${lora_rs[@]}"; do
+                                for lora_alpha in "${lora_alphas[@]}"; do
+                                    for lora_dropout in "${lora_dropouts[@]}"; do
+                                        dropout_tag=${lora_dropout//./p}
+                                        task_name=duet_${base_model}_${forget_label}_stat_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_sfw${sfw_tag}_srw${srw_tag}_mode${stat_mode}_xsp${xsp_tag}_peos${peos_tag}
+                                        if [[ -n "${run_tag_extra}" ]]; then
+                                            task_name="${task_name}_${run_tag_extra}"
+                                        fi
+                                        run_dir=${output_root}/${task_name}
+                                        eval_dir=${run_dir}/evals
+                                        summary_path=${eval_dir}/DUET_SUMMARY.json
+
+                                        if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
+                                            echo "[duet][STAT] Skipping ${task_name}: found existing summary at ${summary_path}"
+                                            continue
+                                        fi
+
+                                        echo "${task_name}: STAT LoRA unlearning ${base_model_path} on ${forget_split}"
+
+                                        adapter_path=${run_dir}/adapter_model.safetensors
+                                        if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                                            mkdir -p "${run_dir}"
+                                            extra_schedule_args=()
+                                            if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                                extra_schedule_args+=(
+                                                    ++trainer.args.save_strategy=no
+                                                    ++trainer.args.save_total_limit=${save_total_limit}
+                                                    ++trainer.args.save_safetensors=true
+                                                    ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                                )
+                                            elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                                num_rows=$(resolve_num_rows "${forget_split}")
+                                                global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
+                                                steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
+                                                half_epoch_steps=$(( (steps_per_epoch + 1) / 2 ))
+                                                logging_steps=$(( half_epoch_steps / 2 ))
+                                                if [[ "${logging_steps}" -lt 1 ]]; then
+                                                    logging_steps=1
+                                                fi
+                                                extra_schedule_args+=(
+                                                    ++trainer.args.save_strategy=steps
+                                                    ++trainer.args.save_steps=${half_epoch_steps}
+                                                    ++trainer.args.save_total_limit=${save_total_limit}
+                                                    ++trainer.args.logging_strategy=steps
+                                                    ++trainer.args.logging_steps=${logging_steps}
+                                                    ++trainer.args.save_safetensors=true
+                                                    ++trainer.args.load_best_model_at_end=false
+                                                )
+                                            fi
+                                            train_cmd=(
+                                                src/train.py
+                                                --config-name=unlearn.yaml
+                                                experiment=${experiment}
+                                                trainer=${trainer}
+                                                task_name=${task_name}
+                                                model=${lora_model}
+                                                forget_split=${forget_split}
+                                                retain_split=${retain_split}
+                                                model.model_args.pretrained_model_name_or_path=${base_model_path}
+                                                model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
+                                                model.model_args.device_map="auto"
+                                                ++model.model_args.low_cpu_mem_usage=true
+                                                model.lora_config.r=${lora_r}
+                                                model.lora_config.lora_alpha=${lora_alpha}
+                                                model.lora_config.lora_dropout=${lora_dropout}
+                                                ++trainer.args.seed=${TRAIN_SEED:-42}
+                                                ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
+                                                trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
+                                                trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
+                                                trainer.args.num_train_epochs=${num_train_epochs}
+                                                trainer.args.learning_rate=${lr}
+                                                trainer.method_args.stat_forget_weight=${stat_forget_weight}
+                                                trainer.method_args.stat_retain_weight=${stat_retain_weight}
+                                                trainer.method_args.synthetic_mode=${stat_mode}
+                                                trainer.method_args.exclude_special_tokens=${stat_exclude_special}
+                                                trainer.method_args.preserve_eos=${stat_preserve_eos}
+                                                trainer.method_args.retain_loss_type=NLL
+                                                +trainer.trace_jsonl=true
+                                                retain_logs_path=null
+                                                "${extra_schedule_args[@]}"
+                                                "${extra_train_args[@]}"
+                                                paths.output_dir=${run_dir}
+                                            )
+                                            if [[ "${max_steps}" != "0" ]]; then
+                                                train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                            fi
+                                            if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                                train_cmd+=(++trainer.args.full_determinism=true)
+                                            fi
+                                            python "${train_cmd[@]}"
+                                        fi
+
+                                        mkdir -p "${eval_dir}"
+                                        if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+                                            rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"
+                                        fi
+
+                                        eval_cmd=(
+                                            experiment=eval/duet/default.yaml
+                                            model=${lora_model}
+                                            forget_split=${forget_split}
+                                            holdout_split=${retain_split}
+                                            task_name=${task_name}
+                                            model.model_args.pretrained_model_name_or_path=${run_dir}
+                                            ++model.model_args.base_model_name_or_path=${base_model_path}
+                                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
+                                            model.model_args.device_map="auto"
+                                            ++model.model_args.low_cpu_mem_usage=true
+                                            model.lora_config.r=${lora_r}
+                                            model.lora_config.lora_alpha=${lora_alpha}
+                                            model.lora_config.lora_dropout=${lora_dropout}
+                                            eval.duet.batch_size=${eval_batch_size}
+                                            eval.duet.overwrite=true
+                                            "${extra_eval_args[@]}"
+                                            paths.output_dir=${eval_dir}
+                                            retain_logs_path=null
+                                        )
+                                        python src/eval.py "${eval_cmd[@]}"
+
+                                        if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                            bash "${script_dir}/eval_checkpoints_duet.sh" \
+                                                "${run_dir}" \
+                                                "${forget_split}" \
+                                                "${retain_split}" \
+                                                "${base_model_path}" \
+                                                "${tokenizer_model_path}" \
+                                                "${lora_model}" \
+                                                "${base_model}"
+                                        fi
+
+                                        if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                                            if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                                                rm -f "${run_dir}"/*.safetensors
+                                                echo "[duet][STAT] Removed safetensors from ${run_dir}"
+                                            fi
+                                        fi
+                                    done
+                                done
+                            done
+                        done
+                    done
+                done
+            done
+        done
+    done
+done
+
+</content>
+
 <content full_path="scripts/duet/run_all_qwen25_7b.sh">
 #!/bin/bash
 
@@ -34260,6 +35062,204 @@ bash "${script_dir}/wga_duet.sh"
 
 echo "[duet][qwen2.5-7b] Running NPO"
 bash "${script_dir}/npo_duet.sh"
+
+</content>
+
+<content full_path="scripts/duet/unilogit_duet.sh">
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir=$(dirname "$(realpath "$0")")
+repo_root=$(realpath "${script_dir}/../..")
+source "${script_dir}/_splits.sh"
+
+resolve_num_rows() {
+    local split="$1"
+    python - <<PY
+import datasets
+split = ${split@Q}
+ds = datasets.load_dataset("SwetieePawsss/DUET", split=split)
+print(len(ds))
+PY
+}
+
+export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+echo "Master Port: $MASTER_PORT"
+
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
+lora_model="${MODEL_CONFIG:-${base_model}-lora}"
+hf_base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+local_sft_base="${LOCAL_SFT_BASE:-/mnt/extremessd10tb/borisiuk/open-unlearning/saves/finetune/llama3.1-8b_full_3ep_ft_tripunlamb}"
+sft_subfolder="${SFT_SUBFOLDER:-}"
+
+use_sft_base=${USE_SFT_BASE:-1}
+if [[ "${use_sft_base}" == "1" ]]; then
+    base_model_path="${local_sft_base}"
+    default_tokenizer_model_path="${base_model_path}"
+    echo "[duet][Unilogit] Using locally finetuned base checkpoint at ${base_model_path}"
+else
+    base_model_path="${hf_base_model_path}"
+    default_tokenizer_model_path="${hf_base_model_path}"
+    echo "[duet][Unilogit] Using Hugging Face base checkpoint ${base_model_path}"
+fi
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${default_tokenizer_model_path}}"
+tokenizer_subfolder="${TOKENIZER_SUBFOLDER-${sft_subfolder}}"
+extra_train_args=()
+extra_eval_args=()
+if [[ "${use_sft_base}" == "1" && -n "${sft_subfolder}" ]]; then
+    extra_train_args+=(+model.model_args.subfolder=${sft_subfolder})
+    extra_eval_args+=(+model.model_args.subfolder=${sft_subfolder})
+fi
+if [[ "${use_sft_base}" == "1" && -n "${tokenizer_subfolder}" ]]; then
+    extra_train_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+    extra_eval_args+=(+model.tokenizer_args.subfolder=${tokenizer_subfolder})
+fi
+
+experiment="unlearn/duet/unilogit_lora.yaml"
+trainer="Unilogit"
+
+output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/duet/unilogit}"
+mkdir -p "${output_root}"
+
+set_forget_retain_splits
+
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
+num_train_epochs=${NUM_EPOCHS:-2}
+max_steps="${MAX_STEPS:-0}"
+checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
+
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
+raw_lrs="${raw_lrs//,/ }"
+raw_lrs="${raw_lrs//\"/}"
+raw_lrs="${raw_lrs//\'/}"
+read -r -a lrs <<< "${raw_lrs}"
+
+raw_forget_coefs="${FORGET_COEFS:-1.0}"
+raw_forget_coefs="${raw_forget_coefs//,/ }"
+raw_forget_coefs="${raw_forget_coefs//\"/}"
+raw_forget_coefs="${raw_forget_coefs//\'/}"
+read -r -a forget_coefs <<< "${raw_forget_coefs}"
+
+raw_kl_directions="${KL_DIRECTIONS:-model_to_target}"
+raw_kl_directions="${raw_kl_directions//,/ }"
+raw_kl_directions="${raw_kl_directions//\"/}"
+raw_kl_directions="${raw_kl_directions//\'/}"
+read -r -a kl_directions <<< "${raw_kl_directions}"
+
+raw_alphas="${ALPHAS:-1.0}"
+raw_alphas="${raw_alphas//,/ }"
+raw_alphas="${raw_alphas//\"/}"
+raw_alphas="${raw_alphas//\'/}"
+read -r -a alphas <<< "${raw_alphas}"
+
+raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${raw_gammas//,/ }"
+raw_gammas="${raw_gammas//\"/}"
+raw_gammas="${raw_gammas//\'/}"
+read -r -a gammas <<< "${raw_gammas}"
+
+lora_rs=(${LORA_RS:-"32"})
+lora_alphas=(${LORA_ALPHAS:-"64"})
+lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+for split in "${forget_retain_splits[@]}"; do
+    read -r forget_split retain_split forget_label <<< "${split}"
+    if [[ -z "${forget_label:-}" ]]; then
+        forget_label="${forget_split}"
+    fi
+
+    for lr in "${lrs[@]}"; do
+        for forget_coef in "${forget_coefs[@]}"; do
+            forget_coef_tag=${forget_coef//./p}
+            for kl_direction in "${kl_directions[@]}"; do
+                kl_tag=${kl_direction//_/}
+                for alpha in "${alphas[@]}"; do
+                    alpha_tag=${alpha//./p}
+                    for gamma in "${gammas[@]}"; do
+                        gamma_tag=${gamma//./p}
+                        for lora_r in "${lora_rs[@]}"; do
+                            for lora_alpha in "${lora_alphas[@]}"; do
+                                for lora_dropout in "${lora_dropouts[@]}"; do
+                                    dropout_tag=${lora_dropout//./p}
+                                    task_name=duet_${base_model}_${forget_label}_unilogit_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_fc${forget_coef_tag}_alpha${alpha_tag}_gamma${gamma_tag}_kl${kl_tag}
+                                    if [[ -n "${run_tag_extra}" ]]; then
+                                        task_name="${task_name}_${run_tag_extra}"
+                                    fi
+                                    run_dir=${output_root}/${task_name}
+                                    eval_dir=${run_dir}/evals
+                                    summary_path=${eval_dir}/DUET_SUMMARY.json
+
+                                    if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
+                                        echo "[duet][Unilogit] Skipping ${task_name}: found existing summary at ${summary_path}"
+                                        continue
+                                    fi
+
+                                    echo "${task_name}: Unilogit LoRA unlearning ${base_model_path} on ${forget_split}"
+
+                                    adapter_path=${run_dir}/adapter_model.safetensors
+                                    if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                                        mkdir -p "${run_dir}"
+                                        extra_schedule_args=()
+                                        if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                            extra_schedule_args+=(++trainer.args.save_strategy=no ++trainer.args.save_total_limit=${save_total_limit} ++trainer.args.save_safetensors=true ++trainer.save_on_epochs=[${checkpoint_epochs_csv}])
+                                        elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                            num_rows=$(resolve_num_rows "${forget_split}")
+                                            global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
+                                            steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
+                                            half_epoch_steps=$(( (steps_per_epoch + 1) / 2 ))
+                                            logging_steps=$(( half_epoch_steps / 2 ))
+                                            if [[ "${logging_steps}" -lt 1 ]]; then logging_steps=1; fi
+                                            extra_schedule_args+=(++trainer.args.save_strategy=steps ++trainer.args.save_steps=${half_epoch_steps} ++trainer.args.save_total_limit=${save_total_limit} ++trainer.args.logging_strategy=steps ++trainer.args.logging_steps=${logging_steps} ++trainer.args.save_safetensors=true ++trainer.args.load_best_model_at_end=false)
+                                        fi
+                                        train_cmd=(src/train.py --config-name=unlearn.yaml experiment=${experiment} trainer=${trainer} task_name=${task_name} model=${lora_model} forget_split=${forget_split} retain_split=${retain_split} model.model_args.pretrained_model_name_or_path=${base_model_path} model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} model.model_args.device_map="auto" ++model.model_args.low_cpu_mem_usage=true model.lora_config.r=${lora_r} model.lora_config.lora_alpha=${lora_alpha} model.lora_config.lora_dropout=${lora_dropout} ++trainer.args.seed=${TRAIN_SEED:-42} ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}} trainer.args.per_device_train_batch_size=${per_device_train_batch_size} trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} trainer.args.num_train_epochs=${num_train_epochs} trainer.args.learning_rate=${lr} trainer.method_args.forget_coef=${forget_coef} trainer.method_args.kl_direction=${kl_direction} trainer.method_args.alpha=${alpha} trainer.method_args.gamma=${gamma} trainer.method_args.retain_loss_type=NLL +trainer.trace_jsonl=true retain_logs_path=null "${extra_schedule_args[@]}" "${extra_train_args[@]}" paths.output_dir=${run_dir})
+                                        if [[ "${max_steps}" != "0" ]]; then train_cmd+=(+trainer.args.max_steps=${max_steps}); fi
+                                        if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then train_cmd+=(++trainer.args.full_determinism=true); fi
+                                        python "${train_cmd[@]}"
+                                    fi
+
+                                    mkdir -p "${eval_dir}"
+                                    if [[ "${FORCE_RERUN:-0}" == "1" ]]; then rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"; fi
+
+                                    eval_cmd=(experiment=eval/duet/default.yaml model=${lora_model} forget_split=${forget_split} holdout_split=${retain_split} task_name=${task_name} model.model_args.pretrained_model_name_or_path=${run_dir} ++model.model_args.base_model_name_or_path=${base_model_path} model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} model.model_args.device_map="auto" ++model.model_args.low_cpu_mem_usage=true model.lora_config.r=${lora_r} model.lora_config.lora_alpha=${lora_alpha} model.lora_config.lora_dropout=${lora_dropout} eval.duet.batch_size=${eval_batch_size} eval.duet.overwrite=true "${extra_eval_args[@]}" paths.output_dir=${eval_dir} retain_logs_path=null)
+                                    python src/eval.py "${eval_cmd[@]}"
+
+                                    if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                        bash "${script_dir}/eval_checkpoints_duet.sh" "${run_dir}" "${forget_split}" "${retain_split}" "${base_model_path}" "${tokenizer_model_path}" "${lora_model}" "${base_model}"
+                                    fi
+
+                                    if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                                        if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                                            rm -f "${run_dir}"/*.safetensors
+                                            echo "[duet][Unilogit] Removed safetensors from ${run_dir}"
+                                        fi
+                                    fi
+                                done
+                            done
+                        done
+                    done
+                done
+            done
+        done
+    done
+done
 
 </content>
 
@@ -40978,7 +41978,8 @@ Defaults:
   SEED defaults to TRAIN_SEED or 42.
   SEEDS runs the wrapper serially once per listed seed.
   UTILITY defaults to 3k. Set UTILITY=1k to reuse the old panel.
-  The script expects artifacts to already exist under ARTIFACT_ROOT.
+  DualCF-family variants expect artifacts to already exist under ARTIFACT_ROOT.
+  Artifact-free baselines skip CF_DATASET_DATA_FILES resolution.
 EOF
 }
 
@@ -41229,6 +42230,24 @@ configure_general_cf_routing_env() {
   export CONSTANT_ROUTING_BATCH_SIZE="${CONSTANT_ROUTING_BATCH_SIZE:-${PER_DEVICE_TRAIN_BS:-16}}"
 }
 
+method_uses_cf_artifact() {
+  local method_variant="$1"
+
+  case "${method_variant}" in
+    full|d_only|a_only|dpo|simple_ce|general_cf|multicf|boundary_cf|span_cf|span_cf_samnpo|span_cf_simnpo|span_cf_local_retain|span_cf_simnpo_local_retain|span_cf_simnpo_sam|span_cf_simnpo_projected)
+      return 0
+      ;;
+    ga|ada_pop|npo|simnpo|unilogit|stat|npo_sam|loku)
+      return 1
+      ;;
+    *)
+      # Conservative default: DualCF-family variants usually consume an offline
+      # counterfactual artifact.
+      return 0
+      ;;
+  esac
+}
+
 resolve_duet_artifact_for_method() {
   local forget_label="$1"
   local method_variant="$2"
@@ -41301,11 +42320,18 @@ run_duet_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=duet_${forget_label}"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
-    export CF_DATASET_DATA_FILES="$(resolve_duet_artifact_for_method "${forget_label}" "${METHOD_VARIANT}")"
-    require_file "${CF_DATASET_DATA_FILES}"
-    echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    if method_uses_cf_artifact "${METHOD_VARIANT}"; then
+      export CF_DATASET_DATA_FILES="$(resolve_duet_artifact_for_method "${forget_label}" "${METHOD_VARIANT}")"
+      require_file "${CF_DATASET_DATA_FILES}"
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    else
+      unset CF_DATASET_DATA_FILES
+      unset CF_DATASET_PATH
+      unset CF_DATASET_SPLIT
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=none"
+    fi
     configure_method_variant_env "${METHOD_VARIANT}"
-    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES:-}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -41332,11 +42358,18 @@ run_rwku_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=rwku"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
-    export CF_DATASET_DATA_FILES="$(resolve_rwku_artifact_for_method "${METHOD_VARIANT}")"
-    require_file "${CF_DATASET_DATA_FILES}"
-    echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    if method_uses_cf_artifact "${METHOD_VARIANT}"; then
+      export CF_DATASET_DATA_FILES="$(resolve_rwku_artifact_for_method "${METHOD_VARIANT}")"
+      require_file "${CF_DATASET_DATA_FILES}"
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    else
+      unset CF_DATASET_DATA_FILES
+      unset CF_DATASET_PATH
+      unset CF_DATASET_SPLIT
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=none"
+    fi
     configure_method_variant_env "${METHOD_VARIANT}"
-    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES:-}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -41425,7 +42458,7 @@ export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
 export ATTR_RETAIN_MAX_STEPS="${ATTR_RETAIN_MAX_STEPS:-0}"
 export ATTR_FORGET_MAX_STEPS="${ATTR_FORGET_MAX_STEPS:-0}"
 
-METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku}"
+METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat npo_sam loku}"
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"
@@ -44717,6 +45750,12 @@ case "${METHOD_VARIANT}" in
     ;;
   simnpo)
     exec bash "${script_dir}/simnpo_rwku.sh"
+    ;;
+  unilogit)
+    exec bash "${script_dir}/unilogit_rwku.sh"
+    ;;
+  stat)
+    exec bash "${script_dir}/stat_rwku.sh"
     ;;
   npo_sam)
     exec bash "${script_dir}/npo_sam_rwku.sh"
@@ -48436,6 +49475,442 @@ for lr in "${lrs[@]}"; do
                                             done
                                         done
                                     done
+                                done
+                            done
+                        done
+                    done
+                done
+            done
+        done
+    done
+done
+
+</content>
+
+<content full_path="scripts/rwku/unilogit_rwku.sh">
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir=$(dirname "$(realpath "$0")")
+repo_root=$(realpath "${script_dir}/../..")
+
+resolve_num_rows() {
+    local dataset_name="$1"
+    python - <<PY
+import datasets
+dataset_name = ${dataset_name@Q}
+ds = datasets.load_dataset("SwetieePawsss/exp_r", name=dataset_name, split="test")
+print(len(ds))
+PY
+}
+
+export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+echo "Master Port: $MASTER_PORT"
+
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
+lora_model="${MODEL_CONFIG:-${base_model}-lora}"
+base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${base_model_path}}"
+
+if [[ -n "${HF_TOKEN:-}" && -z "${HUGGINGFACE_HUB_TOKEN:-}" ]]; then
+    export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
+fi
+
+echo "[rwku][Unilogit] Using Hugging Face base checkpoint ${base_model_path}"
+
+experiment="unlearn/rwku/unilogit_lora.yaml"
+trainer="Unilogit"
+
+output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/rwku/unilogit}"
+mkdir -p "${output_root}"
+
+forget_split="${FORGET_SPLIT:-forget_level2}"
+retain_split="${RETAIN_SPLIT:-neighbor_level2}"
+
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
+num_train_epochs=${NUM_EPOCHS:-2}
+max_steps="${MAX_STEPS:-0}"
+checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
+
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
+raw_lrs="${raw_lrs//,/ }"
+raw_lrs="${raw_lrs//\"/}"
+raw_lrs="${raw_lrs//\'/}"
+read -r -a lrs <<< "${raw_lrs}"
+
+raw_forget_coefs="${FORGET_COEFS:-1.0}"
+raw_forget_coefs="${raw_forget_coefs//,/ }"
+raw_forget_coefs="${raw_forget_coefs//\"/}"
+raw_forget_coefs="${raw_forget_coefs//\'/}"
+read -r -a forget_coefs <<< "${raw_forget_coefs}"
+
+raw_kl_directions="${KL_DIRECTIONS:-model_to_target}"
+raw_kl_directions="${raw_kl_directions//,/ }"
+raw_kl_directions="${raw_kl_directions//\"/}"
+raw_kl_directions="${raw_kl_directions//\'/}"
+read -r -a kl_directions <<< "${raw_kl_directions}"
+
+raw_alphas="${ALPHAS:-1.0}"
+raw_alphas="${raw_alphas//,/ }"
+raw_alphas="${raw_alphas//\"/}"
+raw_alphas="${raw_alphas//\'/}"
+read -r -a alphas <<< "${raw_alphas}"
+
+raw_gammas="${GAMMAS:-1.0}"
+raw_gammas="${raw_gammas//,/ }"
+raw_gammas="${raw_gammas//\"/}"
+raw_gammas="${raw_gammas//\'/}"
+read -r -a gammas <<< "${raw_gammas}"
+
+lora_rs=(${LORA_RS:-"32"})
+lora_alphas=(${LORA_ALPHAS:-"64"})
+lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+for lr in "${lrs[@]}"; do
+    for forget_coef in "${forget_coefs[@]}"; do
+        forget_coef_tag=${forget_coef//./p}
+        for kl_direction in "${kl_directions[@]}"; do
+            kl_tag=${kl_direction//_/}
+            for alpha in "${alphas[@]}"; do
+                alpha_tag=${alpha//./p}
+                for gamma in "${gammas[@]}"; do
+                    gamma_tag=${gamma//./p}
+                    for lora_r in "${lora_rs[@]}"; do
+                        for lora_alpha in "${lora_alphas[@]}"; do
+                            for lora_dropout in "${lora_dropouts[@]}"; do
+                                dropout_tag=${lora_dropout//./p}
+                                task_name=rwku_${base_model}_${forget_split}_unilogit_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_fc${forget_coef_tag}_alpha${alpha_tag}_gamma${gamma_tag}_kl${kl_tag}
+                                if [[ -n "${run_tag_extra}" ]]; then
+                                    task_name="${task_name}_${run_tag_extra}"
+                                fi
+                                run_dir=${output_root}/${task_name}
+                                eval_dir=${run_dir}/evals
+                                summary_path=${eval_dir}/DUET_SUMMARY.json
+
+                                if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
+                                    echo "[rwku][Unilogit] Skipping ${task_name}: found existing summary at ${summary_path}"
+                                    continue
+                                fi
+
+                                echo "${task_name}: Unilogit LoRA unlearning ${base_model_path} on ${forget_split}"
+
+                                adapter_path=${run_dir}/adapter_model.safetensors
+                                if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                                    mkdir -p "${run_dir}"
+                                    extra_schedule_args=()
+                                    if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                        extra_schedule_args+=(++trainer.args.save_strategy=no ++trainer.args.save_total_limit=${save_total_limit} ++trainer.args.save_safetensors=true ++trainer.save_on_epochs=[${checkpoint_epochs_csv}])
+                                    elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                        num_rows=$(resolve_num_rows "${forget_split}")
+                                        global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
+                                        steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
+                                        half_epoch_steps=$(( (steps_per_epoch + 1) / 2 ))
+                                        logging_steps=$(( half_epoch_steps / 2 ))
+                                        if [[ "${logging_steps}" -lt 1 ]]; then logging_steps=1; fi
+                                        extra_schedule_args+=(++trainer.args.save_strategy=steps ++trainer.args.save_steps=${half_epoch_steps} ++trainer.args.save_total_limit=${save_total_limit} ++trainer.args.logging_strategy=steps ++trainer.args.logging_steps=${logging_steps} ++trainer.args.save_safetensors=true ++trainer.args.load_best_model_at_end=false)
+                                    fi
+                                    train_cmd=(src/train.py --config-name=unlearn.yaml experiment=${experiment} trainer=${trainer} task_name=${task_name} model=${lora_model} forget_split=${forget_split} retain_split=${retain_split} model.model_args.pretrained_model_name_or_path=${base_model_path} model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} model.model_args.device_map="auto" ++model.model_args.low_cpu_mem_usage=true model.lora_config.r=${lora_r} model.lora_config.lora_alpha=${lora_alpha} model.lora_config.lora_dropout=${lora_dropout} ++trainer.args.seed=${TRAIN_SEED:-42} ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}} trainer.args.per_device_train_batch_size=${per_device_train_batch_size} trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps} trainer.args.num_train_epochs=${num_train_epochs} trainer.args.learning_rate=${lr} trainer.method_args.forget_coef=${forget_coef} trainer.method_args.kl_direction=${kl_direction} trainer.method_args.alpha=${alpha} trainer.method_args.gamma=${gamma} trainer.method_args.retain_loss_type=NLL +trainer.trace_jsonl=true retain_logs_path=null "${extra_schedule_args[@]}" paths.output_dir=${run_dir})
+                                    if [[ "${max_steps}" != "0" ]]; then train_cmd+=(+trainer.args.max_steps=${max_steps}); fi
+                                    if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then train_cmd+=(++trainer.args.full_determinism=true); fi
+                                    python "${train_cmd[@]}"
+                                fi
+
+                                mkdir -p "${eval_dir}"
+                                if [[ "${FORCE_RERUN:-0}" == "1" ]]; then rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"; fi
+
+                                eval_cmd=(experiment=eval/rwku/default.yaml model=${lora_model} forget_split=${forget_split} holdout_split=${retain_split} task_name=${task_name} model.model_args.pretrained_model_name_or_path=${run_dir} ++model.model_args.base_model_name_or_path=${base_model_path} model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path} model.model_args.device_map="auto" ++model.model_args.low_cpu_mem_usage=true model.lora_config.r=${lora_r} model.lora_config.lora_alpha=${lora_alpha} model.lora_config.lora_dropout=${lora_dropout} eval.duet.batch_size=${eval_batch_size} eval.duet.overwrite=true paths.output_dir=${eval_dir} retain_logs_path=null)
+                                python src/eval.py "${eval_cmd[@]}"
+
+                                if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                    bash "${script_dir}/eval_checkpoints_rwku.sh" "${run_dir}" "${forget_split}" "${retain_split}" "${base_model_path}" "${tokenizer_model_path}" "${lora_model}" "${base_model}"
+                                fi
+
+                                if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                                    if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                                        rm -f "${run_dir}"/*.safetensors
+                                        echo "[rwku][Unilogit] Removed safetensors from ${run_dir}"
+                                    fi
+                                fi
+                            done
+                        done
+                    done
+                done
+            done
+        done
+    done
+done
+
+</content>
+
+<content full_path="scripts/rwku/stat_rwku.sh">
+#!/bin/bash
+
+set -euo pipefail
+
+script_dir=$(dirname "$(realpath "$0")")
+repo_root=$(realpath "${script_dir}/../..")
+
+resolve_num_rows() {
+    local dataset_name="$1"
+    python - <<PY
+import datasets
+dataset_name = ${dataset_name@Q}
+ds = datasets.load_dataset("SwetieePawsss/exp_r", name=dataset_name, split="test")
+print(len(ds))
+PY
+}
+
+export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+echo "Master Port: $MASTER_PORT"
+
+base_model="${BASE_MODEL:-Llama-3.1-8B-Instruct}"
+lora_model="${MODEL_CONFIG:-${base_model}-lora}"
+base_model_path="${HF_BASE_MODEL_PATH:-meta-llama/${base_model}}"
+tokenizer_model_path="${TOKENIZER_MODEL_PATH:-${base_model_path}}"
+
+if [[ -n "${HF_TOKEN:-}" && -z "${HUGGINGFACE_HUB_TOKEN:-}" ]]; then
+    export HUGGINGFACE_HUB_TOKEN="${HF_TOKEN}"
+fi
+
+echo "[rwku][STAT] Using Hugging Face base checkpoint ${base_model_path}"
+
+experiment="unlearn/rwku/stat_lora.yaml"
+trainer="STAT"
+
+output_root="${OUTPUT_ROOT:-${repo_root}/saves/unlearn/rwku/stat}"
+mkdir -p "${output_root}"
+
+forget_split="${FORGET_SPLIT:-forget_level2}"
+retain_split="${RETAIN_SPLIT:-neighbor_level2}"
+
+per_device_train_batch_size=${PER_DEVICE_TRAIN_BS:-32}
+gradient_accumulation_steps=${GRAD_ACCUM:-1}
+eval_batch_size=${EVAL_BATCH_SIZE:-192}
+num_train_epochs=${NUM_EPOCHS:-2}
+max_steps="${MAX_STEPS:-0}"
+checkpoint_every_half_epoch="${CHECKPOINT_EVERY_HALF_EPOCH:-1}"
+save_total_limit="${SAVE_TOTAL_LIMIT:-12}"
+checkpoint_epochs_raw="${CHECKPOINT_EPOCHS:-}"
+checkpoint_epochs_csv=""
+if [[ -n "${checkpoint_epochs_raw}" ]]; then
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//,/ }"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\"/}"
+    checkpoint_epochs_raw="${checkpoint_epochs_raw//\'/}"
+    read -r -a checkpoint_epochs <<< "${checkpoint_epochs_raw}"
+    checkpoint_epochs_csv=$(IFS=,; echo "${checkpoint_epochs[*]}")
+fi
+run_tag_extra="${RUN_TAG_EXTRA:-}"
+
+raw_lrs="${LRS:-1e-6 5e-6 1e-5 5e-5 1e-4}"
+raw_lrs="${raw_lrs//,/ }"
+raw_lrs="${raw_lrs//\"/}"
+raw_lrs="${raw_lrs//\'/}"
+read -r -a lrs <<< "${raw_lrs}"
+
+raw_stat_forget_weights="${STAT_FORGET_WEIGHTS:-1.0}"
+raw_stat_forget_weights="${raw_stat_forget_weights//,/ }"
+raw_stat_forget_weights="${raw_stat_forget_weights//\"/}"
+raw_stat_forget_weights="${raw_stat_forget_weights//\'/}"
+read -r -a stat_forget_weights <<< "${raw_stat_forget_weights}"
+
+raw_stat_retain_weights="${STAT_RETAIN_WEIGHTS:-1.0}"
+raw_stat_retain_weights="${raw_stat_retain_weights//,/ }"
+raw_stat_retain_weights="${raw_stat_retain_weights//\"/}"
+raw_stat_retain_weights="${raw_stat_retain_weights//\'/}"
+read -r -a stat_retain_weights <<< "${raw_stat_retain_weights}"
+
+raw_stat_modes="${STAT_SYNTHETIC_MODES:-uniform}"
+raw_stat_modes="${raw_stat_modes//,/ }"
+raw_stat_modes="${raw_stat_modes//\"/}"
+raw_stat_modes="${raw_stat_modes//\'/}"
+read -r -a stat_modes <<< "${raw_stat_modes}"
+
+raw_exclude_special="${STAT_EXCLUDE_SPECIAL_TOKENS:-true}"
+raw_exclude_special="${raw_exclude_special//,/ }"
+raw_exclude_special="${raw_exclude_special//\"/}"
+raw_exclude_special="${raw_exclude_special//\'/}"
+read -r -a stat_exclude_special_values <<< "${raw_exclude_special}"
+
+raw_preserve_eos="${STAT_PRESERVE_EOS:-false}"
+raw_preserve_eos="${raw_preserve_eos//,/ }"
+raw_preserve_eos="${raw_preserve_eos//\"/}"
+raw_preserve_eos="${raw_preserve_eos//\'/}"
+read -r -a stat_preserve_eos_values <<< "${raw_preserve_eos}"
+
+lora_rs=(${LORA_RS:-"32"})
+lora_alphas=(${LORA_ALPHAS:-"64"})
+lora_dropouts=(${LORA_DROPOUTS:-"0.0"})
+delete_model_safetensors_after_eval="${DELETE_MODEL_SAFETENSORS_AFTER_EVAL:-0}"
+run_checkpoint_eval="${RUN_CHECKPOINT_EVAL:-${RUN_UTILITY_EVAL:-0}}"
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+
+for lr in "${lrs[@]}"; do
+    for stat_forget_weight in "${stat_forget_weights[@]}"; do
+        sfw_tag=${stat_forget_weight//./p}
+        for stat_retain_weight in "${stat_retain_weights[@]}"; do
+            srw_tag=${stat_retain_weight//./p}
+            for stat_mode in "${stat_modes[@]}"; do
+                for stat_exclude_special in "${stat_exclude_special_values[@]}"; do
+                    xsp_tag="${stat_exclude_special}"
+                    xsp_tag="${xsp_tag//true/T}"
+                    xsp_tag="${xsp_tag//false/F}"
+                    for stat_preserve_eos in "${stat_preserve_eos_values[@]}"; do
+                        peos_tag="${stat_preserve_eos}"
+                        peos_tag="${peos_tag//true/T}"
+                        peos_tag="${peos_tag//false/F}"
+                        for lora_r in "${lora_rs[@]}"; do
+                            for lora_alpha in "${lora_alphas[@]}"; do
+                                for lora_dropout in "${lora_dropouts[@]}"; do
+                                    dropout_tag=${lora_dropout//./p}
+                                    task_name=rwku_${base_model}_${forget_split}_stat_lora_r${lora_r}_lalpha${lora_alpha}_ldrop${dropout_tag}_lr${lr}_sfw${sfw_tag}_srw${srw_tag}_mode${stat_mode}_xsp${xsp_tag}_peos${peos_tag}
+                                    if [[ -n "${run_tag_extra}" ]]; then
+                                        task_name="${task_name}_${run_tag_extra}"
+                                    fi
+                                    run_dir=${output_root}/${task_name}
+                                    eval_dir=${run_dir}/evals
+                                    summary_path=${eval_dir}/DUET_SUMMARY.json
+
+                                    if [[ -f "${summary_path}" && "${FORCE_RERUN:-0}" != "1" ]]; then
+                                        echo "[rwku][STAT] Skipping ${task_name}: found existing summary at ${summary_path}"
+                                        continue
+                                    fi
+
+                                    echo "${task_name}: STAT LoRA unlearning ${base_model_path} on ${forget_split}"
+
+                                    adapter_path=${run_dir}/adapter_model.safetensors
+                                    if [[ ! -f "${adapter_path}" || "${FORCE_RERUN:-0}" == "1" ]]; then
+                                        mkdir -p "${run_dir}"
+                                        extra_schedule_args=()
+                                        if [[ -n "${checkpoint_epochs_csv}" ]]; then
+                                            extra_schedule_args+=(
+                                                ++trainer.args.save_strategy=no
+                                                ++trainer.args.save_total_limit=${save_total_limit}
+                                                ++trainer.args.save_safetensors=true
+                                                ++trainer.save_on_epochs=[${checkpoint_epochs_csv}]
+                                            )
+                                        elif [[ "${checkpoint_every_half_epoch}" == "1" && "${max_steps}" == "0" ]]; then
+                                            num_rows=$(resolve_num_rows "${forget_split}")
+                                            global_batch=$(( per_device_train_batch_size * gradient_accumulation_steps ))
+                                            steps_per_epoch=$(( (num_rows + global_batch - 1) / global_batch ))
+                                            half_epoch_steps=$(( (steps_per_epoch + 1) / 2 ))
+                                            logging_steps=$(( half_epoch_steps / 2 ))
+                                            if [[ "${logging_steps}" -lt 1 ]]; then
+                                                logging_steps=1
+                                            fi
+                                            extra_schedule_args+=(
+                                                ++trainer.args.save_strategy=steps
+                                                ++trainer.args.save_steps=${half_epoch_steps}
+                                                ++trainer.args.save_total_limit=${save_total_limit}
+                                                ++trainer.args.logging_strategy=steps
+                                                ++trainer.args.logging_steps=${logging_steps}
+                                                ++trainer.args.save_safetensors=true
+                                                ++trainer.args.load_best_model_at_end=false
+                                            )
+                                        fi
+                                        train_cmd=(
+                                            src/train.py
+                                            --config-name=unlearn.yaml
+                                            experiment=${experiment}
+                                            trainer=${trainer}
+                                            task_name=${task_name}
+                                            model=${lora_model}
+                                            forget_split=${forget_split}
+                                            retain_split=${retain_split}
+                                            model.model_args.pretrained_model_name_or_path=${base_model_path}
+                                            model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
+                                            model.model_args.device_map="auto"
+                                            ++model.model_args.low_cpu_mem_usage=true
+                                            model.lora_config.r=${lora_r}
+                                            model.lora_config.lora_alpha=${lora_alpha}
+                                            model.lora_config.lora_dropout=${lora_dropout}
+                                            ++trainer.args.seed=${TRAIN_SEED:-42}
+                                            ++trainer.args.data_seed=${DATA_SEED:-${TRAIN_SEED:-42}}
+                                            trainer.args.per_device_train_batch_size=${per_device_train_batch_size}
+                                            trainer.args.gradient_accumulation_steps=${gradient_accumulation_steps}
+                                            trainer.args.num_train_epochs=${num_train_epochs}
+                                            trainer.args.learning_rate=${lr}
+                                            trainer.method_args.stat_forget_weight=${stat_forget_weight}
+                                            trainer.method_args.stat_retain_weight=${stat_retain_weight}
+                                            trainer.method_args.synthetic_mode=${stat_mode}
+                                            trainer.method_args.exclude_special_tokens=${stat_exclude_special}
+                                            trainer.method_args.preserve_eos=${stat_preserve_eos}
+                                            trainer.method_args.retain_loss_type=NLL
+                                            +trainer.trace_jsonl=true
+                                            retain_logs_path=null
+                                            "${extra_schedule_args[@]}"
+                                            paths.output_dir=${run_dir}
+                                        )
+                                        if [[ "${max_steps}" != "0" ]]; then
+                                            train_cmd+=(+trainer.args.max_steps=${max_steps})
+                                        fi
+                                        if [[ "${FULL_DETERMINISM:-0}" == "1" ]]; then
+                                            train_cmd+=(++trainer.args.full_determinism=true)
+                                        fi
+                                        python "${train_cmd[@]}"
+                                    fi
+
+                                    mkdir -p "${eval_dir}"
+                                    if [[ "${FORCE_RERUN:-0}" == "1" ]]; then
+                                        rm -f "${summary_path}" "${eval_dir}/DUET_EVAL.json"
+                                    fi
+
+                                    eval_cmd=(
+                                        experiment=eval/rwku/default.yaml
+                                        model=${lora_model}
+                                        forget_split=${forget_split}
+                                        holdout_split=${retain_split}
+                                        task_name=${task_name}
+                                        model.model_args.pretrained_model_name_or_path=${run_dir}
+                                        ++model.model_args.base_model_name_or_path=${base_model_path}
+                                        model.tokenizer_args.pretrained_model_name_or_path=${tokenizer_model_path}
+                                        model.model_args.device_map="auto"
+                                        ++model.model_args.low_cpu_mem_usage=true
+                                        model.lora_config.r=${lora_r}
+                                        model.lora_config.lora_alpha=${lora_alpha}
+                                        model.lora_config.lora_dropout=${lora_dropout}
+                                        eval.duet.batch_size=${eval_batch_size}
+                                        eval.duet.overwrite=true
+                                        paths.output_dir=${eval_dir}
+                                        retain_logs_path=null
+                                    )
+                                    python src/eval.py "${eval_cmd[@]}"
+
+                                    if [[ "${run_checkpoint_eval}" == "1" ]]; then
+                                        bash "${script_dir}/eval_checkpoints_rwku.sh" \
+                                            "${run_dir}" \
+                                            "${forget_split}" \
+                                            "${retain_split}" \
+                                            "${base_model_path}" \
+                                            "${tokenizer_model_path}" \
+                                            "${lora_model}" \
+                                            "${base_model}"
+                                    fi
+
+                                    if [[ "${delete_model_safetensors_after_eval}" == "1" ]]; then
+                                        if compgen -G "${run_dir}/*.safetensors" > /dev/null; then
+                                            rm -f "${run_dir}"/*.safetensors
+                                            echo "[rwku][STAT] Removed safetensors from ${run_dir}"
+                                        fi
+                                    fi
                                 done
                             done
                         done
@@ -55563,7 +57038,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 SEED_RE = re.compile(r"_seed(\d+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|unilogit|stat|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -55584,6 +57059,8 @@ METHOD_DISPLAY = {
     "dual_cf_a_only": "DualCF(a_only)",
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
+    "unilogit": "Unilogit",
+    "stat": "STAT",
     "simple_ce": "Simple-CE",
     "general_cf": "GeneralCF",
     "span_cf_samnpo": "SpanCF-SAMNPO",
@@ -55606,6 +57083,8 @@ METHOD_ORDER = [
     "dual_cf",
     "dpo_cf",
     "simnpo",
+    "unilogit",
+    "stat",
     "simple_ce",
     "span_cf_samnpo",
     "span_cf_simnpo",
@@ -60418,13 +61897,15 @@ METHOD_ORDER = [
     "ada_pop",
     "npo",
     "simnpo",
+    "unilogit",
+    "stat",
     "npo_sam",
     "loku",
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|unilogit|stat|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
@@ -60599,6 +62080,10 @@ def extract_method_key(run_name: str, config: dict[str, Any] | None = None) -> s
         return "dpo"
     if method_name == "simnpo":
         return "simnpo"
+    if method_name == "unilogit":
+        return "unilogit"
+    if method_name == "stat":
+        return "stat"
     if method_name == "npo_sam":
         return "npo_sam"
     if method_name == "simple_ce":
@@ -63428,6 +64913,8 @@ WRONG_GENERATION_METHOD_MAP = {
     "npo_sam": "npo_sam",
     "loku": "loku",
     "simnpo": "simnpo",
+    "unilogit": "unilogit",
+    "stat": "stat",
 }
 METRIC_LEGEND_LABELS = {
     "F": "forget ROUGE",
@@ -63463,6 +64950,9 @@ COMBINED_ROW_SPECS = [
     ("old", "ga", "GA", "gray!8"),
     ("old", "ada_pop", "AdaPop", "gray!8"),
     ("old", "npo", "NPO", "gray!8"),
+    ("old", "simnpo", "SimNPO", "gray!8"),
+    ("old", "unilogit", "Unilogit", "gray!8"),
+    ("old", "stat", "STAT", "purple!10"),
     ("old", "npo_sam", "NPO-SAM", "gray!8"),
     ("old", "loku", "LoKU", "gray!8"),
     ("new", "full", "Full-new", "blue!20"),
@@ -64795,7 +66285,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 COS_SIM_EVAL_FILENAME = "COS_SIM_EVAL.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|unilogit|stat|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -64822,6 +66312,8 @@ METHOD_DISPLAY = {
     "dual_cf_a_only": "DualCF(a_only)",
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
+    "unilogit": "Unilogit",
+    "stat": "STAT",
     "simple_ce": "Simple-CE",
     "multicf": "MultiCF",
     "boundary_cf": "BoundaryCF",
@@ -64846,6 +66338,8 @@ METHOD_ORDER = [
     "dual_cf",
     "dpo_cf",
     "simnpo",
+    "unilogit",
+    "stat",
     "simple_ce",
     "multicf",
     "boundary_cf",
@@ -66645,8 +68139,10 @@ from trainer.unlearn.npo_sam import NPOSAM
 from trainer.unlearn.dpo import DPO
 from trainer.unlearn.simnpo import SimNPO
 from trainer.unlearn.simple_ce import SimpleCE
+from trainer.unlearn.stat import STAT
 from trainer.unlearn.rmu import RMU
 from trainer.unlearn.undial import UNDIAL
+from trainer.unlearn.unilogit import Unilogit
 from trainer.unlearn.ceu import CEU
 from trainer.unlearn.satimp import SatImp
 from trainer.unlearn.wga import WGA
@@ -66756,8 +68252,10 @@ _register_trainer(NPOSAM)
 _register_trainer(DPO)
 _register_trainer(SimNPO)
 _register_trainer(SimpleCE)
+_register_trainer(STAT)
 _register_trainer(RMU)
 _register_trainer(UNDIAL)
+_register_trainer(Unilogit)
 _register_trainer(CEU)
 _register_trainer(SatImp)
 _register_trainer(WGA)
@@ -69623,6 +71121,151 @@ class SpanCFSimNPOLocalRetain(_SpanCFLocalRetainMixin, SpanCFSimNPO):
 
 </content>
 
+<content full_path="src/trainer/unlearn/unilogit.py">
+import math
+
+import torch
+import torch.nn.functional as F
+
+from trainer.unlearn.grad_diff import GradDiff
+
+
+def _as_model_inputs(batch):
+    return {
+        "input_ids": batch["input_ids"],
+        "attention_mask": batch["attention_mask"],
+        "labels": batch["labels"],
+    }
+
+
+def compute_unilogit_loss(
+    model,
+    inputs,
+    forget_coef: float = 1.0,
+    kl_direction: str = "model_to_target",
+):
+    """Compute the Unilogit uniform-target self-distillation loss.
+
+    The implementation follows the released Unilogit code path but fixes two
+    repo-fit issues:
+
+    1. `attention_mask` is passed into the model, which is required for padded
+       QA batches.
+    2. ignored labels (`-100`) are filtered before target-logit assignment, so
+       they are never used as negative tensor indices.
+
+    `kl_direction=model_to_target` matches the uploaded Unilogit trainer call:
+    `F.kl_div(soft_targets, soft_outputs, log_target=True)`, i.e. KL(current
+    model distribution || modified uniform-target distribution).
+    """
+
+    model_inputs = _as_model_inputs(inputs)
+    outputs = model(**model_inputs)
+
+    logits = outputs.logits
+    labels = model_inputs["labels"].to(device=logits.device)
+
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    valid_mask = shift_labels != -100
+
+    if not valid_mask.any():
+        return logits.new_zeros((), dtype=torch.float32), outputs
+
+    vocab_size = shift_logits.size(-1)
+    if vocab_size <= 1:
+        raise ValueError("Unilogit requires vocab_size > 1.")
+
+    flat_logits = shift_logits.view(-1, vocab_size)
+    flat_labels = shift_labels.view(-1)
+    flat_valid = valid_mask.view(-1)
+
+    valid_logits = flat_logits[flat_valid]
+    valid_labels = flat_labels[flat_valid].long()
+
+    # The target distribution is detached from the graph: self-distillation
+    # target comes from the current logits after replacing the gold-token logit.
+    target_logits = valid_logits.detach().clone()
+    row_indices = torch.arange(
+        target_logits.size(0),
+        device=target_logits.device,
+    )
+
+    target_logits[row_indices, valid_labels] = float("-inf")
+    log_v_minus_one = math.log(vocab_size - 1)
+    uniform_label_logits = torch.logsumexp(target_logits, dim=-1) - log_v_minus_one
+    target_logits[row_indices, valid_labels] = uniform_label_logits.to(target_logits.dtype)
+
+    model_log_probs = F.log_softmax(valid_logits, dim=-1)
+    target_log_probs = F.log_softmax(target_logits, dim=-1)
+
+    if kl_direction == "model_to_target":
+        token_kl = F.kl_div(
+            target_log_probs,
+            model_log_probs,
+            log_target=True,
+            reduction="none",
+        ).sum(dim=-1)
+    elif kl_direction == "target_to_model":
+        token_kl = F.kl_div(
+            model_log_probs,
+            target_log_probs,
+            log_target=True,
+            reduction="none",
+        ).sum(dim=-1)
+    else:
+        raise ValueError(
+            "kl_direction must be one of {'model_to_target', 'target_to_model'}, "
+            f"got {kl_direction!r}."
+        )
+
+    return token_kl.float().mean() * float(forget_coef), outputs
+
+
+class Unilogit(GradDiff):
+    def __init__(
+        self,
+        forget_coef: float = 1.0,
+        kl_direction: str = "model_to_target",
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.forget_coef = float(forget_coef)
+        self.kl_direction = str(kl_direction)
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        forget_inputs = _as_model_inputs(inputs["forget"])
+        forget_loss, forget_outputs = compute_unilogit_loss(
+            model=model,
+            inputs=forget_inputs,
+            forget_coef=self.forget_coef,
+            kl_direction=self.kl_direction,
+        )
+
+        retain_inputs = _as_model_inputs(inputs["retain"])
+        retain_loss = self.compute_retain_loss(model=model, retain_inputs=retain_inputs)
+
+        loss = self.gamma * forget_loss + self.alpha * retain_loss
+
+        try:
+            self.log(
+                {
+                    "unilogit_forget_loss": float(forget_loss.detach().item()),
+                    "unilogit_retain_loss": float(retain_loss.detach().item()),
+                    "unilogit_total_loss": float(loss.detach().item()),
+                    "unilogit_forget_coef": self.forget_coef,
+                    "unilogit_alpha": float(self.alpha),
+                    "unilogit_gamma": float(self.gamma),
+                }
+            )
+        except Exception:
+            pass
+
+        return (loss, forget_outputs) if return_outputs else loss
+
+</content>
+
 <content full_path="src/trainer/unlearn/simnpo.py">
 import torch.nn.functional as F
 
@@ -71797,6 +73440,219 @@ class GradDiff(UnlearnTrainer):
         retain_loss = self.compute_retain_loss(model=model, retain_inputs=retain_inputs)
 
         loss = self.gamma * forget_loss + self.alpha * retain_loss
+
+        return (loss, forget_outputs) if return_outputs else loss
+
+</content>
+
+<content full_path="src/trainer/unlearn/stat.py">
+from __future__ import annotations
+
+from typing import Any
+
+import torch
+
+from trainer.unlearn.grad_diff import GradDiff
+
+
+class STAT(GradDiff):
+    """
+    Synthetic Token Alternative Training baseline.
+
+    STAT replaces only supervised forget-answer token positions with uniformly
+    sampled vocabulary IDs, then trains CE on those synthetic answer tokens plus
+    the normal retain CE/KL branch inherited from GradDiff.
+    """
+
+    def __init__(
+        self,
+        stat_forget_weight: float = 1.0,
+        stat_retain_weight: float = 1.0,
+        synthetic_mode: str = "uniform",
+        exclude_special_tokens: bool = True,
+        preserve_eos: bool = False,
+        *args: Any,
+        **kwargs: Any,
+    ):
+        # Accept GradDiff-style aliases so campaign wrappers can reuse alpha /
+        # gamma conventions without changing STAT's explicit config names.
+        alpha = kwargs.pop("alpha", None)
+        gamma = kwargs.pop("gamma", None)
+        if alpha is not None and stat_retain_weight == 1.0:
+            stat_retain_weight = alpha
+        if gamma is not None and stat_forget_weight == 1.0:
+            stat_forget_weight = gamma
+
+        super().__init__(
+            alpha=float(stat_retain_weight),
+            gamma=float(stat_forget_weight),
+            *args,
+            **kwargs,
+        )
+        self.stat_forget_weight = float(stat_forget_weight)
+        self.stat_retain_weight = float(stat_retain_weight)
+        self.synthetic_mode = str(synthetic_mode)
+        self.exclude_special_tokens = bool(exclude_special_tokens)
+        self.preserve_eos = bool(preserve_eos)
+        self._valid_token_cache: dict[tuple[str, int, tuple[int, ...]], torch.Tensor] = {}
+
+        if self.synthetic_mode != "uniform":
+            raise ValueError(
+                "STAT currently supports synthetic_mode='uniform' only; "
+                f"got {self.synthetic_mode!r}."
+            )
+
+    @staticmethod
+    def _as_model_inputs(batch: dict[str, Any]) -> dict[str, torch.Tensor]:
+        # Some counterfactual batches are nested as {"original": ...}; normal
+        # artifact-free QA batches already expose tensors at the top level.
+        if isinstance(batch, dict) and "original" in batch:
+            batch = batch["original"]
+        return {
+            "input_ids": batch["input_ids"],
+            "attention_mask": batch["attention_mask"],
+            "labels": batch["labels"],
+        }
+
+    def _tokenizer_special_ids(self) -> set[int]:
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None:
+            tokenizer = getattr(self, "processing_class", None)
+        if tokenizer is None:
+            return set()
+
+        special_ids: set[int] = set()
+        for value in getattr(tokenizer, "all_special_ids", []) or []:
+            if isinstance(value, int):
+                special_ids.add(value)
+
+        for attr in ("pad_token_id", "eos_token_id", "bos_token_id", "unk_token_id"):
+            value = getattr(tokenizer, attr, None)
+            if isinstance(value, int):
+                special_ids.add(value)
+        return special_ids
+
+    def _eos_token_id(self) -> int | None:
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is None:
+            tokenizer = getattr(self, "processing_class", None)
+        value = getattr(tokenizer, "eos_token_id", None) if tokenizer is not None else None
+        return value if isinstance(value, int) else None
+
+    @staticmethod
+    def _vocab_size(model: torch.nn.Module) -> int:
+        embedding = None
+        try:
+            embedding = model.get_input_embeddings()
+        except Exception:
+            embedding = None
+        if embedding is not None and hasattr(embedding, "num_embeddings"):
+            return int(embedding.num_embeddings)
+
+        config = getattr(model, "config", None)
+        vocab_size = getattr(config, "vocab_size", None)
+        if vocab_size is None:
+            raise ValueError("Could not infer vocabulary size for STAT synthetic sampling.")
+        return int(vocab_size)
+
+    def _valid_token_ids(self, model: torch.nn.Module, device: torch.device) -> torch.Tensor:
+        vocab_size = self._vocab_size(model)
+        special_ids = self._tokenizer_special_ids() if self.exclude_special_tokens else set()
+        bounded_special_ids = tuple(sorted(idx for idx in special_ids if 0 <= idx < vocab_size))
+        key = (str(device), vocab_size, bounded_special_ids)
+
+        cached = self._valid_token_cache.get(key)
+        if cached is not None:
+            return cached
+
+        valid = torch.ones(vocab_size, dtype=torch.bool)
+        if bounded_special_ids:
+            valid[list(bounded_special_ids)] = False
+        valid_ids = valid.nonzero(as_tuple=False).flatten().to(device=device, dtype=torch.long)
+        if valid_ids.numel() == 0:
+            raise ValueError("No valid token ids remain after excluding special tokens.")
+
+        self._valid_token_cache[key] = valid_ids
+        return valid_ids
+
+    def _sample_uniform_token_ids(
+        self,
+        model: torch.nn.Module,
+        shape: torch.Size,
+        device: torch.device,
+    ) -> torch.Tensor:
+        valid_ids = self._valid_token_ids(model, device)
+        offsets = torch.randint(
+            low=0,
+            high=valid_ids.numel(),
+            size=shape,
+            device=device,
+        )
+        return valid_ids[offsets]
+
+    def _make_synthetic_forget_inputs(
+        self,
+        model: torch.nn.Module,
+        forget_inputs: dict[str, torch.Tensor],
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        input_ids = forget_inputs["input_ids"].clone()
+        labels = forget_inputs["labels"].clone()
+        attention_mask = forget_inputs["attention_mask"]
+
+        target_mask = labels.ne(-100)
+        if self.preserve_eos:
+            eos_id = self._eos_token_id()
+            if eos_id is not None:
+                target_mask = target_mask & labels.ne(eos_id)
+
+        if target_mask.any():
+            synthetic_ids = self._sample_uniform_token_ids(
+                model=model,
+                shape=labels.shape,
+                device=labels.device,
+            )
+            input_ids[target_mask] = synthetic_ids[target_mask]
+            labels[target_mask] = synthetic_ids[target_mask]
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+        }, target_mask
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        forget_inputs = self._as_model_inputs(inputs["forget"])
+        stat_forget_inputs, target_mask = self._make_synthetic_forget_inputs(
+            model=model,
+            forget_inputs=forget_inputs,
+        )
+        forget_outputs = model(**stat_forget_inputs)
+        stat_forget_loss = forget_outputs.loss
+
+        retain_inputs = self._as_model_inputs(inputs["retain"])
+        retain_loss = self.compute_retain_loss(model=model, retain_inputs=retain_inputs)
+
+        loss = (
+            self.stat_forget_weight * stat_forget_loss
+            + self.stat_retain_weight * retain_loss
+        )
+
+        try:
+            target_tokens_per_sample = target_mask.sum(dim=-1).float().mean()
+            self.log(
+                {
+                    "stat_forget_loss": float(stat_forget_loss.detach().item()),
+                    "stat_retain_loss": float(retain_loss.detach().item()),
+                    "stat_total_loss": float(loss.detach().item()),
+                    "stat_forget_weight": self.stat_forget_weight,
+                    "stat_retain_weight": self.stat_retain_weight,
+                    "stat_target_tokens_mean": float(target_tokens_per_sample.detach().item()),
+                    "stat_exclude_special_tokens": 1.0 if self.exclude_special_tokens else 0.0,
+                    "stat_preserve_eos": 1.0 if self.preserve_eos else 0.0,
+                }
+            )
+        except Exception:
+            pass
 
         return (loss, forget_outputs) if return_outputs else loss
 

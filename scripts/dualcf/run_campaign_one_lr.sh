@@ -29,7 +29,8 @@ Defaults:
   SEED defaults to TRAIN_SEED or 42.
   SEEDS runs the wrapper serially once per listed seed.
   UTILITY defaults to 3k. Set UTILITY=1k to reuse the old panel.
-  The script expects artifacts to already exist under ARTIFACT_ROOT.
+  DualCF-family variants expect artifacts to already exist under ARTIFACT_ROOT.
+  Artifact-free baselines skip CF_DATASET_DATA_FILES resolution.
 EOF
 }
 
@@ -280,6 +281,24 @@ configure_general_cf_routing_env() {
   export CONSTANT_ROUTING_BATCH_SIZE="${CONSTANT_ROUTING_BATCH_SIZE:-${PER_DEVICE_TRAIN_BS:-16}}"
 }
 
+method_uses_cf_artifact() {
+  local method_variant="$1"
+
+  case "${method_variant}" in
+    full|d_only|a_only|dpo|simple_ce|general_cf|multicf|boundary_cf|span_cf|span_cf_samnpo|span_cf_simnpo|span_cf_local_retain|span_cf_simnpo_local_retain|span_cf_simnpo_sam|span_cf_simnpo_projected)
+      return 0
+      ;;
+    ga|ada_pop|npo|simnpo|unilogit|stat|npo_sam|loku)
+      return 1
+      ;;
+    *)
+      # Conservative default: DualCF-family variants usually consume an offline
+      # counterfactual artifact.
+      return 0
+      ;;
+  esac
+}
+
 resolve_duet_artifact_for_method() {
   local forget_label="$1"
   local method_variant="$2"
@@ -352,11 +371,18 @@ run_duet_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=duet_${forget_label}"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
-    export CF_DATASET_DATA_FILES="$(resolve_duet_artifact_for_method "${forget_label}" "${METHOD_VARIANT}")"
-    require_file "${CF_DATASET_DATA_FILES}"
-    echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    if method_uses_cf_artifact "${METHOD_VARIANT}"; then
+      export CF_DATASET_DATA_FILES="$(resolve_duet_artifact_for_method "${forget_label}" "${METHOD_VARIANT}")"
+      require_file "${CF_DATASET_DATA_FILES}"
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    else
+      unset CF_DATASET_DATA_FILES
+      unset CF_DATASET_PATH
+      unset CF_DATASET_SPLIT
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=none"
+    fi
     configure_method_variant_env "${METHOD_VARIANT}"
-    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES:-}"
     bash "${repo_root}/scripts/duet/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -383,11 +409,18 @@ run_rwku_block() {
   echo "[dualcf][campaign] GPU=${GPU_ID} LR=${LR} phase=rwku"
   for METHOD_VARIANT in ${METHOD_VARIANTS}; do
     export METHOD_VARIANT
-    export CF_DATASET_DATA_FILES="$(resolve_rwku_artifact_for_method "${METHOD_VARIANT}")"
-    require_file "${CF_DATASET_DATA_FILES}"
-    echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    if method_uses_cf_artifact "${METHOD_VARIANT}"; then
+      export CF_DATASET_DATA_FILES="$(resolve_rwku_artifact_for_method "${METHOD_VARIANT}")"
+      require_file "${CF_DATASET_DATA_FILES}"
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=${CF_DATASET_DATA_FILES}"
+    else
+      unset CF_DATASET_DATA_FILES
+      unset CF_DATASET_PATH
+      unset CF_DATASET_SPLIT
+      echo "[dualcf][campaign] method=${METHOD_VARIANT} artifact=none"
+    fi
     configure_method_variant_env "${METHOD_VARIANT}"
-    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES}"
+    configure_general_cf_routing_env "${METHOD_VARIANT}" "${CF_DATASET_DATA_FILES:-}"
     bash "${repo_root}/scripts/rwku/run_dualcf_ablation_v2.sh"
     if [[ "${METHOD_VARIANT}" == "loku" ]]; then
       cleanup_loku_wrapper_tmp_dirs
@@ -476,7 +509,7 @@ export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
 export ATTR_RETAIN_MAX_STEPS="${ATTR_RETAIN_MAX_STEPS:-0}"
 export ATTR_FORGET_MAX_STEPS="${ATTR_FORGET_MAX_STEPS:-0}"
 
-METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku}"
+METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat npo_sam loku}"
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"

@@ -22,7 +22,7 @@ DUET_SUMMARY_FILENAME = "DUET_SUMMARY.json"
 COS_SIM_EVAL_FILENAME = "COS_SIM_EVAL.json"
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|ga|ada_pop|loku|npo_sam|npo|simnpo|unilogit|stat|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|falcon)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 RUN_SPLIT_PATTERNS = [
@@ -49,6 +49,8 @@ METHOD_DISPLAY = {
     "dual_cf_a_only": "DualCF(a_only)",
     "dpo_cf": "DPO-CF",
     "simnpo": "SimNPO",
+    "unilogit": "Unilogit",
+    "stat": "STAT",
     "simple_ce": "Simple-CE",
     "multicf": "MultiCF",
     "boundary_cf": "BoundaryCF",
@@ -73,6 +75,8 @@ METHOD_ORDER = [
     "dual_cf",
     "dpo_cf",
     "simnpo",
+    "unilogit",
+    "stat",
     "simple_ce",
     "multicf",
     "boundary_cf",

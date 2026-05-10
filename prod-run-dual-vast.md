@@ -113,11 +113,15 @@ export ATTR_FORGET_MAX_STEPS=${ATTR_FORGET_MAX_STEPS:-0}
 - `scripts/duet/ga_duet.sh`
 - `scripts/duet/npo_duet.sh`
 - `scripts/duet/npo_sam_duet.sh`
+- `scripts/duet/stat_duet.sh`
+- `scripts/duet/unilogit_duet.sh`
 - `scripts/duet/loku_duet.sh`
 - `scripts/rwku/ada_pop_rwku.sh`
 - `scripts/rwku/ga_rwku.sh`
 - `scripts/rwku/npo_rwku.sh`
 - `scripts/rwku/npo_sam_rwku.sh`
+- `scripts/rwku/stat_rwku.sh`
+- `scripts/rwku/unilogit_rwku.sh`
 - `scripts/rwku/loku_rwku.sh`
 
 So the run directories land under:

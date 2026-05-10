@@ -94,7 +94,7 @@ The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
-`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo npo_sam loku"`.
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat npo_sam loku"`.
 That keeps routed DualCF ablations plus baselines in one wrapper path.
 New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
 `span_cf_samnpo`, `span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
@@ -566,10 +566,10 @@ SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 
 
 ```bash
 # 1. Baselines first, lr=1e-4, GPU 2
-SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
 
 # 2. Baselines first, lr=5e-5, GPU 1
-SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
 
 # 3. Old artifacts, lr=1e-4, GPU 2
 SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
@@ -1184,3 +1184,36 @@ Coverage summary:
 
 For the six GeneralCF ablations above, replace the last argument `duet_rare`
 with `all` for the full tree.
+
+### Unilogit baseline
+
+Unilogit is an artifact-free old-baseline method, like GA / NPO / SimNPO, and
+trains on the normal DUET / RWKU forget datasets. The shared campaign wrapper
+skips `CF_DATASET_DATA_FILES` resolution for artifact-free methods.
+
+Run this after the GeneralCF family to add Unilogit to the old-baseline block:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="unilogit" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```
+
+### STAT baseline
+
+STAT is an artifact-free old-baseline method that replaces forget-answer token
+positions with uniformly sampled non-special vocabulary IDs and keeps a normal
+retain CE branch. Run this after the Unilogit block to add STAT to the
+old-baseline comparison:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="stat" \
+STAT_FORGET_WEIGHTS="1.0" \
+STAT_RETAIN_WEIGHTS="1.0" \
+STAT_EXCLUDE_SPECIAL_TOKENS=true \
+STAT_PRESERVE_EOS=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```

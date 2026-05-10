@@ -3,6 +3,57 @@
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
 
+## STAT synthetic-token baseline integration (2026-05-10)
+
+This update adds `STAT` as an artifact-free old-baseline method for DUET and
+RWKU. The trainer samples synthetic labels directly in token space, so no
+counterfactual artifact builder or dataset-schema change is required.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/stat.py`
+- `src/trainer/__init__.py`
+- `configs/trainer/STAT.yaml`
+- `configs/experiment/unlearn/duet/stat_lora.yaml`
+- `configs/experiment/unlearn/rwku/stat_lora.yaml`
+- `scripts/duet/stat_duet.sh`
+- `scripts/rwku/stat_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- `STAT` extends the GradDiff retain branch but replaces supervised forget
+  answer-token positions with uniformly sampled non-special vocabulary IDs
+  before computing CE
+- the trainer logs `stat_forget_loss`, `stat_retain_loss`,
+  `stat_total_loss`, and synthetic-token routing diagnostics
+- DUET and RWKU STAT launchers preserve the existing train -> endpoint eval ->
+  checkpoint eval -> utility eval -> cleanup cadence
+- the campaign wrapper now skips `CF_DATASET_DATA_FILES` resolution for
+  artifact-free baselines: `ga`, `ada_pop`, `npo`, `simnpo`, `unilogit`,
+  `stat`, `npo_sam`, and `loku`
+- save checking, structured-save parsing, wrong-generation parsing, sanity
+  exports, and combined tables now recognize `_stat_lora_` run names
+- the GPU runbook includes copy-pasteable STAT commands after the Unilogit
+  baseline block
+
+Validation status:
+
+- syntax checks and YAML load checks were run locally for the new trainer,
+  configs, launchers, wrappers, and parser files
+- a CPU-only synthetic sampling smoke verified that STAT rewrites only
+  supervised answer positions and preserves EOS when configured
+- no GPU train smoke was run in this edit pass
+
 ## GeneralCF runtime integration (2026-04-10)
 
 This update adds a new `GeneralCF` trainer that keeps the existing offline
