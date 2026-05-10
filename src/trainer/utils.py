@@ -203,6 +203,8 @@ def compute_dpo_loss(model, ref_model, win_inputs=None, lose_inputs=None, beta=1
 
 
 def compute_undial_loss(model, ref_model, inputs, beta):
+    inputs = _filter_model_inputs(inputs)
+
     # Forward pass on the student (trainable) model
     outputs = model(**inputs)
     logits = outputs.logits

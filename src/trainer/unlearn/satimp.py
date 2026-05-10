@@ -4,14 +4,16 @@ from trainer.utils import compute_satimp_loss
 
 class SatImp(GradDiff):
     def __init__(
-        self, beta1=5.0, beta2=1.0, gamma=1.0, alpha=0.1, *args, **kwargs
-    ):  # attention, satimp requires two beta!!!!
+        self, beta1=5.0, beta2=0.1, gamma=1.0, alpha=0.1, *args, **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.beta1 = beta1
         self.beta2 = beta2
         self.gamma = gamma
         self.alpha = alpha
-        if self.ref_model is None:
+        # SatImp with NLL retain loss does not use a reference model, so avoid
+        # allocating a second model copy for production LoRA runs.
+        if self.retain_loss_type == "KL" and self.ref_model is None:
             self.ref_model = self._prepare_ref_model(self.model)
 
     def compute_loss(self, model, inputs, return_outputs=False):

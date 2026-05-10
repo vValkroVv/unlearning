@@ -14,7 +14,13 @@ from trainer.unlearn.simple_ce import SimpleCE
 from trainer.unlearn.stat import STAT
 from trainer.unlearn.rmu import RMU
 from trainer.unlearn.undial import UNDIAL
-from trainer.unlearn.unilogit import Unilogit
+try:
+    from trainer.unlearn.unilogit import Unilogit
+except ImportError as exc:
+    Unilogit = None
+    _UNILOGIT_IMPORT_ERROR = exc
+else:
+    _UNILOGIT_IMPORT_ERROR = None
 from trainer.unlearn.ceu import CEU
 from trainer.unlearn.satimp import SatImp
 from trainer.unlearn.wga import WGA
@@ -127,7 +133,10 @@ _register_trainer(SimpleCE)
 _register_trainer(STAT)
 _register_trainer(RMU)
 _register_trainer(UNDIAL)
-_register_trainer(Unilogit)
+if Unilogit is not None:
+    _register_trainer(Unilogit)
+else:
+    logger.warning("Unilogit trainer not registered: %s", _UNILOGIT_IMPORT_ERROR)
 _register_trainer(CEU)
 _register_trainer(SatImp)
 _register_trainer(WGA)

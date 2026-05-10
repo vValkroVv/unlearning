@@ -288,7 +288,7 @@ method_uses_cf_artifact() {
     full|d_only|a_only|dpo|simple_ce|general_cf|multicf|boundary_cf|span_cf|span_cf_samnpo|span_cf_simnpo|span_cf_local_retain|span_cf_simnpo_local_retain|span_cf_simnpo_sam|span_cf_simnpo_projected)
       return 0
       ;;
-    ga|ada_pop|npo|simnpo|unilogit|stat|npo_sam|loku)
+    ga|ada_pop|npo|simnpo|unilogit|stat|satimp|undial|rmu|npo_sam|loku)
       return 1
       ;;
     *)
@@ -509,7 +509,7 @@ export ATTR_RETAIN_BATCH_SIZE="${ATTR_RETAIN_BATCH_SIZE:-4}"
 export ATTR_RETAIN_MAX_STEPS="${ATTR_RETAIN_MAX_STEPS:-0}"
 export ATTR_FORGET_MAX_STEPS="${ATTR_FORGET_MAX_STEPS:-0}"
 
-METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat npo_sam loku}"
+METHOD_VARIANTS="${METHOD_VARIANTS:-full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat satimp undial rmu npo_sam loku}"
 
 echo "[dualcf][campaign] repo=${REPO_ROOT}"
 echo "[dualcf][campaign] gpu=${GPU_ID} lr=${LR} phase=${PHASE}"

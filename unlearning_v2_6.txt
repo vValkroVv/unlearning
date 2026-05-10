@@ -16988,7 +16988,6 @@ METHOD_VARIANTS="unilogit" \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
 ```
 
-
 ### STAT baseline
 
 STAT is an artifact-free old-baseline method that replaces forget-answer token
@@ -17006,7 +17005,6 @@ STAT_EXCLUDE_SPECIAL_TOKENS=true \
 STAT_PRESERVE_EOS=false \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
 ```
-
 
 </content>
 

@@ -3,6 +3,201 @@
 Base commit: `3e15a8ba7682cf316469a6ffc417c62d33aa22b1` (before DualCF integration)
 Target: current working tree
 
+## RMU artifact-free LoRA baseline integration (2026-05-11)
+
+This update hardens the existing `RMU` trainer for PEFT/LoRA use and promotes
+it to a first-class artifact-free production baseline for DUET and RWKU
+campaigns.
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/rmu.py`
+- `configs/trainer/RMU.yaml`
+- `configs/experiment/unlearn/duet/rmu_lora.yaml`
+- `configs/experiment/unlearn/rwku/rmu_lora.yaml`
+- `scripts/duet/rmu_duet.sh`
+- `scripts/rwku/rmu_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- `RMU` now handles PEFT/LoRA module names with suffix-safe module matching,
+  defaults to adapter-only trainable parameter selection, and no longer
+  re-enables frozen base-model gradients after optimizer creation
+- the RMU control vector is created on the correct device and converted to the
+  current activation dtype before loss computation
+- RMU logs `rmu_forget_loss`, `rmu_retain_loss`, `rmu_total_loss`,
+  `rmu_activation_norm`, `rmu_control_norm`, and `rmu_steering_coeff`
+- DUET and RWKU RMU launchers preserve the existing train -> endpoint eval ->
+  checkpoint eval -> utility eval -> cleanup cadence
+- the campaign wrapper treats `rmu` as artifact-free and unsets stale
+  counterfactual dataset env just like GA / NPO / SimNPO / Unilogit / STAT /
+  SatImp / UNDIAL / NPO-SAM / LoKU
+- RMU defaults are `steering_coeff=2.0`, `alpha=1.0`, `gamma=1.0`,
+  `retain_loss_type=EMBED_DIFF`, `module_regex=.*layers\.7$`, and
+  `trainable_params_regex=.*lora_[AB].*`
+- save checking, structured-save parsing, wrong-generation parsing, sanity
+  exports, and combined tables now recognize `_rmu_lora_` run names
+- the GPU runbook includes copy-pasteable RMU commands immediately after the
+  UNDIAL baseline block
+
+Validation status:
+
+- Python compile checks passed for the RMU trainer, save checker, and
+  parser/table tooling
+- YAML load checks passed for the RMU trainer, DUET experiment, and RWKU
+  experiment configs
+- shell syntax checks passed for the new RMU launchers, the DUET/RWKU
+  dispatchers, and the shared campaign wrapper
+- direct Hydra composition passed for both RMU experiment configs with local
+  logging overrides (`hydra/job_logging=disabled`,
+  `hydra/hydra_logging=disabled`)
+- parser smoke checks confirmed `_rmu_lora_` run names resolve to `rmu` in
+  structured saves, wrong-generation analysis, sanity exports, and save checking
+- a CPU helper smoke confirmed PEFT-style `.*layers\.7$` module matching and
+  adapter-only `.*lora_[AB].*` trainable parameter selection
+- `src/train.py --cfg job` composition was attempted but is blocked in this
+  local environment because `rouge_score` is not installed
+- no GPU train smoke was run in this edit pass
+
+## UNDIAL artifact-free baseline integration (2026-05-11)
+
+This update promotes the already-present `UNDIAL` trainer to a first-class
+artifact-free production baseline for DUET and RWKU campaigns.
+
+Changed files for this patch:
+
+- `configs/trainer/UNDIAL.yaml`
+- `configs/experiment/unlearn/duet/undial_lora.yaml`
+- `configs/experiment/unlearn/rwku/undial_lora.yaml`
+- `scripts/duet/undial_duet.sh`
+- `scripts/rwku/undial_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- DUET and RWKU UNDIAL launchers preserve the existing train -> endpoint eval ->
+  checkpoint eval -> utility eval -> cleanup cadence
+- the campaign wrapper skips `CF_DATASET_DATA_FILES` resolution for `undial`
+  and unsets stale counterfactual dataset env just like the other artifact-free
+  baselines
+- UNDIAL defaults are `beta=3.0`, `alpha=0.0`, `gamma=1.0`, and
+  `retain_loss_type=NLL`; launcher sweeps use `UNDIAL_BETAS`,
+  `UNDIAL_ALPHAS`, and `UNDIAL_GAMMAS` so unrelated global sweeps do not
+  silently change UNDIAL defaults
+- `compute_undial_loss(...)` filters auxiliary collator metadata such as
+  `pop_sum` before student and teacher forwards, matching the existing
+  GradDiff/NPO model-input contract
+- UNDIAL enables PEFT input gradients for LoRA runs, including a fallback
+  input-embedding forward hook for PEFT versions without
+  `enable_input_require_grads()`, so gradient checkpointing keeps a valid
+  backward path through frozen base-model embeddings; it also fails early if no
+  adapter parameters are trainable
+- the trainer registry now treats `Unilogit` import drift as non-fatal for
+  unrelated methods, so `trainer=UNDIAL` is not blocked by a stale or
+  differently named Unilogit class in a production checkout
+- save checking, structured-save parsing, wrong-generation parsing, sanity
+  exports, and combined tables now recognize `_undial_lora_` run names
+- the GPU runbook includes copy-pasteable UNDIAL commands immediately after
+  the SatImp baseline block
+
+Validation status:
+
+- shell syntax checks passed for the new UNDIAL launchers and the DUET/RWKU
+  dispatchers plus the shared campaign wrapper
+- Python compile checks passed for the UNDIAL trainer path, shared trainer
+  utils, save checker, and parser/table tooling
+- a synthetic UNDIAL loss smoke verified that batches containing `pop_sum`
+  reach both model forwards with only model-compatible keys and keep a
+  gradient-bearing forget loss
+- a checkpointed frozen-embedding smoke verified that the UNDIAL PEFT fallback
+  hook turns a detached checkpointed loss into a gradient-bearing loss and
+  backpropagates into adapter parameters
+- a registry import smoke verified that `UNDIAL` and `Unilogit` are registered
+  in the current checkout, with `UniLogit` kept as a compatibility alias
+- YAML load checks passed for the UNDIAL trainer, DUET experiment, and RWKU
+  experiment configs
+- Hydra config composition passed for both UNDIAL experiment configs with local
+  logging overrides (`hydra/job_logging=disabled`, `hydra/hydra_logging=disabled`)
+- `src/train.py --cfg job` composition was attempted but is blocked in this
+  local environment because `deepspeed` is not installed; the production
+  training environment already needs that dependency
+- no GPU train smoke was run in this edit pass
+
+## SatImp artifact-free baseline integration (2026-05-11)
+
+This update adds `SatImp` as an artifact-free old-baseline method for DUET and
+RWKU. The trainer consumes the standard forget / retain QA batches and
+optimizes:
+
+```text
+loss = gamma * satimp_forget_loss + alpha * retain_loss
+```
+
+Changed files for this patch:
+
+- `src/trainer/unlearn/satimp.py`
+- `configs/trainer/SatImp.yaml`
+- `configs/experiment/unlearn/duet/satimp_lora.yaml`
+- `configs/experiment/unlearn/rwku/satimp_lora.yaml`
+- `scripts/duet/satimp_duet.sh`
+- `scripts/rwku/satimp_rwku.sh`
+- `scripts/duet/run_dualcf_ablation_v2.sh`
+- `scripts/rwku/run_dualcf_ablation_v2.sh`
+- `scripts/dualcf/run_campaign_one_lr.sh`
+- `check_saves.py`
+- `src/tools/build_structured_saves.py`
+- `src/tools/analyze_wrong_generations.py`
+- `src/tools/export_unlearning_sanity_checks.py`
+- `src/tools/build_results_combine_tables.py`
+- `prod-run-dual-gpu.md`
+- `prod-run-dual-vast.md`
+
+Behavior change summary:
+
+- DUET and RWKU SatImp launchers preserve the existing train -> endpoint eval ->
+  checkpoint eval -> utility eval -> cleanup cadence
+- the campaign wrapper skips `CF_DATASET_DATA_FILES` resolution for `satimp`
+  and unsets any stale counterfactual dataset env just like the other
+  artifact-free baselines
+- default SatImp parameters are `beta1=5.0`, `beta2=0.1`, `alpha=0.1`,
+  `gamma=1.0`, and `retain_loss_type=NLL`
+- `SatImp.__init__` now prepares a reference model only for KL retain loss,
+  avoiding an unnecessary second model copy for NLL production LoRA runs
+- save checking, structured-save parsing, wrong-generation parsing, sanity
+  exports, and combined tables now recognize `_satimp_lora_` run names
+- the GPU runbook includes copy-pasteable SatImp commands immediately after
+  the STAT baseline block
+
+Validation status:
+
+- syntax checks and YAML load checks were run locally for the SatImp trainer,
+  configs, launchers, wrappers, and parser files
+- Hydra config composition passed for both SatImp experiment configs with local
+  logging overrides (`hydra/job_logging=disabled`, `hydra/hydra_logging=disabled`)
+- Hydra entrypoint config composition via `src/train.py --cfg job` was attempted
+  but did not complete in this local environment because `deepspeed` is not
+  installed; the production training environment already needs that dependency
+- no GPU train smoke was run in this edit pass
+
 ## STAT synthetic-token baseline integration (2026-05-10)
 
 This update adds `STAT` as an artifact-free old-baseline method for DUET and

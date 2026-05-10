@@ -52,13 +52,16 @@ METHOD_ORDER = [
     "simnpo",
     "unilogit",
     "stat",
+    "satimp",
+    "undial",
+    "rmu",
     "npo_sam",
     "loku",
 ]
 METHOD_ORDER_INDEX = {name: index for index, name in enumerate(METHOD_ORDER)}
 LR_RE = re.compile(r"_lr([^_]+)")
 METHOD_RE = re.compile(
-    r"_(dual_cf|dpo_cf|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|unilogit|stat|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
+    r"_(dual_cf|dpo_cf|general_cf|simple_ce|multicf|boundary_cf|span_cf_simnpo_local_retain|span_cf_simnpo_projected|span_cf_simnpo_sam|span_cf_samnpo|span_cf_local_retain|span_cf_simnpo|span_cf|ga|ada_pop|npo|simnpo|unilogit|stat|satimp|undial|rmu|npo_sam|loku)_lora_.*?_lr[^_]+(.*)$"
 )
 DUAL_FLAG_RE = re.compile(r"^(dOn|dOff|aOn|aOff|adT|adF)$")
 SEED_SUFFIX_RE = re.compile(r"^(?P<base>.+)_seed(?P<seed>\d+)$")
@@ -237,6 +240,12 @@ def extract_method_key(run_name: str, config: dict[str, Any] | None = None) -> s
         return "unilogit"
     if method_name == "stat":
         return "stat"
+    if method_name == "satimp":
+        return "satimp"
+    if method_name == "undial":
+        return "undial"
+    if method_name == "rmu":
+        return "rmu"
     if method_name == "npo_sam":
         return "npo_sam"
     if method_name == "simple_ce":

@@ -94,7 +94,7 @@ The campaign wrapper defaults to one intermediate `checkpoint-*` at epoch 2
 plus the normal top-level epoch-5 endpoint save.
 
 `scripts/dualcf/run_campaign_one_lr.sh` now defaults to:
-`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat npo_sam loku"`.
+`METHOD_VARIANTS="full d_only a_only dpo simple_ce multicf boundary_cf span_cf span_cf_samnpo ga ada_pop npo simnpo unilogit stat satimp undial rmu npo_sam loku"`.
 That keeps routed DualCF ablations plus baselines in one wrapper path.
 New SpanCF variants (`span_cf_simnpo`, `span_cf_local_retain`,
 `span_cf_samnpo`, `span_cf_simnpo_local_retain`, `span_cf_simnpo_sam`,
@@ -566,10 +566,10 @@ SEEDS="42 43" METHOD_VARIANTS=full bash scripts/dualcf/run_campaign_one_lr.sh 0 
 
 ```bash
 # 1. Baselines first, lr=1e-4, GPU 2
-SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat satimp undial rmu npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
 
 # 2. Baselines first, lr=5e-5, GPU 1
-SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
+SEEDS="42 179 1137" METHOD_VARIANTS="ga npo simnpo unilogit stat satimp undial rmu npo_sam loku" bash scripts/dualcf/run_campaign_one_lr.sh 1 5e-5 all
 
 # 3. Old artifacts, lr=1e-4, GPU 2
 SEEDS="42 179 1137" METHOD_VARIANTS="full d_only a_only dpo simple_ce" bash scripts/dualcf/run_campaign_one_lr.sh 2 1e-4 all
@@ -1215,5 +1215,65 @@ STAT_FORGET_WEIGHTS="1.0" \
 STAT_RETAIN_WEIGHTS="1.0" \
 STAT_EXCLUDE_SPECIAL_TOKENS=true \
 STAT_PRESERVE_EOS=false \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```
+
+### SatImp baseline
+
+SatImp is an artifact-free old-baseline method, like GA / NPO / SimNPO /
+Unilogit / STAT, and trains on the normal DUET / RWKU forget and retain QA
+batches. It does not need DualCF counterfactual artifacts. Defaults are
+`SATIMP_BETA1S=5.0`, `SATIMP_BETA2S=0.1`, `ALPHAS=0.1`, and `GAMMAS=1.0`.
+
+Run this after the STAT block to add SatImp at the main production LR:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="satimp" \
+SATIMP_BETA1S="5.0" \
+SATIMP_BETA2S="0.1" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```
+
+### UNDIAL baseline
+
+UNDIAL is an artifact-free old-baseline method, like GA / NPO / SimNPO /
+Unilogit / STAT / SatImp, and trains on the normal DUET / RWKU forget and
+retain QA batches. It does not need DualCF counterfactual artifacts. Defaults
+are `UNDIAL_BETAS=3.0`, `UNDIAL_ALPHAS=0.0`, and `UNDIAL_GAMMAS=1.0`.
+
+Run this after the SatImp block to add UNDIAL at the main production LR:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="undial" \
+UNDIAL_BETAS="3.0" \
+UNDIAL_ALPHAS="0.0" \
+UNDIAL_GAMMAS="1.0" \
+bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
+```
+
+### RMU baseline
+
+RMU is an artifact-free LoRA old-baseline method for this campaign, using the
+normal DUET / RWKU forget and retain QA batches plus a reference activation
+retain term. Defaults are `RMU_STEERING_COEFFS=2.0`, `RMU_ALPHAS=1.0`,
+`RMU_GAMMAS=1.0`, `RMU_RETAIN_LOSS_TYPE=EMBED_DIFF`, `RMU_MODULE_REGEX=.*layers\.7$`,
+and `RMU_TRAINABLE_PARAMS_REGEX=.*lora_[AB].*`.
+
+Run this after the UNDIAL block to add RMU at the main production LR:
+
+```bash
+GPU_ID=0
+SEEDS="42 179 1137" \
+METHOD_VARIANTS="rmu" \
+RMU_STEERING_COEFFS="2.0" \
+RMU_ALPHAS="1.0" \
+RMU_GAMMAS="1.0" \
+RMU_RETAIN_LOSS_TYPE=EMBED_DIFF \
+RMU_MODULE_REGEX='.*layers\.7$' \
+RMU_TRAINABLE_PARAMS_REGEX='.*lora_[AB].*' \
 bash scripts/dualcf/run_campaign_one_lr.sh "${GPU_ID}" 1e-4 all
 ```

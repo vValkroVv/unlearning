@@ -2,39 +2,39 @@
 
 defaults:
   - override /model: Llama-3.1-8B-Instruct-lora
-  - override /trainer: UNDIAL
+  - override /trainer: RMU
   - override /data: unlearn
-  - override /data/datasets@data.forget: DUET_QA_forget
-  - override /data/datasets@data.retain: DUET_QA_retain
-  - override /eval: duet
+  - override /data/datasets@data.forget: RWKU_QA_forget
+  - override /data/datasets@data.retain: RWKU_QA_retain
+  - override /eval: rwku
 
-forget_split: city_forget_rare_5
-retain_split: city_fast_retain_500
+forget_split: forget_level2
+retain_split: neighbor_level2
 holdout_split: ${retain_split}
 retain_logs_path: null
-question_key: question
+question_key: query
 
 model:
   model_args:
     pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
-    # To use a locally finetuned checkpoint instead, override on the command line:
-    # +model.model_args.pretrained_model_name_or_path=/path/to/local/checkpoint
 
 data:
   anchor: forget
   forget:
-    DUET_QA_forget:
+    RWKU_QA_forget:
       args:
         hf_args:
-          path: SwetieePawsss/DUET
-          split: ${forget_split}
+          path: SwetieePawsss/exp_r
+          name: ${forget_split}
+          split: "test"
         question_key: ${question_key}
   retain:
-    DUET_QA_retain:
+    RWKU_QA_retain:
       args:
         hf_args:
-          path: SwetieePawsss/DUET
-          split: ${retain_split}
+          path: SwetieePawsss/exp_r
+          name: ${retain_split}
+          split: "test"
         question_key: ${question_key}
 
 eval:
@@ -48,8 +48,8 @@ trainer:
   args:
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 32
-    learning_rate: 1e-4
-    num_train_epochs: 5
+    learning_rate: 1e-5
+    num_train_epochs: 2
     lr_scheduler_type: constant
     warmup_ratio: 0.1
     logging_steps: 10
@@ -58,12 +58,15 @@ trainer:
     do_eval: false
     eval_on_start: false
     remove_unused_columns: false
-    gradient_checkpointing: true
+    gradient_checkpointing: false
     ddp_find_unused_parameters: false
   method_args:
-    beta: 3.0
     gamma: 1.0
-    alpha: 0.0
-    retain_loss_type: NLL
+    alpha: 1.0
+    steering_coeff: 2.0
+    retain_loss_type: EMBED_DIFF
+    module_regex: .*layers\.7$
+    trainable_params_regex:
+      - .*lora_[AB].*
 
-task_name: duet_undial_lora
+task_name: rwku_rmu_lora

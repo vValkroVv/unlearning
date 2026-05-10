@@ -62,6 +62,9 @@ WRONG_GENERATION_METHOD_MAP = {
     "simnpo": "simnpo",
     "unilogit": "unilogit",
     "stat": "stat",
+    "satimp": "satimp",
+    "undial": "undial",
+    "rmu": "rmu",
 }
 METRIC_LEGEND_LABELS = {
     "F": "forget ROUGE",
@@ -100,6 +103,9 @@ COMBINED_ROW_SPECS = [
     ("old", "simnpo", "SimNPO", "gray!8"),
     ("old", "unilogit", "Unilogit", "gray!8"),
     ("old", "stat", "STAT", "purple!10"),
+    ("old", "satimp", "SatImp", "gray!8"),
+    ("old", "undial", "UNDIAL", "gray!8"),
+    ("old", "rmu", "RMU", "gray!8"),
     ("old", "npo_sam", "NPO-SAM", "gray!8"),
     ("old", "loku", "LoKU", "gray!8"),
     ("new", "full", "Full-new", "blue!20"),

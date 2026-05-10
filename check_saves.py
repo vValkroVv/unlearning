@@ -27,6 +27,9 @@ DEFAULT_VARIANTS = [
     "simnpo",
     "unilogit",
     "stat",
+    "satimp",
+    "undial",
+    "rmu",
     "npo_sam",
     "loku",
 ]
@@ -77,6 +80,9 @@ VARIANT_MATCHERS: dict[str, Callable[[str], bool]] = {
     "simnpo": _contains("_simnpo_lora_"),
     "unilogit": _contains("_unilogit_lora_"),
     "stat": _contains("_stat_lora_"),
+    "satimp": _contains("_satimp_lora_"),
+    "undial": _contains("_undial_lora_"),
+    "rmu": _contains("_rmu_lora_"),
     "npo_sam": _contains("_npo_sam_lora_"),
     "loku": _contains("_loku_lora_"),
 }

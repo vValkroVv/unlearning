@@ -139,3 +139,7 @@ class Unilogit(GradDiff):
             pass
 
         return (loss, forget_outputs) if return_outputs else loss
+
+
+# Backwards-compatible spelling for older configs or local patches.
+UniLogit = Unilogit
